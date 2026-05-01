@@ -1,0 +1,49 @@
+# Node
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+
+# Vite
+.vite/
+*.local
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/Cargo.lock     # we DO commit Cargo.lock for binaries — overridden below
+
+# Tauri build artifacts
+src-tauri/.cargo-cache/
+src-tauri/gen/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Local UECM data (during dev)
+*.sqlite
+*.sqlite-journal
+
+# Test coverage
+coverage/
+
+# Brainstorming companion (already used)
+.superpowers/
+
+# Tauri build output
+src-tauri/target/
+
+# Per-user editor configs
+.history/
+!src-tauri/Cargo.lock
