@@ -1,11 +1,19 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useMachinesStore } from "@/stores/machines";
 import MachineDetail from "@/components/machines/MachineDetail.vue";
 import DiscoveryWizard from "@/components/modals/DiscoveryWizard.vue";
+import CredentialDialog from "@/components/modals/CredentialDialog.vue";
+import EnvVarConfigModal from "@/components/modals/EnvVarConfigModal.vue";
+import IniEditModal from "@/components/modals/IniEditModal.vue";
 
 const store = useMachinesStore();
 const showDiscovery = ref(false);
+const showCredentials = ref(false);
+const showEnvVar = ref(false);
+const showIniEdit = ref(false);
+
+const selectedId = computed(() => store.selectedDetail?.machine.id ?? null);
 
 onMounted(() => {
   store.loadMachines();
@@ -68,12 +76,25 @@ async function onDelete(id: number | null) {
     </aside>
 
     <main class="flex-1 overflow-auto">
-      <MachineDetail />
+      <MachineDetail
+        @open-credential-modal="showCredentials = true"
+        @open-env-var-modal="showEnvVar = true"
+        @open-ini-edit-modal="showIniEdit = true"
+      />
     </main>
 
-    <DiscoveryWizard
-      :open="showDiscovery"
-      @close="showDiscovery = false"
+    <DiscoveryWizard :open="showDiscovery" @close="showDiscovery = false" />
+    <CredentialDialog :open="showCredentials" @close="showCredentials = false" />
+    <EnvVarConfigModal
+      :open="showEnvVar"
+      :machine-id="selectedId"
+      var-name="UE-SharedDataCachePath"
+      @close="showEnvVar = false"
+    />
+    <IniEditModal
+      :open="showIniEdit"
+      :machine-id="selectedId"
+      @close="showIniEdit = false"
     />
   </div>
 </template>
