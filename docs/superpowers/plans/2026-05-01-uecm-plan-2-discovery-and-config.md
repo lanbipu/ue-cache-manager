@@ -2,6 +2,33 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+## Execution Mode (READ FIRST — overrides default skill behavior)
+
+**Mode: AUTO-CONTINUOUS.** Run all 20 tasks back-to-back without pausing for human approval between them. Default subagent-driven-development behavior is "stop after each task for user review" — for this plan, **do not stop between tasks**. Mark each task complete in TodoWrite and immediately dispatch the next implementer.
+
+**Stop and ask the user ONLY in these cases:**
+
+1. **Plan vs reality conflict** that requires re-design (not a small drift — a structural mismatch where continuing would produce wrong work).
+2. **Destructive operation requiring authorization**: `rm -rf` outside the workspace, `git push --force`, dropping/altering machine env vars or registry on lanPC, deleting credentials the user might still need, modifying SSH config / firewall.
+3. **Critical-severity code review finding with no obvious fix** — the reviewer flags Critical AND the implementer has multiple equally-valid remediation paths.
+4. **lanPC unreachable or WinRM not enabled** when a Windows E2E verification step requires it.
+5. **A new dependency decision** not covered by the plan (e.g. plan says use crate X, but X is yanked or incompatible — picking a substitute is a structural choice).
+
+**Do NOT stop for:**
+- Spec/quality review finding Important or Minor issues. Implementer fixes them in a follow-up `fix:` commit and proceeds to the next task.
+- Tests passing on macOS but Windows-gated tests skipped — that's expected; run them via lanPC at the end.
+- DONE_WITH_CONCERNS where the concern is a noted observation (record it, move on).
+- README / docs cleanup. Do them inline.
+
+**At the very end, produce a single summary report containing:**
+- Full commit list (sha + subject) for the plan
+- Frontend test count + backend test count (pass/fail)
+- Every task that ended `DONE_WITH_CONCERNS` and the concern verbatim
+- Production build outcome (artifact paths + size + duration)
+- Any deferred items not closed (e.g. lanPC E2E steps that need user attention)
+
+---
+
 **Goal:** Build the discovery + single-machine configuration layer of UECM: scan a LAN CIDR for reachable machines, probe each one's WinRM/SMB ports, detect installed UE versions and GPU/driver info via PowerShell sidecar over WinRM, store everything in SQLite, manage Windows Credential Manager entries, and provide UI to set DDC environment variables and edit a project's `DefaultEngine.ini` keys on a single remote machine.
 
 **Architecture:** All cross-machine operations route through PowerShell sidecar scripts invoked locally (`powershell.exe -File ...`). PowerShell scripts call `Invoke-Command -ComputerName <host>` to run code on the target machine. Credentials are stored via `cmdkey` and consumed transparently by Windows when WinRM connects to the matching target. Rust `core/` modules wrap the sidecar invocations and parse JSON outputs into typed structs. Network scanning is pure-Rust async TCP probing using `tokio` + `ipnet`. Frontend gains a Machines detail panel, a discovery wizard modal, and three single-machine config modals (credential / env var / INI edit).
