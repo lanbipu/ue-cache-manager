@@ -33,14 +33,71 @@
 
 ## Prerequisites (engineer must have installed before starting)
 
-Same as Plan 1, plus:
-- **A reachable Windows machine on the LAN with WinRM enabled** for end-to-end manual verification (Tasks 6, 8, 10–13, 15–19 require this for full validation). On the target machine, run once as admin:
-  ```powershell
-  Enable-PSRemoting -Force
-  Set-Item WSMan:\localhost\Client\TrustedHosts -Value '*' -Force   # or specific hostnames
-  winrm quickconfig -force
-  ```
-- **macOS dev caveat**: PowerShell sidecar tests are gated `#[cfg(windows)]`. Frontend unit tests work everywhere via mocks. Network scanner Rust code works cross-platform. Manual end-to-end verification of WinRM-dependent features REQUIRES a Windows test machine.
+Same as Plan 1, plus everything in this section.
+
+### Designated Windows Test Machine
+
+End-to-end verification of WinRM-dependent features uses **lanPC** on the home LAN.
+
+| Field | Value |
+|---|---|
+| Hostname | `lanPC` |
+| IP | `192.168.10.20` |
+| SSH access (from this dev machine) | `ssh lanpc@192.168.10.20` |
+| SSH auth | Public-key via 1Password SSH Agent (no password). Microsoft account user, no password auth available. |
+| Local Windows username (for WinRM) | `lanpc` (Microsoft account; the SSH user matches the Windows user) |
+| OS | Windows 11 |
+
+**How a subagent uses lanPC for verification (when a task says "manual Windows verification"):**
+
+1. **Run a local PowerShell sidecar against lanPC over SSH (preferred for CI-style scripted verification):**
+
+   ```bash
+   # Run a sidecar script that targets lanPC. Pipe its stdout back as JSON.
+   ssh lanpc@192.168.10.20 "powershell -NoProfile -ExecutionPolicy Bypass -Command -" < ps-scripts/<script>.ps1
+   ```
+
+2. **Or open an SSH session and execute commands interactively:**
+
+   ```bash
+   ssh lanpc@192.168.10.20
+   # in the resulting Windows shell:
+   powershell -NoProfile -ExecutionPolicy Bypass -File C:\path\to\script.ps1 -ArgumentList ...
+   ```
+
+3. **For UECM-internal WinRM testing**, lanPC must be both the WinRM CLIENT and the WinRM TARGET in this Plan. Concretely: the UECM app running on this dev machine cannot directly invoke WinRM (PowerShell sidecar is Windows-only — Rust returns `UecmError::PowerShell("WinRM is Windows-only")` on macOS). For end-to-end verification:
+   - **Option A (preferred):** Build the UECM `.exe` (`pnpm tauri build`), copy it to lanPC, run it there. lanPC's UECM then targets `127.0.0.1` (itself) for WinRM probes. Quick and isolating.
+   - **Option B:** Build the `.exe` and run it on a *different* Windows machine that targets lanPC. Only viable if a second Windows host is available.
+   - **Option C (for individual `.ps1` script smoke tests, no UECM involved):** Just `ssh lanpc@... < ps-scripts/<script>.ps1` to confirm the script's local behavior.
+
+   Default to Option A for Plan 2 verification unless a task explicitly says otherwise.
+
+### One-time WinRM enablement on lanPC
+
+Before Plan 2 Task 6 can be verified end-to-end, the engineer must run this once on lanPC (via SSH, or sit at the console). Idempotent — re-running is safe.
+
+```powershell
+# Run as admin on lanPC:
+Enable-PSRemoting -Force
+Set-Item WSMan:\localhost\Client\TrustedHosts -Value '*' -Force
+winrm quickconfig -force
+```
+
+To verify it stuck:
+
+```powershell
+Test-WSMan -ComputerName 127.0.0.1   # should return Product/Vendor metadata, no error
+```
+
+### Cross-platform testing rules (recap)
+
+- All PowerShell-dependent Rust unit tests are gated `#[cfg(windows)]`. They are skipped on macOS during dev.
+- Non-Windows-gated tests (network scanner, INI/path helpers, frontend mocks) run normally on macOS.
+- A subagent that finishes a backend task on macOS should report all tests passing for the cross-platform subset, and explicitly note "Windows-gated tests not run on this host" — they will be exercised by Option A above before the plan is marked complete.
+
+### Subagent etiquette for Windows verification steps
+
+Each task that has a manual-verification step calls out **whether subagent should attempt it via lanPC SSH** or **stop with `DONE_WITH_CONCERNS` for the user to verify in person**. The default is: subagent attempts SSH-based scripted verification (Option C above) where possible; falls back to "user must verify with built `.exe`" for full UI flows. Do not skip the verification step silently.
 
 ---
 
