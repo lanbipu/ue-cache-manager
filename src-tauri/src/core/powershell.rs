@@ -5,6 +5,7 @@
 use crate::error::{UecmError, UecmResult};
 use serde::de::DeserializeOwned;
 use std::path::Path;
+#[cfg(windows)]
 use std::process::Command;
 
 #[derive(Debug)]
