@@ -37,6 +37,10 @@ pub fn run() {
             commands::machines::list_machines,
             commands::machines::add_machine,
             commands::machines::delete_machine,
+            commands::machines::get_machine_detail,
+            commands::discovery::scan_network,
+            commands::discovery::add_discovered_machine,
+            commands::discovery::refresh_machine,
             commands::system::test_powershell_bridge,
         ])
         .run(tauri::generate_context!())

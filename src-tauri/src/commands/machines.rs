@@ -1,9 +1,18 @@
-//! Tauri command handlers for machine CRUD. These are thin wrappers around
-//! the data layer; called from the frontend via `invoke()`.
+//! Tauri command handlers for machine CRUD + detail lookup.
 
-use crate::data::{machines as data_machines, Db, Machine};
-use crate::error::UecmResult;
+use crate::data::{
+    machine_gpus, machine_ue_installs, machines as data_machines, Db, GpuInfo, Machine, UeInstall,
+};
+use crate::error::{UecmError, UecmResult};
+use serde::Serialize;
 use tauri::State;
+
+#[derive(Debug, Serialize)]
+pub struct MachineDetail {
+    pub machine: Machine,
+    pub ue_installs: Vec<UeInstall>,
+    pub gpus: Vec<GpuInfo>,
+}
 
 #[tauri::command]
 pub fn list_machines(db: State<'_, Db>) -> UecmResult<Vec<Machine>> {
@@ -23,4 +32,19 @@ pub fn add_machine(
 #[tauri::command]
 pub fn delete_machine(db: State<'_, Db>, id: i64) -> UecmResult<()> {
     data_machines::delete(&db, id)
+}
+
+#[tauri::command]
+pub fn get_machine_detail(db: State<'_, Db>, id: i64) -> UecmResult<MachineDetail> {
+    let machine = data_machines::list_all(&db)?
+        .into_iter()
+        .find(|m| m.id == Some(id))
+        .ok_or_else(|| UecmError::InvalidInput(format!("machine {} not found", id)))?;
+    let ue_installs = machine_ue_installs::list_for_machine(&db, id)?;
+    let gpus = machine_gpus::list_for_machine(&db, id)?;
+    Ok(MachineDetail {
+        machine,
+        ue_installs,
+        gpus,
+    })
 }
