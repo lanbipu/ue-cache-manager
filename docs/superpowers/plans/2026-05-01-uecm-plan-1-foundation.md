@@ -17,7 +17,7 @@
 ## File Structure
 
 ```
-UECacheManager/
+ue-cache-manager/
 ├── .gitignore                          # NEW
 ├── README.md                           # NEW
 ├── package.json                        # NEW
@@ -131,13 +131,13 @@ UECacheManager/
 ## Task 1: Project init + git
 
 **Files:**
-- Create: `/Users/bip.lan/AIWorkspace/vp/UECacheManager/.gitignore`
-- Create: `/Users/bip.lan/AIWorkspace/vp/UECacheManager/README.md`
+- Create: `/Users/bip.lan/AIWorkspace/vp/ue-cache-manager/.gitignore`
+- Create: `/Users/bip.lan/AIWorkspace/vp/ue-cache-manager/README.md`
 
 - [ ] **Step 1: Initialize git repository**
 
 ```bash
-cd /Users/bip.lan/AIWorkspace/vp/UECacheManager
+cd /Users/bip.lan/AIWorkspace/vp/ue-cache-manager
 git init
 git branch -M main
 ```
@@ -246,7 +246,7 @@ git commit -m "chore: initialize git repo with gitignore and README"
 - [ ] **Step 1: Initialize pnpm**
 
 ```bash
-cd /Users/bip.lan/AIWorkspace/vp/UECacheManager
+cd /Users/bip.lan/AIWorkspace/vp/ue-cache-manager
 pnpm init
 ```
 

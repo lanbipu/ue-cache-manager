@@ -131,7 +131,7 @@ Each task that has a manual-verification step calls out **whether subagent shoul
 ## File Structure
 
 ```
-UECacheManager/
+ue-cache-manager/
 ├── ps-scripts/
 │   ├── test-echo.ps1                          # existing (Plan 1)
 │   ├── test-winrm.ps1                         # NEW
