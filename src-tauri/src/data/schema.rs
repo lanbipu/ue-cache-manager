@@ -20,6 +20,51 @@ const MIGRATIONS: &[(&str, &str)] = &[
         CREATE INDEX IF NOT EXISTS idx_machines_status ON machines(status);
         "#,
     ),
+    (
+        "003_machine_ue_installs",
+        r#"
+        CREATE TABLE IF NOT EXISTS machine_ue_installs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            machine_id INTEGER NOT NULL,
+            version TEXT NOT NULL,
+            install_path TEXT NOT NULL,
+            is_primary INTEGER NOT NULL DEFAULT 0,
+            detected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(machine_id, version),
+            FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_machine_ue_installs_machine ON machine_ue_installs(machine_id);
+        "#,
+    ),
+    (
+        "004_machine_gpus",
+        r#"
+        CREATE TABLE IF NOT EXISTS machine_gpus (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            machine_id INTEGER NOT NULL,
+            gpu_model TEXT NOT NULL,
+            driver_version TEXT NOT NULL,
+            vendor TEXT NOT NULL DEFAULT 'unknown',
+            vram_mb INTEGER,
+            detected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_machine_gpus_machine ON machine_gpus(machine_id);
+        "#,
+    ),
+    (
+        "005_credentials",
+        r#"
+        CREATE TABLE IF NOT EXISTS credentials (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            alias TEXT NOT NULL UNIQUE,
+            kind TEXT NOT NULL,
+            username TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_credentials_alias ON credentials(alias);
+        "#,
+    ),
 ];
 
 pub fn migrate(conn: &mut Connection) -> UecmResult<()> {
@@ -102,5 +147,50 @@ mod tests {
             )
             .unwrap();
         assert!(count >= 1);
+    }
+
+    #[test]
+    fn migrate_creates_machine_ue_installs_table() {
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='machine_ue_installs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn migrate_creates_machine_gpus_table() {
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='machine_gpus'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn migrate_creates_credentials_table() {
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='credentials'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }
