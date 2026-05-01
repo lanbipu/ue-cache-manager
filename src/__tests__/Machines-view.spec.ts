@@ -50,8 +50,9 @@ describe("Machines view", () => {
     const wrapper = mount(Machines);
     await flushPromises();
     await wrapper.find("[data-discover-btn]").trigger("click");
-    // DiscoveryWizard renders via Teleport; check `document.body` for the modal
-    expect(document.body.innerHTML).toContain("data-modal");
+    // DiscoveryWizard renders via Teleport; in tests Teleport is stubbed
+    // so the modal renders inside the wrapper rather than on document.body.
+    expect(wrapper.html()).toContain("data-modal");
   });
 
   it("clicking a row calls selectMachine", async () => {
@@ -67,6 +68,6 @@ describe("Machines view", () => {
     await flushPromises();
     await wrapper.find("[data-machine-row]").trigger("click");
     await flushPromises();
-    expect(mockApi.getMachineDetail).toHaveBeenCalledWith({ id: 5 });
+    expect(mockApi.getMachineDetail).toHaveBeenCalledWith(5);
   });
 });
