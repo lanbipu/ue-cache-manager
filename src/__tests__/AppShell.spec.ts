@@ -38,6 +38,7 @@ describe("AppShell", () => {
       global: { plugins: [router] },
     });
 
-    expect(wrapper.text()).toContain("Machines");
+    const main = wrapper.find("main");
+    expect(main.text()).toContain("Machines");
   });
 });
