@@ -46,6 +46,8 @@ pub fn run() {
             commands::credentials::delete_credential,
             commands::env_vars::set_machine_env_var,
             commands::env_vars::get_machine_env_var,
+            commands::ini_editor::read_ini_section,
+            commands::ini_editor::set_ini_key,
             commands::system::test_powershell_bridge,
         ])
         .run(tauri::generate_context!())
