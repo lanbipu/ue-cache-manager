@@ -35,6 +35,9 @@ pnpm-debug.log*
 *.sqlite
 *.sqlite-journal
 
+# TypeScript build artifacts
+*.tsbuildinfo
+
 # Test coverage
 coverage/
 
