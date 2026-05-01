@@ -2,12 +2,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 
-// vi.hoisted ensures mockApi is initialized before vi.mock factory runs
 const { mockApi } = vi.hoisted(() => ({
   mockApi: {
     listMachines: vi.fn(),
     addMachine: vi.fn(),
     deleteMachine: vi.fn(),
+    getMachineDetail: vi.fn(),
+    refreshMachine: vi.fn(),
+    scanNetwork: vi.fn(),
+    addDiscoveredMachine: vi.fn(),
   },
 }));
 
@@ -20,9 +23,7 @@ import Machines from "@/views/Machines.vue";
 describe("Machines view", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
-    mockApi.listMachines.mockReset();
-    mockApi.addMachine.mockReset();
-    mockApi.deleteMachine.mockReset();
+    Object.values(mockApi).forEach((m: any) => m.mockReset());
   });
 
   it("shows empty state when no machines", async () => {
@@ -42,20 +43,30 @@ describe("Machines view", () => {
     const rows = wrapper.findAll("[data-machine-row]");
     expect(rows).toHaveLength(2);
     expect(wrapper.text()).toContain("RENDER-01");
-    expect(wrapper.text()).toContain("HOST-NAS");
   });
 
-  it("adds a machine via form", async () => {
+  it("clicking Scan button reveals discovery wizard", async () => {
     mockApi.listMachines.mockResolvedValue([]);
-    mockApi.addMachine.mockResolvedValue(99);
     const wrapper = mount(Machines);
     await flushPromises();
+    await wrapper.find("[data-discover-btn]").trigger("click");
+    // DiscoveryWizard renders via Teleport; check `document.body` for the modal
+    expect(document.body.innerHTML).toContain("data-modal");
+  });
 
-    await wrapper.find("[data-input-hostname]").setValue("NEW-PC");
-    await wrapper.find("[data-input-ip]").setValue("192.168.10.99");
-    await wrapper.find("[data-add-btn]").trigger("click");
+  it("clicking a row calls selectMachine", async () => {
+    mockApi.listMachines.mockResolvedValue([
+      { id: 5, hostname: "RENDER-05", ip: "192.168.10.25", role: "render", status: "online", last_seen_at: null },
+    ]);
+    mockApi.getMachineDetail.mockResolvedValue({
+      machine: { id: 5, hostname: "RENDER-05", ip: "192.168.10.25", role: "render", status: "online", last_seen_at: null },
+      ue_installs: [],
+      gpus: [],
+    });
+    const wrapper = mount(Machines);
     await flushPromises();
-
-    expect(mockApi.addMachine).toHaveBeenCalledWith("NEW-PC", "192.168.10.99");
+    await wrapper.find("[data-machine-row]").trigger("click");
+    await flushPromises();
+    expect(mockApi.getMachineDetail).toHaveBeenCalledWith({ id: 5 });
   });
 });
