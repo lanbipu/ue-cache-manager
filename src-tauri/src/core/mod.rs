@@ -1,3 +1,4 @@
+pub mod credentials;
 pub mod discovery;
 pub mod network;
 pub mod powershell;

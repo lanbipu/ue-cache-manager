@@ -41,6 +41,9 @@ pub fn run() {
             commands::discovery::scan_network,
             commands::discovery::add_discovered_machine,
             commands::discovery::refresh_machine,
+            commands::credentials::list_credentials,
+            commands::credentials::save_credential,
+            commands::credentials::delete_credential,
             commands::system::test_powershell_bridge,
         ])
         .run(tauri::generate_context!())
