@@ -3,7 +3,6 @@
 use crate::core::powershell;
 use crate::error::{UecmError, UecmResult};
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize)]
 pub struct SetResult {
@@ -20,7 +19,7 @@ pub struct GetResult {
 
 pub fn set(host: &str, name: &str, value: &str) -> UecmResult<()> {
     let result: SetResult = powershell::run_json(
-        &script_path("setx-machine.ps1"),
+        &powershell::script_path("setx-machine.ps1"),
         &[
             "-HostName", host,
             "-Name", name,
@@ -38,7 +37,7 @@ pub fn set(host: &str, name: &str, value: &str) -> UecmResult<()> {
 
 pub fn get(host: &str, name: &str) -> UecmResult<Option<String>> {
     let result: GetResult = powershell::run_json(
-        &script_path("getx-machine.ps1"),
+        &powershell::script_path("getx-machine.ps1"),
         &[
             "-HostName", host,
             "-Name", name,
@@ -51,10 +50,6 @@ pub fn get(host: &str, name: &str) -> UecmResult<Option<String>> {
         )));
     }
     Ok(result.value)
-}
-
-fn script_path(name: &str) -> PathBuf {
-    Path::new("..").join("ps-scripts").join(name)
 }
 
 #[cfg(test)]

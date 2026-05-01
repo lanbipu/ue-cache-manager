@@ -115,8 +115,8 @@ const emit = defineEmits<{
         </table>
       </section>
 
-      <section v-if="store.lastRefresh && !store.lastRefresh.winrm_ok" class="mt-4 text-sm text-red-600">
-        Refresh failed: {{ store.lastRefresh.error ?? "WinRM unreachable" }}
+      <section v-if="store.refreshError" class="mt-4 text-sm text-red-600">
+        Refresh failed: {{ store.refreshError }}
       </section>
     </div>
   </div>

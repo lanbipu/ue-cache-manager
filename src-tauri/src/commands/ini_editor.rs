@@ -7,11 +7,9 @@ use serde::Serialize;
 use tauri::State;
 
 fn ip_for(db: &Db, machine_id: i64) -> UecmResult<String> {
-    let m = data_machines::list_all(db)?
-        .into_iter()
-        .find(|m| m.id == Some(machine_id))
-        .ok_or_else(|| UecmError::InvalidInput(format!("machine {} not found", machine_id)))?;
-    Ok(m.ip)
+    Ok(data_machines::find_by_id(db, machine_id)?
+        .ok_or_else(|| UecmError::InvalidInput(format!("machine {} not found", machine_id)))?
+        .ip)
 }
 
 #[derive(Debug, Serialize)]

@@ -27,16 +27,12 @@ pub fn add_discovered_machine(
     ip: String,
     hostname: Option<String>,
 ) -> UecmResult<i64> {
-    let display_name = hostname.unwrap_or_else(|| ip.clone());
-    // If a machine with this IP already exists, return its id; else insert.
-    let existing = data_machines::list_all(&db)?
-        .into_iter()
-        .find(|m| m.ip == ip);
-    if let Some(m) = existing {
-        return m
-            .id
-            .ok_or_else(|| UecmError::OperationFailed("machine missing id".to_string()));
+    if let Some(existing) = data_machines::find_by_ip(&db, &ip)? {
+        // SQLite-loaded rows always have id; the Option exists only for the
+        // pre-insert sentinel state of `Machine::new`.
+        return Ok(existing.id.expect("machine row from SQLite must have id"));
     }
+    let display_name = hostname.unwrap_or_else(|| ip.clone());
     let machine = Machine::new(&display_name, &ip);
     data_machines::insert(&db, &machine)
 }
@@ -50,66 +46,39 @@ pub struct RefreshResult {
     pub error: Option<String>,
 }
 
+fn refresh_err(machine_id: i64, winrm_ok: bool, msg: impl Into<String>) -> RefreshResult {
+    RefreshResult {
+        machine_id,
+        winrm_ok,
+        ue_installs: vec![],
+        gpus: vec![],
+        error: Some(msg.into()),
+    }
+}
+
 /// Probes WinRM connectivity to a known machine, then re-queries UE + GPU
 /// info if reachable, persisting results into the data layer.
 #[tauri::command]
 pub fn refresh_machine(db: State<'_, Db>, machine_id: i64) -> UecmResult<RefreshResult> {
-    let machine = data_machines::list_all(&db)?
-        .into_iter()
-        .find(|m| m.id == Some(machine_id))
+    let machine = data_machines::find_by_id(&db, machine_id)?
         .ok_or_else(|| UecmError::InvalidInput(format!("machine {} not found", machine_id)))?;
 
-    let probe = match winrm::probe(&machine.ip) {
-        Ok(p) if p.ok => Some(p),
-        Ok(_) => None,
-        Err(e) => {
-            return Ok(RefreshResult {
-                machine_id,
-                winrm_ok: false,
-                ue_installs: vec![],
-                gpus: vec![],
-                error: Some(format!("probe failed: {}", e)),
-            });
-        }
-    };
-
-    if probe.is_none() {
-        return Ok(RefreshResult {
-            machine_id,
-            winrm_ok: false,
-            ue_installs: vec![],
-            gpus: vec![],
-            error: Some("WinRM unreachable".to_string()),
-        });
+    match winrm::probe(&machine.ip) {
+        Ok(p) if p.ok => {}
+        Ok(_) => return Ok(refresh_err(machine_id, false, "WinRM unreachable")),
+        Err(e) => return Ok(refresh_err(machine_id, false, format!("probe failed: {}", e))),
     }
 
     let detected_ue = match discovery::detect_ue_versions(&machine.ip) {
         Ok(v) => v,
-        Err(e) => {
-            return Ok(RefreshResult {
-                machine_id,
-                winrm_ok: true,
-                ue_installs: vec![],
-                gpus: vec![],
-                error: Some(format!("UE detection failed: {}", e)),
-            });
-        }
+        Err(e) => return Ok(refresh_err(machine_id, true, format!("UE detection failed: {}", e))),
     };
 
     let detected_gpus = match discovery::detect_gpus(&machine.ip) {
         Ok(v) => v,
-        Err(e) => {
-            return Ok(RefreshResult {
-                machine_id,
-                winrm_ok: true,
-                ue_installs: vec![],
-                gpus: vec![],
-                error: Some(format!("GPU detection failed: {}", e)),
-            });
-        }
+        Err(e) => return Ok(refresh_err(machine_id, true, format!("GPU detection failed: {}", e))),
     };
 
-    // Persist UE installs (upsert per version)
     for d in &detected_ue {
         machine_ue_installs::upsert(
             &db,
@@ -123,7 +92,7 @@ pub fn refresh_machine(db: State<'_, Db>, machine_id: i64) -> UecmResult<Refresh
         )?;
     }
 
-    // Replace GPU set wholesale (GPUs change as a unit on hardware swap)
+    // GPUs change as a unit on hardware swap, so replace the whole set.
     let gpu_records: Vec<GpuInfo> = detected_gpus
         .iter()
         .map(|g| GpuInfo {
@@ -131,7 +100,7 @@ pub fn refresh_machine(db: State<'_, Db>, machine_id: i64) -> UecmResult<Refresh
             machine_id,
             gpu_model: g.gpu_model.clone(),
             driver_version: g.driver_version.clone(),
-            vendor: g.vendor.clone(),
+            vendor: g.vendor,
             vram_mb: g.vram_mb,
         })
         .collect();

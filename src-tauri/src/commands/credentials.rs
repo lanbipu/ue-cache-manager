@@ -2,7 +2,7 @@
 //! record with the cmdkey side effect.
 
 use crate::core::credentials as core_creds;
-use crate::data::{credentials as data_creds, CredentialRecord, Db};
+use crate::data::{credentials as data_creds, CredentialKind, CredentialRecord, Db};
 use crate::error::UecmResult;
 use tauri::State;
 
@@ -15,7 +15,7 @@ pub fn list_credentials(db: State<'_, Db>) -> UecmResult<Vec<CredentialRecord>> 
 pub fn save_credential(
     db: State<'_, Db>,
     alias: String,
-    kind: String,
+    kind: CredentialKind,
     username: String,
     password: String,
 ) -> UecmResult<i64> {

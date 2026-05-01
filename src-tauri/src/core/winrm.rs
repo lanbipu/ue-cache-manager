@@ -5,7 +5,6 @@
 use crate::core::powershell;
 use crate::error::{UecmError, UecmResult};
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize)]
 pub struct ProbeResult {
@@ -16,7 +15,7 @@ pub struct ProbeResult {
 
 /// Probe a single host's WinRM availability.
 pub fn probe(host: &str) -> UecmResult<ProbeResult> {
-    let script = script_path("test-winrm.ps1");
+    let script = powershell::script_path("test-winrm.ps1");
     powershell::run_json::<ProbeResult>(&script, &["-HostName", host])
 }
 
@@ -27,7 +26,7 @@ pub fn invoke(host: &str, script_body: &str) -> UecmResult<String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
-    let wrapper = script_path("invoke-remote.ps1");
+    let wrapper = powershell::script_path("invoke-remote.ps1");
 
     let mut child = Command::new("powershell.exe")
         .arg("-NoProfile")
@@ -83,11 +82,6 @@ pub fn invoke_json<T: serde::de::DeserializeOwned>(host: &str, script_body: &str
     serde_json::from_str(&raw).map_err(|e| {
         UecmError::PowerShell(format!("failed to parse remote JSON: {} (raw: {})", e, raw))
     })
-}
-
-fn script_path(name: &str) -> PathBuf {
-    // Same convention as `commands/system.rs::resolve_script_path` — relative to src-tauri/.
-    Path::new("..").join("ps-scripts").join(name)
 }
 
 #[cfg(test)]

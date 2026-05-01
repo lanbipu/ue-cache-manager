@@ -2,13 +2,14 @@
 import { ref, watch } from "vue";
 import BaseModal from "./BaseModal.vue";
 import { useCredentialsStore } from "@/stores/credentials";
+import type { CredentialKind } from "@/services/tauri";
 
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ (e: "close"): void }>();
 
 const store = useCredentialsStore();
 const alias = ref("");
-const kind = ref("winrm");
+const kind = ref<CredentialKind>("winrm");
 const username = ref("");
 const password = ref("");
 

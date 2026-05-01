@@ -3,7 +3,6 @@
 use crate::core::powershell;
 use crate::error::{UecmError, UecmResult};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct IniKey {
@@ -27,7 +26,7 @@ pub struct WriteResult {
 
 pub fn read_section(host: &str, file_path: &str, section: &str) -> UecmResult<Vec<IniKey>> {
     let result: ReadResult = powershell::run_json(
-        &script_path("read-ini-section.ps1"),
+        &powershell::script_path("read-ini-section.ps1"),
         &[
             "-HostName", host,
             "-FilePath", file_path,
@@ -51,7 +50,7 @@ pub fn set_key(
     value: &str,
 ) -> UecmResult<String> {
     let result: WriteResult = powershell::run_json(
-        &script_path("write-ini-key.ps1"),
+        &powershell::script_path("write-ini-key.ps1"),
         &[
             "-HostName", host,
             "-FilePath", file_path,
@@ -67,10 +66,6 @@ pub fn set_key(
         )));
     }
     Ok(result.backup_path)
-}
-
-fn script_path(name: &str) -> PathBuf {
-    Path::new("..").join("ps-scripts").join(name)
 }
 
 #[cfg(test)]

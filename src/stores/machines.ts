@@ -4,7 +4,6 @@ import {
   tauriApi,
   type Machine,
   type MachineDetail,
-  type RefreshResult,
   type UecmError,
 } from "@/services/tauri";
 
@@ -16,7 +15,7 @@ export const useMachinesStore = defineStore("machines", () => {
   const selectedDetail = ref<MachineDetail | null>(null);
   const isDetailLoading = ref(false);
 
-  const lastRefresh = ref<RefreshResult | null>(null);
+  const refreshError = ref<string | null>(null);
   const isRefreshing = ref(false);
 
   async function loadMachines() {
@@ -76,8 +75,10 @@ export const useMachinesStore = defineStore("machines", () => {
     const id = selectedDetail.value.machine.id;
     isRefreshing.value = true;
     error.value = null;
+    refreshError.value = null;
     try {
-      lastRefresh.value = await tauriApi.refreshMachine(id);
+      const result = await tauriApi.refreshMachine(id);
+      refreshError.value = result.winrm_ok ? null : result.error ?? "WinRM unreachable";
       // Re-read detail to pick up updated UE/GPU rows
       await selectMachine(id);
     } catch (e) {
@@ -93,7 +94,7 @@ export const useMachinesStore = defineStore("machines", () => {
     error,
     selectedDetail,
     isDetailLoading,
-    lastRefresh,
+    refreshError,
     isRefreshing,
     loadMachines,
     addMachine,

@@ -17,12 +17,14 @@ export interface UeInstall {
   is_primary: boolean;
 }
 
+export type GpuVendor = "nvidia" | "amd" | "intel" | "unknown";
+
 export interface GpuInfo {
   id: number | null;
   machine_id: number;
   gpu_model: string;
   driver_version: string;
-  vendor: string;
+  vendor: GpuVendor;
   vram_mb: number | null;
 }
 
@@ -50,10 +52,12 @@ export interface RefreshResult {
   error: string | null;
 }
 
+export type CredentialKind = "winrm" | "share";
+
 export interface CredentialRecord {
   id: number | null;
   alias: string;
-  kind: string;       // "winrm" | "share"
+  kind: CredentialKind;
   username: string;
 }
 
@@ -109,7 +113,7 @@ export const tauriApi = {
   },
   async saveCredential(
     alias: string,
-    kind: string,
+    kind: CredentialKind,
     username: string,
     password: string,
   ): Promise<number> {
@@ -151,7 +155,7 @@ export const tauriApi = {
     });
   },
 
-  // System (Plan 1)
+  // System
   async testPowerShellBridge(message: string): Promise<EchoResult> {
     return invoke<EchoResult>("test_powershell_bridge", { message });
   },

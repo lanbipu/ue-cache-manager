@@ -5,13 +5,42 @@ use crate::error::UecmResult;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum GpuVendor {
+    Nvidia,
+    Amd,
+    Intel,
+    Unknown,
+}
+
+impl GpuVendor {
+    fn as_sql(self) -> &'static str {
+        match self {
+            GpuVendor::Nvidia => "nvidia",
+            GpuVendor::Amd => "amd",
+            GpuVendor::Intel => "intel",
+            GpuVendor::Unknown => "unknown",
+        }
+    }
+
+    fn from_sql(s: &str) -> Self {
+        match s {
+            "nvidia" => GpuVendor::Nvidia,
+            "amd" => GpuVendor::Amd,
+            "intel" => GpuVendor::Intel,
+            _ => GpuVendor::Unknown,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GpuInfo {
     pub id: Option<i64>,
     pub machine_id: i64,
     pub gpu_model: String,
     pub driver_version: String,
-    pub vendor: String,        // "nvidia" | "amd" | "intel" | "unknown"
+    pub vendor: GpuVendor,
     pub vram_mb: Option<i64>,
 }
 
@@ -24,7 +53,7 @@ pub fn insert(db: &Db, gpu: &GpuInfo) -> UecmResult<i64> {
             gpu.machine_id,
             gpu.gpu_model,
             gpu.driver_version,
-            gpu.vendor,
+            gpu.vendor.as_sql(),
             gpu.vram_mb,
         ],
     )?;
@@ -43,7 +72,7 @@ pub fn list_for_machine(db: &Db, machine_id: i64) -> UecmResult<Vec<GpuInfo>> {
             machine_id: row.get(1)?,
             gpu_model: row.get(2)?,
             driver_version: row.get(3)?,
-            vendor: row.get(4)?,
+            vendor: GpuVendor::from_sql(&row.get::<_, String>(4)?),
             vram_mb: row.get(5)?,
         })
     })?;
@@ -66,7 +95,7 @@ pub fn replace_for_machine(db: &Db, machine_id: i64, gpus: &[GpuInfo]) -> UecmRe
                 machine_id,
                 gpu.gpu_model,
                 gpu.driver_version,
-                gpu.vendor,
+                gpu.vendor.as_sql(),
                 gpu.vram_mb,
             ],
         )?;
@@ -100,7 +129,7 @@ mod tests {
             machine_id,
             gpu_model: model.to_string(),
             driver_version: "551.86".to_string(),
-            vendor: "nvidia".to_string(),
+            vendor: GpuVendor::Nvidia,
             vram_mb: Some(24576),
         }
     }

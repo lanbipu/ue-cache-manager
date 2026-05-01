@@ -6,8 +6,10 @@ use ipnet::Ipv4Net;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
+use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
 /// Port probe result for a single host.
@@ -23,6 +25,11 @@ pub const DEFAULT_TIMEOUT_MS: u64 = 1000;
 
 /// Maximum hosts to scan in one call. Guard against accidentally scanning a /16.
 pub const MAX_HOSTS: usize = 1024;
+
+/// Cap on simultaneous in-flight `connect()` syscalls across the whole scan.
+/// Default macOS `ulimit -n` is 256; with 2 ports per host we'd otherwise hit
+/// EMFILE long before MAX_HOSTS — guard with a permit.
+const MAX_INFLIGHT: usize = 128;
 
 const PORT_WINRM: u16 = 5985;
 const PORT_SMB: u16 = 445;
@@ -41,15 +48,19 @@ pub async fn scan_cidr(cidr: &str, timeout_ms: u64) -> UecmResult<Vec<ProbedHost
         )));
     }
 
+    let semaphore = Arc::new(Semaphore::new(MAX_INFLIGHT));
     let mut handles = Vec::with_capacity(hosts.len());
     for ip in hosts {
-        let h = tokio::spawn(async move { probe_host(ip, timeout_ms).await });
-        handles.push(h);
+        let permit_source = semaphore.clone();
+        handles.push(tokio::spawn(async move {
+            let _permit = permit_source.acquire_owned().await.ok()?;
+            Some(probe_host(ip, timeout_ms).await)
+        }));
     }
 
     let mut results = Vec::with_capacity(handles.len());
     for h in handles {
-        if let Ok(probed) = h.await {
+        if let Ok(Some(probed)) = h.await {
             results.push(probed);
         }
     }
@@ -62,8 +73,10 @@ pub async fn scan_cidr(cidr: &str, timeout_ms: u64) -> UecmResult<Vec<ProbedHost
 }
 
 async fn probe_host(ip: IpAddr, timeout_ms: u64) -> ProbedHost {
-    let winrm = probe_port(ip, PORT_WINRM, timeout_ms).await;
-    let smb = probe_port(ip, PORT_SMB, timeout_ms).await;
+    let (winrm, smb) = tokio::join!(
+        probe_port(ip, PORT_WINRM, timeout_ms),
+        probe_port(ip, PORT_SMB, timeout_ms),
+    );
     ProbedHost {
         ip: ip.to_string(),
         winrm_open: winrm,

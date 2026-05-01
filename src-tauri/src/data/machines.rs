@@ -43,6 +43,46 @@ pub fn insert(db: &Db, machine: &Machine) -> UecmResult<i64> {
     Ok(conn.last_insert_rowid())
 }
 
+pub fn find_by_id(db: &Db, id: i64) -> UecmResult<Option<Machine>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT id, hostname, ip, role, status, last_seen_at FROM machines WHERE id = ?",
+    )?;
+    let mut rows = stmt.query(params![id])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(Machine {
+            id: Some(row.get(0)?),
+            hostname: row.get(1)?,
+            ip: row.get(2)?,
+            role: row.get(3)?,
+            status: row.get(4)?,
+            last_seen_at: row.get(5)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn find_by_ip(db: &Db, ip: &str) -> UecmResult<Option<Machine>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT id, hostname, ip, role, status, last_seen_at FROM machines WHERE ip = ?",
+    )?;
+    let mut rows = stmt.query(params![ip])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(Machine {
+            id: Some(row.get(0)?),
+            hostname: row.get(1)?,
+            ip: row.get(2)?,
+            role: row.get(3)?,
+            status: row.get(4)?,
+            last_seen_at: row.get(5)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
 pub fn list_all(db: &Db) -> UecmResult<Vec<Machine>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
@@ -112,6 +152,26 @@ mod tests {
         delete(&db, id).unwrap();
         let machines = list_all(&db).unwrap();
         assert!(machines.is_empty());
+    }
+
+    #[test]
+    fn find_by_id_returns_match_or_none() {
+        let db = setup();
+        let id = insert(&db, &Machine::new("RENDER-01", "192.168.10.21")).unwrap();
+        let found = find_by_id(&db, id).unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().hostname, "RENDER-01");
+        assert!(find_by_id(&db, 9999).unwrap().is_none());
+    }
+
+    #[test]
+    fn find_by_ip_returns_match_or_none() {
+        let db = setup();
+        insert(&db, &Machine::new("RENDER-01", "192.168.10.21")).unwrap();
+        let found = find_by_ip(&db, "192.168.10.21").unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().hostname, "RENDER-01");
+        assert!(find_by_ip(&db, "10.0.0.99").unwrap().is_none());
     }
 
     #[test]

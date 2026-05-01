@@ -4,9 +4,23 @@
 
 use crate::error::{UecmError, UecmResult};
 use serde::de::DeserializeOwned;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::process::Command;
+
+/// Resolve a sidecar script name to its on-disk path. Convention: scripts live
+/// in `ps-scripts/` one level above the cargo package root (so the cwd is
+/// `src-tauri/` at runtime + during tests).
+pub fn script_path(name: &str) -> PathBuf {
+    Path::new("..").join("ps-scripts").join(name)
+}
+
+/// Load a sidecar script's text. Used when the script body is forwarded over
+/// WinRM via `core::winrm::invoke*` rather than executed locally.
+pub fn read_script(name: &str) -> UecmResult<String> {
+    Ok(fs::read_to_string(script_path(name))?)
+}
 
 #[derive(Debug)]
 pub struct ScriptResult {

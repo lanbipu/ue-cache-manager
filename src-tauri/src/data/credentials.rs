@@ -6,19 +6,47 @@ use crate::error::UecmResult;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CredentialKind {
+    Winrm,
+    Share,
+}
+
+impl CredentialKind {
+    fn as_sql(self) -> &'static str {
+        match self {
+            CredentialKind::Winrm => "winrm",
+            CredentialKind::Share => "share",
+        }
+    }
+
+    fn from_sql(s: &str) -> rusqlite::Result<Self> {
+        match s {
+            "winrm" => Ok(CredentialKind::Winrm),
+            "share" => Ok(CredentialKind::Share),
+            other => Err(rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Text,
+                format!("unknown credential kind: {}", other).into(),
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CredentialRecord {
     pub id: Option<i64>,
-    pub alias: String,         // e.g. "UECM:winrm:RENDER-01"
-    pub kind: String,          // "winrm" | "share"
-    pub username: String,      // for display only
+    pub alias: String, // e.g. "UECM:winrm:RENDER-01"
+    pub kind: CredentialKind,
+    pub username: String,
 }
 
 pub fn insert(db: &Db, cred: &CredentialRecord) -> UecmResult<i64> {
     let conn = db.lock().unwrap();
     conn.execute(
         "INSERT INTO credentials (alias, kind, username) VALUES (?, ?, ?)",
-        params![cred.alias, cred.kind, cred.username],
+        params![cred.alias, cred.kind.as_sql(), cred.username],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -32,7 +60,7 @@ pub fn list_all(db: &Db) -> UecmResult<Vec<CredentialRecord>> {
         Ok(CredentialRecord {
             id: Some(row.get(0)?),
             alias: row.get(1)?,
-            kind: row.get(2)?,
+            kind: CredentialKind::from_sql(&row.get::<_, String>(2)?)?,
             username: row.get(3)?,
         })
     })?;
@@ -53,7 +81,7 @@ pub fn find_by_alias(db: &Db, alias: &str) -> UecmResult<Option<CredentialRecord
         Ok(Some(CredentialRecord {
             id: Some(row.get(0)?),
             alias: row.get(1)?,
-            kind: row.get(2)?,
+            kind: CredentialKind::from_sql(&row.get::<_, String>(2)?)?,
             username: row.get(3)?,
         }))
     } else {
@@ -85,7 +113,7 @@ mod tests {
         CredentialRecord {
             id: None,
             alias: alias.to_string(),
-            kind: "winrm".to_string(),
+            kind: CredentialKind::Winrm,
             username: user.to_string(),
         }
     }

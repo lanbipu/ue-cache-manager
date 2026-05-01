@@ -5,7 +5,6 @@
 use crate::core::powershell;
 use crate::error::{UecmError, UecmResult};
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize)]
 pub struct CmdKeyResult {
@@ -20,7 +19,7 @@ pub struct CmdKeyAlias {
 
 pub fn store(alias: &str, username: &str, password: &str) -> UecmResult<()> {
     let result: CmdKeyResult = powershell::run_json(
-        &script_path("cred-set.ps1"),
+        &powershell::script_path("cred-set.ps1"),
         &[
             "-Alias", alias,
             "-Username", username,
@@ -38,7 +37,7 @@ pub fn store(alias: &str, username: &str, password: &str) -> UecmResult<()> {
 
 pub fn delete(alias: &str) -> UecmResult<()> {
     let result: CmdKeyResult = powershell::run_json(
-        &script_path("cred-delete.ps1"),
+        &powershell::script_path("cred-delete.ps1"),
         &["-Alias", alias],
     )?;
     if !result.ok {
@@ -52,14 +51,10 @@ pub fn delete(alias: &str) -> UecmResult<()> {
 
 pub fn list_uecm_aliases() -> UecmResult<Vec<String>> {
     let result: Vec<CmdKeyAlias> = powershell::run_json(
-        &script_path("cred-list.ps1"),
+        &powershell::script_path("cred-list.ps1"),
         &[],
     )?;
     Ok(result.into_iter().map(|c| c.alias).collect())
-}
-
-fn script_path(name: &str) -> PathBuf {
-    Path::new("..").join("ps-scripts").join(name)
 }
 
 #[cfg(test)]

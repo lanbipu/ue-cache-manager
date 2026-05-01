@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import { tauriApi, type CredentialRecord, type UecmError } from "@/services/tauri";
+import { tauriApi, type CredentialKind, type CredentialRecord, type UecmError } from "@/services/tauri";
 
 export const useCredentialsStore = defineStore("credentials", () => {
   const credentials = ref<CredentialRecord[]>([]);
@@ -19,7 +19,7 @@ export const useCredentialsStore = defineStore("credentials", () => {
     }
   }
 
-  async function save(alias: string, kind: string, username: string, password: string) {
+  async function save(alias: string, kind: CredentialKind, username: string, password: string) {
     error.value = null;
     try {
       await tauriApi.saveCredential(alias, kind, username, password);
