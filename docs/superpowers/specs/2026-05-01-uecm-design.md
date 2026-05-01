@@ -497,10 +497,11 @@ Rust 通过 `Command::new("powershell.exe")` 调用，传参 + 解析 stdout JSO
 - [x] **Plan 1：基础底座** — `docs/superpowers/plans/2026-05-01-uecm-plan-1-foundation.md`
   - Tauri 脚手架 + Vue 3 前端骨架 + SQLite + PowerShell sidecar 框架 + 7 视图 stub
   - 工期：~2 周
-  - 状态：✅ Plan 文件已写好，待执行
-- [ ] **Plan 2：发现与配置**
+  - 状态：✅ 已执行完成（2026-05-01），24 commits on main
+- [x] **Plan 2：发现与配置** — `docs/superpowers/plans/2026-05-01-uecm-plan-2-discovery-and-config.md`
   - 网络扫描 + UE/GPU 探测 + 凭据管理 + 单机环境变量配置 + 单机 ini 编辑 + WinRM 客户端封装
   - 工期：~2 周
+  - 状态：✅ Plan 文件已写好，待执行
 - [ ] **Plan 3：共享建立**
   - SMB 共享一键创建向导（Mode A + Mode B）+ SYSTEM 凭据注入 + 配置生效验证
   - 工期：~2 周
