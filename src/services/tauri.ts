@@ -9,6 +9,63 @@ export interface Machine {
   last_seen_at: string | null;
 }
 
+export interface UeInstall {
+  id: number | null;
+  machine_id: number;
+  version: string;
+  install_path: string;
+  is_primary: boolean;
+}
+
+export interface GpuInfo {
+  id: number | null;
+  machine_id: number;
+  gpu_model: string;
+  driver_version: string;
+  vendor: string;
+  vram_mb: number | null;
+}
+
+export interface MachineDetail {
+  machine: Machine;
+  ue_installs: UeInstall[];
+  gpus: GpuInfo[];
+}
+
+export interface ProbedHost {
+  ip: string;
+  winrm_open: boolean;
+  smb_open: boolean;
+}
+
+export interface ScanResult {
+  probed: ProbedHost[];
+}
+
+export interface RefreshResult {
+  machine_id: number;
+  winrm_ok: boolean;
+  ue_installs: UeInstall[];
+  gpus: GpuInfo[];
+  error: string | null;
+}
+
+export interface CredentialRecord {
+  id: number | null;
+  alias: string;
+  kind: string;       // "winrm" | "share"
+  username: string;
+}
+
+export interface IniKey {
+  name: string;
+  value: string;
+}
+
+export interface WriteIniResponse {
+  backup_path: string;
+}
+
 export interface EchoResult {
   received: string;
   timestamp: string;
@@ -20,26 +77,81 @@ export interface UecmError {
   message: string;
 }
 
-/**
- * Typed wrapper around Tauri invoke calls. All frontend code should
- * use this rather than calling invoke() directly. Centralizes:
- * - Type safety
- * - Mocking surface for tests
- * - Error normalization (later)
- */
 export const tauriApi = {
+  // Machines
   async listMachines(): Promise<Machine[]> {
     return invoke<Machine[]>("list_machines");
   },
-
   async addMachine(hostname: string, ip: string): Promise<number> {
     return invoke<number>("add_machine", { hostname, ip });
   },
-
   async deleteMachine(id: number): Promise<void> {
     return invoke<void>("delete_machine", { id });
   },
+  async getMachineDetail(id: number): Promise<MachineDetail> {
+    return invoke<MachineDetail>("get_machine_detail", { id });
+  },
 
+  // Discovery
+  async scanNetwork(cidr: string): Promise<ScanResult> {
+    return invoke<ScanResult>("scan_network", { cidr });
+  },
+  async addDiscoveredMachine(ip: string, hostname: string | null): Promise<number> {
+    return invoke<number>("add_discovered_machine", { ip, hostname });
+  },
+  async refreshMachine(machineId: number): Promise<RefreshResult> {
+    return invoke<RefreshResult>("refresh_machine", { machineId });
+  },
+
+  // Credentials
+  async listCredentials(): Promise<CredentialRecord[]> {
+    return invoke<CredentialRecord[]>("list_credentials");
+  },
+  async saveCredential(
+    alias: string,
+    kind: string,
+    username: string,
+    password: string,
+  ): Promise<number> {
+    return invoke<number>("save_credential", { alias, kind, username, password });
+  },
+  async deleteCredential(alias: string): Promise<void> {
+    return invoke<void>("delete_credential", { alias });
+  },
+
+  // Env vars
+  async setMachineEnvVar(machineId: number, name: string, value: string): Promise<void> {
+    return invoke<void>("set_machine_env_var", { machineId, name, value });
+  },
+  async getMachineEnvVar(machineId: number, name: string): Promise<string | null> {
+    return invoke<string | null>("get_machine_env_var", { machineId, name });
+  },
+
+  // INI editor
+  async readIniSection(
+    machineId: number,
+    filePath: string,
+    section: string,
+  ): Promise<IniKey[]> {
+    return invoke<IniKey[]>("read_ini_section", { machineId, filePath, section });
+  },
+  async setIniKey(
+    machineId: number,
+    filePath: string,
+    section: string,
+    name: string,
+    value: string,
+  ): Promise<WriteIniResponse> {
+    return invoke<WriteIniResponse>("set_ini_key", {
+      machineId,
+      filePath,
+      section,
+      name,
+      value,
+    });
+  },
+
+  // System (Plan 1)
   async testPowerShellBridge(message: string): Promise<EchoResult> {
     return invoke<EchoResult>("test_powershell_bridge", { message });
   },

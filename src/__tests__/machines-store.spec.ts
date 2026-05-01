@@ -7,6 +7,8 @@ const { mockApi } = vi.hoisted(() => ({
     listMachines: vi.fn(),
     addMachine: vi.fn(),
     deleteMachine: vi.fn(),
+    getMachineDetail: vi.fn(),
+    refreshMachine: vi.fn(),
   },
 }));
 
@@ -22,6 +24,8 @@ describe("machines store", () => {
     mockApi.listMachines.mockReset();
     mockApi.addMachine.mockReset();
     mockApi.deleteMachine.mockReset();
+    mockApi.getMachineDetail.mockReset();
+    mockApi.refreshMachine.mockReset();
   });
 
   it("starts with empty machines list", () => {
@@ -80,5 +84,41 @@ describe("machines store", () => {
     await store.loadMachines();
     expect(store.error).toEqual({ code: "DATABASE", message: "boom" });
     expect(store.machines).toEqual([]);
+  });
+
+  it("selectMachine populates selectedDetail", async () => {
+    mockApi.getMachineDetail.mockResolvedValue({
+      machine: { id: 5, hostname: "X", ip: "1.1.1.1", role: "render", status: "online", last_seen_at: null },
+      ue_installs: [],
+      gpus: [],
+    });
+    const store = useMachinesStore();
+    await store.selectMachine(5);
+    expect(store.selectedDetail?.machine.hostname).toBe("X");
+  });
+
+  it("refreshSelected re-reads detail after refresh", async () => {
+    mockApi.getMachineDetail.mockResolvedValueOnce({
+      machine: { id: 5, hostname: "X", ip: "1.1.1.1", role: "render", status: "online", last_seen_at: null },
+      ue_installs: [],
+      gpus: [],
+    });
+    mockApi.refreshMachine.mockResolvedValue({
+      machine_id: 5,
+      winrm_ok: true,
+      ue_installs: [],
+      gpus: [],
+      error: null,
+    });
+    mockApi.getMachineDetail.mockResolvedValueOnce({
+      machine: { id: 5, hostname: "X", ip: "1.1.1.1", role: "render", status: "online", last_seen_at: null },
+      ue_installs: [{ id: 1, machine_id: 5, version: "5.4", install_path: "C:\\UE_5.4", is_primary: false }],
+      gpus: [],
+    });
+    const store = useMachinesStore();
+    await store.selectMachine(5);
+    await store.refreshSelected();
+    expect(mockApi.refreshMachine).toHaveBeenCalledWith(5);
+    expect(store.selectedDetail?.ue_installs).toHaveLength(1);
   });
 });

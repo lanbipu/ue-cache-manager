@@ -1,11 +1,23 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import { tauriApi, type Machine, type UecmError } from "@/services/tauri";
+import {
+  tauriApi,
+  type Machine,
+  type MachineDetail,
+  type RefreshResult,
+  type UecmError,
+} from "@/services/tauri";
 
 export const useMachinesStore = defineStore("machines", () => {
   const machines = ref<Machine[]>([]);
   const isLoading = ref(false);
   const error = ref<UecmError | null>(null);
+
+  const selectedDetail = ref<MachineDetail | null>(null);
+  const isDetailLoading = ref(false);
+
+  const lastRefresh = ref<RefreshResult | null>(null);
+  const isRefreshing = ref(false);
 
   async function loadMachines() {
     isLoading.value = true;
@@ -33,9 +45,45 @@ export const useMachinesStore = defineStore("machines", () => {
     error.value = null;
     try {
       await tauriApi.deleteMachine(id);
+      if (selectedDetail.value?.machine.id === id) {
+        selectedDetail.value = null;
+      }
       await loadMachines();
     } catch (e) {
       error.value = e as UecmError;
+    }
+  }
+
+  async function selectMachine(id: number) {
+    isDetailLoading.value = true;
+    error.value = null;
+    try {
+      selectedDetail.value = await tauriApi.getMachineDetail(id);
+    } catch (e) {
+      error.value = e as UecmError;
+      selectedDetail.value = null;
+    } finally {
+      isDetailLoading.value = false;
+    }
+  }
+
+  function clearSelection() {
+    selectedDetail.value = null;
+  }
+
+  async function refreshSelected() {
+    if (!selectedDetail.value?.machine.id) return;
+    const id = selectedDetail.value.machine.id;
+    isRefreshing.value = true;
+    error.value = null;
+    try {
+      lastRefresh.value = await tauriApi.refreshMachine(id);
+      // Re-read detail to pick up updated UE/GPU rows
+      await selectMachine(id);
+    } catch (e) {
+      error.value = e as UecmError;
+    } finally {
+      isRefreshing.value = false;
     }
   }
 
@@ -43,8 +91,15 @@ export const useMachinesStore = defineStore("machines", () => {
     machines,
     isLoading,
     error,
+    selectedDetail,
+    isDetailLoading,
+    lastRefresh,
+    isRefreshing,
     loadMachines,
     addMachine,
     deleteMachine,
+    selectMachine,
+    clearSelection,
+    refreshSelected,
   };
 });
