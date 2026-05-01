@@ -20,15 +20,6 @@ const MIGRATIONS: &[(&str, &str)] = &[
         CREATE INDEX IF NOT EXISTS idx_machines_status ON machines(status);
         "#,
     ),
-    (
-        "002_migrations_table",
-        r#"
-        CREATE TABLE IF NOT EXISTS schema_migrations (
-            name TEXT PRIMARY KEY,
-            applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        "#,
-    ),
 ];
 
 pub fn migrate(conn: &mut Connection) -> UecmResult<()> {
