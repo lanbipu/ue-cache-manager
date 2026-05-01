@@ -1,0 +1,77 @@
+//! Single-machine environment variable read/write via PowerShell sidecar.
+
+use crate::core::powershell;
+use crate::error::{UecmError, UecmResult};
+use serde::Deserialize;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Deserialize)]
+pub struct SetResult {
+    pub ok: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GetResult {
+    pub ok: bool,
+    pub value: Option<String>,
+    pub message: String,
+}
+
+pub fn set(host: &str, name: &str, value: &str) -> UecmResult<()> {
+    let result: SetResult = powershell::run_json(
+        &script_path("setx-machine.ps1"),
+        &[
+            "-HostName", host,
+            "-Name", name,
+            "-Value", value,
+        ],
+    )?;
+    if !result.ok {
+        return Err(UecmError::OperationFailed(format!(
+            "set env var failed: {}",
+            result.message
+        )));
+    }
+    Ok(())
+}
+
+pub fn get(host: &str, name: &str) -> UecmResult<Option<String>> {
+    let result: GetResult = powershell::run_json(
+        &script_path("getx-machine.ps1"),
+        &[
+            "-HostName", host,
+            "-Name", name,
+        ],
+    )?;
+    if !result.ok {
+        return Err(UecmError::OperationFailed(format!(
+            "get env var failed: {}",
+            result.message
+        )));
+    }
+    Ok(result.value)
+}
+
+fn script_path(name: &str) -> PathBuf {
+    Path::new("..").join("ps-scripts").join(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn set_returns_powershell_error_on_non_windows() {
+        let result = set("RENDER-01", "UE-SharedDataCachePath", "\\\\HOST\\DDC");
+        assert!(matches!(result, Err(UecmError::PowerShell(_))));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn get_returns_powershell_error_on_non_windows() {
+        let result = get("RENDER-01", "UE-SharedDataCachePath");
+        assert!(matches!(result, Err(UecmError::PowerShell(_))));
+    }
+}

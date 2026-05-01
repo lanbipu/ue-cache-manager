@@ -44,6 +44,8 @@ pub fn run() {
             commands::credentials::list_credentials,
             commands::credentials::save_credential,
             commands::credentials::delete_credential,
+            commands::env_vars::set_machine_env_var,
+            commands::env_vars::get_machine_env_var,
             commands::system::test_powershell_bridge,
         ])
         .run(tauri::generate_context!())
