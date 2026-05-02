@@ -1,14 +1,16 @@
 //! Wraps the cred-{set,delete,list}.ps1 sidecar scripts. Stores the alias +
 //! display username in SQLite (via `data::credentials`); the password lives
 //! in Windows Credential Manager (cmdkey, used for transparent SMB auth) and
-//! ALSO in DPAPI-encrypted form on disk so the Rust side can read it back
+//! ALSO in a DPAPI-encrypted form on disk so the Rust side can read it back
 //! when an explicit credential needs to be passed into Invoke-Command.
 //!
 //! Storage layout for the DPAPI-encrypted half:
 //!   - File: `%LOCALAPPDATA%\UECM\creds.bin` (Windows) — JSON object
 //!     `{ alias: ciphertext_base64 }`. Whole file rewritten on each store/delete.
-//!   - Each entry is `CryptProtectData(password_bytes)` + base64.
-//!   - User scope, no extra entropy. Decrypt: base64 -> CryptUnprotectData.
+//!   - Each entry is encrypted via `ps-scripts/dpapi.ps1` which delegates to
+//!     .NET System.Security.Cryptography.ProtectedData (CurrentUser scope).
+//!     Going through PS instead of a windows-rs FFI binding keeps the Rust
+//!     side dep-free and survives windows-rs API drift.
 //!
 //! Non-Windows: `store_password` and `delete_password` are no-ops returning
 //! Ok(()) so the dev box `save_credential` path still works end-to-end;
@@ -185,73 +187,46 @@ fn base64_decode(s: &str) -> UecmResult<Vec<u8>> {
 }
 
 // ---------------------------------------------------------------------------
-// DPAPI FFI (Windows only)
+// DPAPI via ps-scripts/dpapi.ps1 (Windows-only at runtime)
 // ---------------------------------------------------------------------------
 
 #[cfg(windows)]
 mod dpapi {
+    use crate::core::powershell;
     use crate::error::{UecmError, UecmResult};
-    use windows::Win32::Security::Cryptography::{
-        CryptProtectData, CryptUnprotectData, CRYPT_INTEGER_BLOB,
-    };
-    use windows::Win32::Foundation::{HLOCAL, LocalFree};
+    use serde::Deserialize;
+
+    #[derive(Debug, Deserialize)]
+    struct DpapiResult {
+        ok: bool,
+        data: String,
+        message: String,
+    }
+
+    fn invoke(mode: &str, data_b64: &str) -> UecmResult<String> {
+        let result: DpapiResult = powershell::run_json(
+            &powershell::script_path("dpapi.ps1"),
+            &["-Mode", mode, "-DataB64", data_b64],
+        )?;
+        if !result.ok {
+            return Err(UecmError::OperationFailed(format!(
+                "DPAPI {} failed: {}",
+                mode, result.message
+            )));
+        }
+        Ok(result.data)
+    }
 
     pub fn protect(plaintext: &[u8]) -> UecmResult<Vec<u8>> {
-        let mut input = CRYPT_INTEGER_BLOB {
-            cbData: plaintext.len() as u32,
-            pbData: plaintext.as_ptr() as *mut u8,
-        };
-        let mut output = CRYPT_INTEGER_BLOB::default();
-        unsafe {
-            CryptProtectData(
-                &mut input,
-                None,
-                None,
-                None,
-                None,
-                0,
-                &mut output,
-            )
-            .map_err(|e| {
-                UecmError::OperationFailed(format!("CryptProtectData failed: {}", e))
-            })?;
-        }
-        let bytes = unsafe {
-            std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec()
-        };
-        unsafe {
-            let _ = LocalFree(HLOCAL(output.pbData as *mut _));
-        }
-        Ok(bytes)
+        let plaintext_b64 = super::base64_encode(plaintext);
+        let out_b64 = invoke("protect", &plaintext_b64)?;
+        super::base64_decode(&out_b64)
     }
 
     pub fn unprotect(ciphertext: &[u8]) -> UecmResult<Vec<u8>> {
-        let mut input = CRYPT_INTEGER_BLOB {
-            cbData: ciphertext.len() as u32,
-            pbData: ciphertext.as_ptr() as *mut u8,
-        };
-        let mut output = CRYPT_INTEGER_BLOB::default();
-        unsafe {
-            CryptUnprotectData(
-                &mut input,
-                None,
-                None,
-                None,
-                None,
-                0,
-                &mut output,
-            )
-            .map_err(|e| {
-                UecmError::OperationFailed(format!("CryptUnprotectData failed: {}", e))
-            })?;
-        }
-        let bytes = unsafe {
-            std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec()
-        };
-        unsafe {
-            let _ = LocalFree(HLOCAL(output.pbData as *mut _));
-        }
-        Ok(bytes)
+        let ciphertext_b64 = super::base64_encode(ciphertext);
+        let out_b64 = invoke("unprotect", &ciphertext_b64)?;
+        super::base64_decode(&out_b64)
     }
 }
 

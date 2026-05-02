@@ -20,17 +20,22 @@ pub fn save_credential(
     username: String,
     password: String,
 ) -> UecmResult<i64> {
-    // Write to Credential Manager first; if that fails, don't pollute SQLite.
+    // Cmdkey first: if this fails, nothing else gets written.
     core_creds::store(&alias, &username, &password)?;
 
-    // DPAPI is best-effort: if it fails, cmdkey still gives us SMB auth, and
-    // the SQLite row is still useful for listing. Log + continue.
+    // DPAPI must succeed for per-call WinRM auth (share creation, batch ops)
+    // to work later. Roll back the cmdkey entry if DPAPI fails so the saved
+    // state is consistent — half-saved aliases caused user-visible "no DPAPI
+    // entry" errors downstream during Plan 3 lanPC E2E.
     if let Err(e) = core_creds::store_password(&alias, &password) {
-        tracing::warn!(
-            alias = %alias,
-            error = %e,
-            "DPAPI store_password failed; per-call WinRM auth via this alias will fail"
-        );
+        if let Err(rollback_err) = core_creds::delete(&alias) {
+            tracing::warn!(
+                alias = %alias,
+                error = %rollback_err,
+                "cmdkey rollback after DPAPI failure also failed"
+            );
+        }
+        return Err(e);
     }
 
     let record = CredentialRecord {
@@ -39,7 +44,6 @@ pub fn save_credential(
         kind,
         username,
     };
-    // If alias already exists, delete + re-insert for an effective upsert.
     if data_creds::find_by_alias(&db, &alias)?.is_some() {
         data_creds::delete_by_alias(&db, &alias)?;
     }

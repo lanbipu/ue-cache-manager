@@ -17,6 +17,10 @@ async function startEdit() {
 }
 
 function cancel() {
+  // Restore the draft to props.value before exiting edit mode so the
+  // browser's blur->commit chain (which fires after Escape unfocuses the
+  // input) runs but emits nothing — `trimmed === props.value` short-circuits.
+  draft.value = props.value;
   editing.value = false;
 }
 
