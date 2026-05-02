@@ -65,6 +65,24 @@ const MIGRATIONS: &[(&str, &str)] = &[
         CREATE INDEX IF NOT EXISTS idx_credentials_alias ON credentials(alias);
         "#,
     ),
+    (
+        "006_share_configs",
+        r#"
+        CREATE TABLE IF NOT EXISTS share_configs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            host_machine_id INTEGER NOT NULL,
+            share_name TEXT NOT NULL,
+            unc_path TEXT NOT NULL,
+            local_path TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            credential_alias TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(host_machine_id, share_name),
+            FOREIGN KEY (host_machine_id) REFERENCES machines(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_share_configs_host ON share_configs(host_machine_id);
+        "#,
+    ),
 ];
 
 pub fn migrate(conn: &mut Connection) -> UecmResult<()> {
@@ -187,6 +205,21 @@ mod tests {
         let count: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='credentials'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn migrate_creates_share_configs_table() {
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='share_configs'",
                 [],
                 |r| r.get(0),
             )
