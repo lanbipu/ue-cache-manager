@@ -1,6 +1,7 @@
 # Sets a single key in an INI section on a remote host with auto-backup.
 # Parameters: -HostName <string> -FilePath <string> -Section <string>
 #             -Name <string> -Value <string>
+#             [-Username <string>] [-Password <string>]
 # Output: JSON { ok: bool, backup_path: string, message: string }
 
 param(
@@ -8,13 +9,22 @@ param(
     [Parameter(Mandatory=$true)] [string]$FilePath,
     [Parameter(Mandatory=$true)] [string]$Section,
     [Parameter(Mandatory=$true)] [string]$Name,
-    [Parameter(Mandatory=$true)] [string]$Value
+    [Parameter(Mandatory=$true)] [string]$Value,
+    [string]$Username,
+    [string]$Password
 )
 
 $ErrorActionPreference = 'Stop'
 
+function Build-CredentialOrNull {
+    param([string]$User, [string]$Pass)
+    if ([string]::IsNullOrEmpty($User) -or [string]::IsNullOrEmpty($Pass)) { return $null }
+    $secure = ConvertTo-SecureString -String $Pass -AsPlainText -Force
+    return New-Object System.Management.Automation.PSCredential($User, $secure)
+}
+
 try {
-    $remoteResult = Invoke-Command -ComputerName $HostName -ScriptBlock {
+    $script = {
         param($FilePath, $Section, $Name, $Value)
 
         if (-not (Test-Path $FilePath)) {
@@ -74,7 +84,16 @@ try {
 
         Set-Content -Path $FilePath -Value $newLines -Encoding UTF8
         return $backup
-    } -ArgumentList $FilePath, $Section, $Name, $Value -ErrorAction Stop
+    }
+    $cred = Build-CredentialOrNull -User $Username -Pass $Password
+    $invokeArgs = @{
+        ComputerName = $HostName
+        ScriptBlock  = $script
+        ArgumentList = @($FilePath, $Section, $Name, $Value)
+        ErrorAction  = 'Stop'
+    }
+    if ($cred) { $invokeArgs['Credential'] = $cred }
+    $remoteResult = Invoke-Command @invokeArgs
 
     # Invoke-Command wraps the returned string in a PSObject with
     # PSComputerName/RunspaceId metadata; force-cast to plain string so

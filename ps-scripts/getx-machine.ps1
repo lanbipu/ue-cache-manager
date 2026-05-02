@@ -1,19 +1,38 @@
 # Reads a system-level environment variable on a remote host via WinRM.
 # Parameters: -HostName <string> -Name <string>
+#             [-Username <string>] [-Password <string>]
 # Output: JSON { ok: bool, value: string|null, message: string }
 
 param(
     [Parameter(Mandatory=$true)] [string]$HostName,
-    [Parameter(Mandatory=$true)] [string]$Name
+    [Parameter(Mandatory=$true)] [string]$Name,
+    [string]$Username,
+    [string]$Password
 )
 
 $ErrorActionPreference = 'Stop'
 
+function Build-CredentialOrNull {
+    param([string]$User, [string]$Pass)
+    if ([string]::IsNullOrEmpty($User) -or [string]::IsNullOrEmpty($Pass)) { return $null }
+    $secure = ConvertTo-SecureString -String $Pass -AsPlainText -Force
+    return New-Object System.Management.Automation.PSCredential($User, $secure)
+}
+
 try {
-    $remoteValue = Invoke-Command -ComputerName $HostName -ScriptBlock {
+    $script = {
         param($Name)
         [System.Environment]::GetEnvironmentVariable($Name, 'Machine')
-    } -ArgumentList $Name -ErrorAction Stop
+    }
+    $cred = Build-CredentialOrNull -User $Username -Pass $Password
+    $invokeArgs = @{
+        ComputerName = $HostName
+        ScriptBlock  = $script
+        ArgumentList = @($Name)
+        ErrorAction  = 'Stop'
+    }
+    if ($cred) { $invokeArgs['Credential'] = $cred }
+    $remoteValue = Invoke-Command @invokeArgs
 
     # Invoke-Command wraps the returned string in a Deserialized.System.String
     # PSObject (carrying PSComputerName/RunspaceId/PSShowComputerName metadata).

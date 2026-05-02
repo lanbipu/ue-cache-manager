@@ -1,17 +1,27 @@
 # Reads a single [section] from an INI file on a remote host.
 # Parameters: -HostName <string> -FilePath <string> -Section <string>
+#             [-Username <string>] [-Password <string>]
 # Output: JSON { ok: bool, keys: [{ name, value }], message: string }
 
 param(
     [Parameter(Mandatory=$true)] [string]$HostName,
     [Parameter(Mandatory=$true)] [string]$FilePath,
-    [Parameter(Mandatory=$true)] [string]$Section
+    [Parameter(Mandatory=$true)] [string]$Section,
+    [string]$Username,
+    [string]$Password
 )
 
 $ErrorActionPreference = 'Stop'
 
+function Build-CredentialOrNull {
+    param([string]$User, [string]$Pass)
+    if ([string]::IsNullOrEmpty($User) -or [string]::IsNullOrEmpty($Pass)) { return $null }
+    $secure = ConvertTo-SecureString -String $Pass -AsPlainText -Force
+    return New-Object System.Management.Automation.PSCredential($User, $secure)
+}
+
 try {
-    $keys = Invoke-Command -ComputerName $HostName -ScriptBlock {
+    $script = {
         param($FilePath, $Section)
         if (-not (Test-Path $FilePath)) {
             throw "file not found: $FilePath"
@@ -34,7 +44,16 @@ try {
             }
         }
         return ,$result
-    } -ArgumentList $FilePath, $Section -ErrorAction Stop
+    }
+    $cred = Build-CredentialOrNull -User $Username -Pass $Password
+    $invokeArgs = @{
+        ComputerName = $HostName
+        ScriptBlock  = $script
+        ArgumentList = @($FilePath, $Section)
+        ErrorAction  = 'Stop'
+    }
+    if ($cred) { $invokeArgs['Credential'] = $cred }
+    $keys = Invoke-Command @invokeArgs
 
     @{ ok = $true; keys = @($keys); message = "" } | ConvertTo-Json -Compress -Depth 4
 }
