@@ -53,6 +53,8 @@ pub fn run() {
             commands::ini_editor::set_ini_key,
             commands::ini_editor::read_ini_section_with_credential,
             commands::ini_editor::set_ini_key_with_credential,
+            commands::batch::batch_set_env_var,
+            commands::batch::batch_set_ini_key,
             commands::shares::create_share,
             commands::shares::inject_share_credential_to_clients,
             commands::shares::list_shares,
