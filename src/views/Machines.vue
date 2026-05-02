@@ -7,6 +7,8 @@ import CredentialDialog from "@/components/modals/CredentialDialog.vue";
 import EnvVarConfigModal from "@/components/modals/EnvVarConfigModal.vue";
 import IniEditModal from "@/components/modals/IniEditModal.vue";
 import ShareCreateWizard from "@/components/modals/ShareCreateWizard.vue";
+import BatchEnvVarModal from "@/components/modals/BatchEnvVarModal.vue";
+import BatchIniEditModal from "@/components/modals/BatchIniEditModal.vue";
 
 const store = useMachinesStore();
 const showDiscovery = ref(false);
@@ -14,8 +16,12 @@ const showCredentials = ref(false);
 const showEnvVar = ref(false);
 const showIniEdit = ref(false);
 const showShareWizard = ref(false);
+const showBatchEnv = ref(false);
+const showBatchIni = ref(false);
 
 const selectedId = computed(() => store.selectedDetail?.machine.id ?? null);
+const checkedIds = ref<Set<number>>(new Set());
+const checkedArray = computed(() => Array.from(checkedIds.value));
 
 onMounted(() => {
   store.loadMachines();
@@ -29,7 +35,32 @@ async function onSelect(id: number | null) {
 async function onDelete(id: number | null) {
   if (id === null) return;
   await store.deleteMachine(id);
+  if (id != null) checkedIds.value.delete(id);
 }
+
+function toggleCheck(id: number | null) {
+  if (id == null) return;
+  const next = new Set(checkedIds.value);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  checkedIds.value = next;
+}
+
+function toggleAll() {
+  const allIds = store.machines
+    .map((m) => m.id)
+    .filter((id): id is number => id != null);
+  if (checkedIds.value.size === allIds.length) {
+    checkedIds.value = new Set();
+  } else {
+    checkedIds.value = new Set(allIds);
+  }
+}
+
+const allChecked = computed(() => {
+  const total = store.machines.filter((m) => m.id != null).length;
+  return total > 0 && checkedIds.value.size === total;
+});
 </script>
 
 <template>
@@ -55,6 +86,39 @@ async function onDelete(id: number | null) {
         </div>
       </header>
 
+      <div
+        v-if="store.machines.length > 0"
+        class="flex items-center justify-between mb-2 text-xs text-gray-600 border-b pb-2"
+      >
+        <label class="flex items-center gap-1 cursor-pointer">
+          <input
+            data-select-all
+            type="checkbox"
+            :checked="allChecked"
+            @change="toggleAll"
+          />
+          {{ checkedIds.size }} selected
+        </label>
+        <div class="flex gap-1">
+          <button
+            data-batch-env-btn
+            :disabled="checkedIds.size === 0"
+            class="px-2 py-0.5 text-xs border rounded hover:bg-gray-100 disabled:opacity-50"
+            @click="showBatchEnv = true"
+          >
+            Batch env
+          </button>
+          <button
+            data-batch-ini-btn
+            :disabled="checkedIds.size === 0"
+            class="px-2 py-0.5 text-xs border rounded hover:bg-gray-100 disabled:opacity-50"
+            @click="showBatchIni = true"
+          >
+            Batch INI
+          </button>
+        </div>
+      </div>
+
       <p v-if="store.isLoading" class="text-sm text-gray-500">Loading...</p>
       <p v-else-if="store.machines.length === 0" class="text-sm text-gray-500">
         No machines yet. Click Scan to discover.
@@ -64,11 +128,19 @@ async function onDelete(id: number | null) {
           v-for="m in store.machines"
           :key="m.id ?? m.ip"
           data-machine-row
-          class="px-2 py-2 rounded cursor-pointer hover:bg-gray-100 flex items-center justify-between"
+          class="px-2 py-2 rounded cursor-pointer hover:bg-gray-100 flex items-center justify-between gap-2"
           :class="store.selectedDetail?.machine.id === m.id ? 'bg-gray-200 font-medium' : ''"
           @click="onSelect(m.id)"
         >
-          <span class="truncate">
+          <input
+            data-machine-check
+            type="checkbox"
+            :checked="m.id != null && checkedIds.has(m.id)"
+            class="flex-shrink-0"
+            @click.stop
+            @change="toggleCheck(m.id)"
+          />
+          <span class="truncate flex-1">
             {{ m.hostname }}<br />
             <span class="text-xs text-gray-500 font-normal">{{ m.ip }}</span>
           </span>
@@ -108,5 +180,15 @@ async function onDelete(id: number | null) {
       @close="showIniEdit = false"
     />
     <ShareCreateWizard :open="showShareWizard" @close="showShareWizard = false" />
+    <BatchEnvVarModal
+      :open="showBatchEnv"
+      :machine-ids="checkedArray"
+      @close="showBatchEnv = false"
+    />
+    <BatchIniEditModal
+      :open="showBatchIni"
+      :machine-ids="checkedArray"
+      @close="showBatchIni = false"
+    />
   </div>
 </template>
