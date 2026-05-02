@@ -12,14 +12,15 @@ describe("router", () => {
     });
   });
 
-  it("has 7 routes", () => {
-    expect(routes).toHaveLength(7);
+  it("has 8 routes", () => {
+    expect(routes).toHaveLength(8);
   });
 
   it("includes all required view routes", async () => {
     const expectedPaths = [
       "/",
       "/machines",
+      "/shares",
       "/projects",
       "/ddc-pak",
       "/pso-cache",

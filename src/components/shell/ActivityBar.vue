@@ -9,6 +9,7 @@ interface NavItem {
 const items: NavItem[] = [
   { to: "/", label: "Dashboard" },
   { to: "/machines", label: "Machines" },
+  { to: "/shares", label: "Shares" },
   { to: "/projects", label: "Projects" },
   { to: "/ddc-pak", label: "DDC Pak" },
   { to: "/pso-cache", label: "PSO Cache" },

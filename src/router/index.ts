@@ -6,10 +6,12 @@ import DDCPak from "@/views/DDCPak.vue";
 import PSOCache from "@/views/PSOCache.vue";
 import INIScanner from "@/views/INIScanner.vue";
 import HealthCheck from "@/views/HealthCheck.vue";
+import Shares from "@/views/Shares.vue";
 
 export const routes: RouteRecordRaw[] = [
   { path: "/", name: "dashboard", component: Dashboard },
   { path: "/machines", name: "machines", component: Machines },
+  { path: "/shares", name: "shares", component: Shares },
   { path: "/projects", name: "projects", component: Projects },
   { path: "/ddc-pak", name: "ddc-pak", component: DDCPak },
   { path: "/pso-cache", name: "pso-cache", component: PSOCache },
