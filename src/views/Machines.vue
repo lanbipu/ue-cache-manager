@@ -6,12 +6,14 @@ import DiscoveryWizard from "@/components/modals/DiscoveryWizard.vue";
 import CredentialDialog from "@/components/modals/CredentialDialog.vue";
 import EnvVarConfigModal from "@/components/modals/EnvVarConfigModal.vue";
 import IniEditModal from "@/components/modals/IniEditModal.vue";
+import ShareCreateWizard from "@/components/modals/ShareCreateWizard.vue";
 
 const store = useMachinesStore();
 const showDiscovery = ref(false);
 const showCredentials = ref(false);
 const showEnvVar = ref(false);
 const showIniEdit = ref(false);
+const showShareWizard = ref(false);
 
 const selectedId = computed(() => store.selectedDetail?.machine.id ?? null);
 
@@ -33,15 +35,24 @@ async function onDelete(id: number | null) {
 <template>
   <div class="h-full flex">
     <aside class="w-80 border-r overflow-auto p-4">
-      <header class="flex items-center justify-between mb-3">
+      <header class="flex items-center justify-between mb-3 gap-2">
         <h1 class="text-lg font-semibold">Machines</h1>
-        <button
-          data-discover-btn
-          class="px-3 py-1 text-sm bg-gray-200 rounded hover:bg-gray-300"
-          @click="showDiscovery = true"
-        >
-          Scan
-        </button>
+        <div class="flex gap-1">
+          <button
+            data-create-share-btn
+            class="px-2 py-1 text-xs border rounded hover:bg-gray-100"
+            @click="showShareWizard = true"
+          >
+            Share
+          </button>
+          <button
+            data-discover-btn
+            class="px-3 py-1 text-sm bg-gray-200 rounded hover:bg-gray-300"
+            @click="showDiscovery = true"
+          >
+            Scan
+          </button>
+        </div>
       </header>
 
       <p v-if="store.isLoading" class="text-sm text-gray-500">Loading...</p>
@@ -96,5 +107,6 @@ async function onDelete(id: number | null) {
       :machine-id="selectedId"
       @close="showIniEdit = false"
     />
+    <ShareCreateWizard :open="showShareWizard" @close="showShareWizard = false" />
   </div>
 </template>
