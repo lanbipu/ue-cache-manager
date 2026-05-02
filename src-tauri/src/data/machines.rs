@@ -111,6 +111,17 @@ pub fn delete(db: &Db, id: i64) -> UecmResult<()> {
     Ok(())
 }
 
+/// Stamps the machine row with `CURRENT_TIMESTAMP` and a fresh status.
+/// Called by `refresh_machine` so the UI online/offline badge reflects truth.
+pub fn mark_seen(db: &Db, id: i64, status: &str) -> UecmResult<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "UPDATE machines SET last_seen_at = CURRENT_TIMESTAMP, status = ? WHERE id = ?",
+        params![status, id],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,5 +191,41 @@ mod tests {
         insert(&db, &Machine::new("A", "192.168.10.1")).unwrap();
         let result = insert(&db, &Machine::new("B", "192.168.10.1"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn mark_seen_updates_status_and_last_seen() {
+        let db = setup();
+        let id = insert(&db, &Machine::new("RENDER-01", "192.168.10.21")).unwrap();
+        // Sanity: fresh row starts with default status + null last_seen_at.
+        let before = find_by_id(&db, id).unwrap().unwrap();
+        assert_eq!(before.status, "unknown");
+        assert!(before.last_seen_at.is_none());
+
+        mark_seen(&db, id, "online").unwrap();
+
+        let after = find_by_id(&db, id).unwrap().unwrap();
+        assert_eq!(after.status, "online");
+        assert!(after.last_seen_at.is_some());
+    }
+
+    #[test]
+    fn mark_seen_bumps_last_seen_on_each_call() {
+        // SQLite's CURRENT_TIMESTAMP has 1-second granularity, so two
+        // back-to-back calls in a fast test may produce identical strings.
+        // We intentionally do NOT assert strict ordering — only that each
+        // call leaves last_seen_at populated and the latest status sticks.
+        let db = setup();
+        let id = insert(&db, &Machine::new("RENDER-02", "192.168.10.22")).unwrap();
+
+        mark_seen(&db, id, "online").unwrap();
+        let first = find_by_id(&db, id).unwrap().unwrap();
+        assert!(first.last_seen_at.is_some());
+        assert_eq!(first.status, "online");
+
+        mark_seen(&db, id, "offline").unwrap();
+        let second = find_by_id(&db, id).unwrap().unwrap();
+        assert!(second.last_seen_at.is_some());
+        assert_eq!(second.status, "offline");
     }
 }

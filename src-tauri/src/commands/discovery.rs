@@ -58,27 +58,38 @@ fn refresh_err(machine_id: i64, winrm_ok: bool, msg: impl Into<String>) -> Refre
 
 /// Probes WinRM connectivity to a known machine, then re-queries UE + GPU
 /// info if reachable, persisting results into the data layer.
+///
+/// Order matters here:
+/// 1. Probe + `mark_seen` first — UI online/offline badge stays correct even
+///    when a later detection step fails.
+/// 2. UE detect + persist BEFORE GPU detect — if GPU detection blows up, the
+///    UE list we already saved survives instead of being discarded.
 #[tauri::command]
 pub fn refresh_machine(db: State<'_, Db>, machine_id: i64) -> UecmResult<RefreshResult> {
     let machine = data_machines::find_by_id(&db, machine_id)?
         .ok_or_else(|| UecmError::InvalidInput(format!("machine {} not found", machine_id)))?;
 
+    // Probe + mark online/offline immediately so the UI badge is correct
+    // even when subsequent detection steps fail.
     match winrm::probe(&machine.ip) {
-        Ok(p) if p.ok => {}
-        Ok(_) => return Ok(refresh_err(machine_id, false, "WinRM unreachable")),
-        Err(e) => return Ok(refresh_err(machine_id, false, format!("probe failed: {}", e))),
+        Ok(p) if p.ok => {
+            data_machines::mark_seen(&db, machine_id, "online")?;
+        }
+        Ok(_) => {
+            data_machines::mark_seen(&db, machine_id, "offline")?;
+            return Ok(refresh_err(machine_id, false, "WinRM unreachable"));
+        }
+        Err(e) => {
+            data_machines::mark_seen(&db, machine_id, "offline")?;
+            return Ok(refresh_err(machine_id, false, format!("probe failed: {}", e)));
+        }
     }
 
+    // UE detect + persist BEFORE GPU detect — partial-failure tolerance.
     let detected_ue = match discovery::detect_ue_versions(&machine.ip) {
         Ok(v) => v,
         Err(e) => return Ok(refresh_err(machine_id, true, format!("UE detection failed: {}", e))),
     };
-
-    let detected_gpus = match discovery::detect_gpus(&machine.ip) {
-        Ok(v) => v,
-        Err(e) => return Ok(refresh_err(machine_id, true, format!("GPU detection failed: {}", e))),
-    };
-
     for d in &detected_ue {
         machine_ue_installs::upsert(
             &db,
@@ -91,6 +102,22 @@ pub fn refresh_machine(db: State<'_, Db>, machine_id: i64) -> UecmResult<Refresh
             },
         )?;
     }
+    let persisted_ue = machine_ue_installs::list_for_machine(&db, machine_id)?;
+
+    // GPU detect AFTER UE is persisted. If GPU fails, return what we have —
+    // do NOT use `refresh_err` here because that drops the persisted UE list.
+    let detected_gpus = match discovery::detect_gpus(&machine.ip) {
+        Ok(v) => v,
+        Err(e) => {
+            return Ok(RefreshResult {
+                machine_id,
+                winrm_ok: true,
+                ue_installs: persisted_ue,
+                gpus: vec![],
+                error: Some(format!("GPU detection failed: {}", e)),
+            });
+        }
+    };
 
     // GPUs change as a unit on hardware swap, so replace the whole set.
     let gpu_records: Vec<GpuInfo> = detected_gpus
@@ -109,7 +136,7 @@ pub fn refresh_machine(db: State<'_, Db>, machine_id: i64) -> UecmResult<Refresh
     Ok(RefreshResult {
         machine_id,
         winrm_ok: true,
-        ue_installs: machine_ue_installs::list_for_machine(&db, machine_id)?,
+        ue_installs: persisted_ue,
         gpus: machine_gpus::list_for_machine(&db, machine_id)?,
         error: None,
     })

@@ -76,6 +76,78 @@ describe("MachineDetail", () => {
     expect(wrapper.text()).toContain("551.86");
   });
 
+  it("renders online status badge with green class", async () => {
+    mockApi.getMachineDetail.mockResolvedValue({
+      machine: {
+        id: 1,
+        hostname: "RENDER-01",
+        ip: "192.168.10.21",
+        role: "render",
+        status: "online",
+        last_seen_at: "2026-05-02 10:00:00",
+      },
+      ue_installs: [],
+      gpus: [],
+    });
+    const store = useMachinesStore();
+    await store.selectMachine(1);
+    const wrapper = mount(MachineDetail);
+    await flushPromises();
+    const badge = wrapper.find("[data-status-badge]");
+    expect(badge.exists()).toBe(true);
+    expect(badge.text()).toBe("online");
+    expect(badge.classes()).toContain("bg-green-500");
+    expect(badge.classes()).toContain("text-white");
+  });
+
+  it("renders offline status badge with red class", async () => {
+    mockApi.getMachineDetail.mockResolvedValue({
+      machine: {
+        id: 1,
+        hostname: "RENDER-01",
+        ip: "192.168.10.21",
+        role: "render",
+        status: "offline",
+        last_seen_at: "2026-05-02 10:00:00",
+      },
+      ue_installs: [],
+      gpus: [],
+    });
+    const store = useMachinesStore();
+    await store.selectMachine(1);
+    const wrapper = mount(MachineDetail);
+    await flushPromises();
+    const badge = wrapper.find("[data-status-badge]");
+    expect(badge.exists()).toBe(true);
+    expect(badge.text()).toBe("offline");
+    expect(badge.classes()).toContain("bg-red-500");
+    expect(badge.classes()).toContain("text-white");
+  });
+
+  it("renders unknown status badge with gray class", async () => {
+    mockApi.getMachineDetail.mockResolvedValue({
+      machine: {
+        id: 1,
+        hostname: "RENDER-01",
+        ip: "192.168.10.21",
+        role: "render",
+        status: "unknown",
+        last_seen_at: null,
+      },
+      ue_installs: [],
+      gpus: [],
+    });
+    const store = useMachinesStore();
+    await store.selectMachine(1);
+    const wrapper = mount(MachineDetail);
+    await flushPromises();
+    const badge = wrapper.find("[data-status-badge]");
+    expect(badge.exists()).toBe(true);
+    expect(badge.text()).toBe("unknown");
+    expect(badge.classes()).toContain("bg-gray-400");
+    expect(badge.classes()).toContain("text-white");
+  });
+
   it("clicking refresh button calls store.refreshSelected", async () => {
     mockApi.getMachineDetail.mockResolvedValue({
       machine: {

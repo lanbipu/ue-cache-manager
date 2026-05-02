@@ -8,6 +8,12 @@ const emit = defineEmits<{
   (e: "openIniEditModal"): void;
   (e: "openCredentialModal"): void;
 }>();
+
+function statusBadgeClass(status: string): string {
+  if (status === "online") return "bg-green-500 text-white";
+  if (status === "offline") return "bg-red-500 text-white";
+  return "bg-gray-400 text-white";
+}
 </script>
 
 <template>
@@ -19,7 +25,16 @@ const emit = defineEmits<{
     <div v-else class="p-6 overflow-auto">
       <header class="flex items-start justify-between mb-4">
         <div>
-          <h2 class="text-xl font-semibold">{{ store.selectedDetail.machine.hostname }}</h2>
+          <div class="flex items-center gap-2">
+            <h2 class="text-xl font-semibold">{{ store.selectedDetail.machine.hostname }}</h2>
+            <span
+              data-status-badge
+              class="text-xs px-2 py-0.5 rounded-full"
+              :class="statusBadgeClass(store.selectedDetail.machine.status)"
+            >
+              {{ store.selectedDetail.machine.status }}
+            </span>
+          </div>
           <p class="text-sm text-gray-500">{{ store.selectedDetail.machine.ip }}</p>
         </div>
         <div class="flex gap-2">
