@@ -9,10 +9,27 @@ use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::process::Command;
 
-/// Resolve a sidecar script name to its on-disk path. Convention: scripts live
-/// in `ps-scripts/` one level above the cargo package root (so the cwd is
-/// `src-tauri/` at runtime + during tests).
+/// Resolve a sidecar script name to its on-disk path. Searches in this order:
+///   1. `<exe-dir>/ps-scripts/<name>` — production install (Tauri bundle.resources)
+///   2. `<ancestor>/ps-scripts/<name>` walking up from the exe — `cargo build` /
+///      `cargo test` / `tauri dev` (exe lives under `target/{debug,release,...}`)
+///   3. `..\ps-scripts\<name>` relative to cwd — fallback for unusual launchers
+///      where `current_exe()` is unavailable
 pub fn script_path(name: &str) -> PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let bundled = exe_dir.join("ps-scripts").join(name);
+            if bundled.exists() {
+                return bundled;
+            }
+            for ancestor in exe_dir.ancestors().take(8) {
+                let candidate = ancestor.join("ps-scripts").join(name);
+                if candidate.exists() {
+                    return candidate;
+                }
+            }
+        }
+    }
     Path::new("..").join("ps-scripts").join(name)
 }
 
