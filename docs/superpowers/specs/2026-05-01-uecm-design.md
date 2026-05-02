@@ -506,7 +506,7 @@ Rust 通过 `Command::new("powershell.exe")` 调用，传参 + 解析 stdout JSO
   - 提权与显式凭据 + SMB 共享一键创建（Mode A + Mode B）+ SYSTEM 凭据注入 + 集群批量配置推送 + Plan 2 E2E 收口（hostname rename / last_seen_at / GPU VRAM DXGI fallback）
   - 工期：~2 周
   - 状态：✅ Plan 文件已写好，待执行
-- [ ] **Plan 4：诊断模块**
+- [x] **Plan 4：诊断模块**
   - INI 扫描器 + 冲突诊断 + 集群健康检查矩阵（11 项）
   - 工期：~2 周
 - [ ] **Plan 5：DDC Pak**

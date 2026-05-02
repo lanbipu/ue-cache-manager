@@ -1,6 +1,6 @@
 # Sets a single key in an INI section on a remote host with auto-backup.
 # Parameters: -HostName <string> -FilePath <string> -Section <string>
-#             -Name <string> -Value <string>
+#             -Name <string> -Value <string> [-RemoveKey]
 #             [-Username <string>] [-Password <string>]
 # Output: JSON { ok: bool, backup_path: string, message: string }
 
@@ -9,7 +9,8 @@ param(
     [Parameter(Mandatory=$true)] [string]$FilePath,
     [Parameter(Mandatory=$true)] [string]$Section,
     [Parameter(Mandatory=$true)] [string]$Name,
-    [Parameter(Mandatory=$true)] [string]$Value,
+    [string]$Value = "",
+    [switch]$RemoveKey,
     [string]$Username,
     [string]$Password
 )
@@ -28,7 +29,7 @@ function Build-CredentialOrNull {
 
 try {
     $script = {
-        param($FilePath, $Section, $Name, $Value)
+        param($FilePath, $Section, $Name, $Value, $RemoveKey)
 
         if (-not (Test-Path $FilePath)) {
             throw "file not found: $FilePath"
@@ -63,8 +64,10 @@ try {
                 $inSection = $false
                 $newLines.Add($line)
             }
-            elseif ($inSection -and ($trim -match "^\s*$([regex]::Escape($Name))\s*=")) {
-                $newLines.Add("$Name=$Value")
+            elseif ($inSection -and ($trim -match "^\s*[\+\-\!]*$([regex]::Escape($Name))\s*=")) {
+                if (-not $RemoveKey) {
+                    $newLines.Add("$Name=$Value")
+                }
                 $found = $true
             }
             else {
@@ -73,12 +76,12 @@ try {
             $i++
         }
 
-        if ($inSection -and -not $found) {
+        if ($inSection -and -not $found -and -not $RemoveKey) {
             $newLines.Add("$Name=$Value")
             $found = $true
         }
 
-        if (-not $found -and $sectionIndex -lt 0) {
+        if (-not $found -and $sectionIndex -lt 0 -and -not $RemoveKey) {
             # Section did not exist; append section + key.
             $newLines.Add("")
             $newLines.Add("[$Section]")
@@ -92,7 +95,7 @@ try {
     $invokeArgs = @{
         ComputerName = $HostName
         ScriptBlock  = $script
-        ArgumentList = @($FilePath, $Section, $Name, $Value)
+        ArgumentList = @($FilePath, $Section, $Name, $Value, [bool]$RemoveKey)
         ErrorAction  = 'Stop'
     }
     if ($cred) { $invokeArgs['Credential'] = $cred }

@@ -2,7 +2,7 @@
 
 Cross-machine Unreal Engine cache management tool for VP/XR render clusters.
 
-**Status:** Plan 3 (Elevation, SMB Shares & Cluster Batch) complete. See `docs/superpowers/plans/`.
+**Status:** Plan 4 (Diagnostics) implemented. See `docs/superpowers/plans/`.
 
 ## What's working
 
@@ -18,13 +18,15 @@ Cross-machine Unreal Engine cache management tool for VP/XR render clusters.
   - Mode A — open Guest + Everyone:Full, for trusted-LAN environments.
   - Mode B — dedicated `ddc-svc` local account on the host, share authorized only to that account; SYSTEM credential injection via vendored PsExec64 lets LocalSystem services (e.g. RenderStream Service) mount the share.
 - **Cluster batch operations**: multi-select machines + apply env var / INI key to all of them; real-time per-machine progress (✓ / ✗ / ↻) via mpsc fan-out + Tauri `batch-progress` events; capped at 8 concurrent.
+- **INI Scanner**: project / user / engine INI scan, rule engine R001-R007, persisted findings, one-click apply for auto-fixable findings through the atomic backup write path.
+- **Cluster Health Check**: 11-check matrix with KPI strip, cluster score, derived INI consistency + GPU/driver consistency, and remediation details per cell.
+- **Diagnostic primitives**: diff code block, KPI tile, score tile, filter chip, finding hierarchy/detail, and health matrix components.
+- **Diagnostic PowerShell sidecars**: `read-ini-file.ps1` for whole-file INI reads and `health-probes.ps1` for one-round-trip machine probes.
 - **Hostname rename**: inline editor in the machine detail panel.
 - Builds to a single .exe / .dmg / .AppImage.
 
 ## What's NOT yet implemented (next plans)
 
-- INI conflict scanner + auto-fix (Plan 4)
-- Cluster health check matrix (Plan 4)
 - DDC Pak generation + distribution (Plan 5)
 - PSO Cache operations + visual polish (Plan 6)
 

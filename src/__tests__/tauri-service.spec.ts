@@ -53,4 +53,20 @@ describe("tauri service", () => {
     expect(mockInvoke).toHaveBeenCalledWith("test_powershell_bridge", { message: "hi" });
     expect(result).toEqual(fake);
   });
+
+  it("scanInis wraps request", async () => {
+    mockInvoke.mockResolvedValue({ scan_run_id: 9, summary: {}, findings: [] });
+    await tauriApi.scanInis({ machine_ids: [1], credential_alias: "cred", project_paths: [], user_profile_path: null });
+    expect(mockInvoke).toHaveBeenCalledWith("scan_inis", {
+      request: { machine_ids: [1], credential_alias: "cred", project_paths: [], user_profile_path: null },
+    });
+  });
+
+  it("runHealthCheck wraps request", async () => {
+    mockInvoke.mockResolvedValue({ scan_run_id: 10, results: [] });
+    await tauriApi.runHealthCheck({ machine_ids: [1], credential_alias: "cred", project_paths: ["E:\\Proj"] });
+    expect(mockInvoke).toHaveBeenCalledWith("run_health_check", {
+      request: { machine_ids: [1], credential_alias: "cred", project_paths: ["E:\\Proj"] },
+    });
+  });
 });

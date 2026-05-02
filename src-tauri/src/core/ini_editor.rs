@@ -128,6 +128,43 @@ pub fn set_key_with_credential(
     Ok(result.backup_path)
 }
 
+pub fn remove_key_with_credential(
+    host: &str,
+    file_path: &str,
+    section: &str,
+    name: &str,
+    username: &str,
+    password: &str,
+) -> UecmResult<String> {
+    let result: WriteResult = powershell::run_json(
+        &powershell::script_path("write-ini-key.ps1"),
+        &[
+            "-HostName",
+            host,
+            "-FilePath",
+            file_path,
+            "-Section",
+            section,
+            "-Name",
+            name,
+            "-Value",
+            "",
+            "-RemoveKey",
+            "-Username",
+            username,
+            "-Password",
+            password,
+        ],
+    )?;
+    if !result.ok {
+        return Err(UecmError::OperationFailed(format!(
+            "remove INI key failed: {}",
+            result.message
+        )));
+    }
+    Ok(result.backup_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,6 +211,20 @@ mod tests {
             "Core.System",
             "Paths",
             "../Content",
+            "admin",
+            "p@ss",
+        );
+        assert!(matches!(result, Err(UecmError::PowerShell(_))));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn remove_key_with_credential_returns_powershell_error_on_non_windows() {
+        let result = remove_key_with_credential(
+            "RENDER-01",
+            "C:\\proj\\Config\\DefaultEngine.ini",
+            "Core.System",
+            "Paths",
             "admin",
             "p@ss",
         );

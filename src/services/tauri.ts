@@ -70,6 +70,92 @@ export interface WriteIniResponse {
   backup_path: string;
 }
 
+export interface ScanRun {
+  id: number | null;
+  scan_type: string;
+  started_at: string | null;
+  finished_at: string | null;
+  machine_ids: number[];
+  summary: Record<string, unknown> | null;
+}
+
+export type Severity = "critical" | "warning" | "healthy" | "info";
+
+export interface IniFinding {
+  id: number | null;
+  scan_run_id: number;
+  machine_id: number;
+  rule_id: string;
+  severity: Severity;
+  category: string;
+  file_path: string;
+  section: string | null;
+  key_name: string | null;
+  line_number: number | null;
+  snippet_before: string;
+  snippet_after: string | null;
+  recommended_action: string;
+  recommended_value: string | null;
+  symptom: string;
+  rationale: string;
+  fixed_at: string | null;
+  skipped_at: string | null;
+}
+
+export interface IniScanSummary {
+  scan_run_id: number;
+  critical: number;
+  warning: number;
+  healthy: number;
+  info: number;
+  total_files: number;
+}
+
+export interface ScanInisRequest {
+  machine_ids: number[];
+  credential_alias: string;
+  project_paths: string[];
+  user_profile_path: string | null;
+}
+
+export interface ScanInisResponse {
+  scan_run_id: number;
+  summary: IniScanSummary;
+  findings: IniFinding[];
+}
+
+export interface ApplyFindingResult {
+  backup_path: string | null;
+  message: string;
+}
+
+export type CheckStatus = "healthy" | "warning" | "critical" | "na" | "offline" | "unknown";
+
+export interface CheckOutcome {
+  status: CheckStatus;
+  message: string;
+  sample: string;
+  remediation: string;
+}
+
+export interface HealthCheckRun {
+  id: number | null;
+  scan_run_id: number;
+  machine_id: number;
+  machine_results: Record<string, CheckOutcome>;
+}
+
+export interface RunHealthCheckRequest {
+  machine_ids: number[];
+  credential_alias: string;
+  project_paths: string[];
+}
+
+export interface RunHealthCheckResponse {
+  scan_run_id: number;
+  results: HealthCheckRun[];
+}
+
 export type ShareMode = "open" | "managed";
 
 export interface ShareConfig {
@@ -243,6 +329,35 @@ export const tauriApi = {
       value,
       credentialAlias,
     });
+  },
+
+  // Diagnostics
+  async scanInis(request: ScanInisRequest): Promise<ScanInisResponse> {
+    return invoke<ScanInisResponse>("scan_inis", { request });
+  },
+  async listScanRuns(scanType: string, limit = 20): Promise<ScanRun[]> {
+    return invoke<ScanRun[]>("list_scan_runs", { scanType, limit });
+  },
+  async listFindings(scanRunId: number): Promise<IniFinding[]> {
+    return invoke<IniFinding[]>("list_findings", { scanRunId });
+  },
+  async getFinding(findingId: number): Promise<IniFinding | null> {
+    return invoke<IniFinding | null>("get_finding", { findingId });
+  },
+  async applyFinding(findingId: number, credentialAlias: string): Promise<ApplyFindingResult> {
+    return invoke<ApplyFindingResult>("apply_finding", { findingId, credentialAlias });
+  },
+  async skipFinding(findingId: number): Promise<void> {
+    return invoke<void>("skip_finding", { findingId });
+  },
+  async runHealthCheck(request: RunHealthCheckRequest): Promise<RunHealthCheckResponse> {
+    return invoke<RunHealthCheckResponse>("run_health_check", { request });
+  },
+  async listHealthCheckRuns(limit = 20): Promise<ScanRun[]> {
+    return invoke<ScanRun[]>("list_health_check_runs", { limit });
+  },
+  async listHealthResultsForRun(scanRunId: number): Promise<HealthCheckRun[]> {
+    return invoke<HealthCheckRun[]>("list_health_results_for_run", { scanRunId });
   },
 
   // Shares

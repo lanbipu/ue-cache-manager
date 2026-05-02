@@ -1,62 +1,97 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onMounted, ref } from "vue";
 import UecmPageHeader from "@/components/primitives/UecmPageHeader.vue";
-import UecmMatrixCell from "@/components/primitives/UecmMatrixCell.vue";
-import UecmStat from "@/components/primitives/UecmStat.vue";
-import { HEALTH_CHECKS, type StatusKind } from "@/lib/healthChecks";
+import UecmIcon from "@/components/primitives/UecmIcon.vue";
+import UecmKpiTile from "@/components/primitives/UecmKpiTile.vue";
+import UecmScoreTile from "@/components/primitives/UecmScoreTile.vue";
+import UecmStatusBadge from "@/components/primitives/UecmStatusBadge.vue";
+import Button from "@/components/ui/Button.vue";
+import HealthMatrix from "@/components/diagnostics/HealthMatrix.vue";
+import HealthCheckWizard from "@/components/modals/HealthCheckWizard.vue";
+import { HEALTH_CHECKS } from "@/lib/healthChecks";
+import { useHealthCheckStore } from "@/stores/healthCheck";
 import { useMachinesStore } from "@/stores/machines";
 
 const machines = useMachinesStore();
+const health = useHealthCheckStore();
+const showWizard = ref(false);
+const selected = ref<{ machineId: number; checkId: string } | null>(null);
 
-function statusTone(status: string): StatusKind {
-  const normalized = status.toLowerCase();
-  if (normalized === "online") return "healthy";
-  if (normalized === "offline") return "offline";
-  if (["critical", "error", "failed"].includes(normalized)) return "critical";
-  if (["warning", "warn", "degraded"].includes(normalized)) return "warning";
-  return "unknown";
-}
+onMounted(() => machines.loadMachines());
 
-const healthy = computed(() => machines.machines.filter((machine) => statusTone(machine.status) === "healthy").length);
-const warnings = computed(() => machines.machines.filter((machine) => statusTone(machine.status) === "warning").length);
-const critical = computed(() => machines.machines.filter((machine) => statusTone(machine.status) === "critical").length);
-
-onMounted(() => {
-  machines.loadMachines();
+const score = computed(() => {
+  const total = health.summary.total || 1;
+  return Math.max(0, Math.round(((health.summary.healthy - health.summary.critical * 0.75 - health.summary.warning * 0.35) / total) * 100));
+});
+const tone = computed(() => health.summary.critical > 0 ? "critical" : health.summary.warning > 0 ? "warning" : health.summary.healthy > 0 ? "healthy" : "info");
+const verdict = computed(() => tone.value === "critical" ? "ATTENTION" : tone.value === "warning" ? "DEGRADED" : tone.value === "healthy" ? "HEALTHY" : "IDLE");
+const selectedDetail = computed(() => {
+  if (!selected.value) return null;
+  const def = HEALTH_CHECKS.find((check) => check.id === selected.value?.checkId);
+  const outcome = health.rowsByMachine[selected.value.machineId]?.[selected.value.checkId];
+  const machine = machines.machines.find((m) => m.id === selected.value?.machineId);
+  return { def, outcome, machine };
 });
 </script>
 
 <template>
-  <div class="space-y-6 p-6">
-    <UecmPageHeader title="Health Check" eyebrow="Matrix" description="Cross-machine status matrix for registered cluster machines." />
-    <section class="grid gap-4 md:grid-cols-3">
-      <UecmStat label="Healthy" :value="healthy" icon="shield-check" />
-      <UecmStat label="Warnings" :value="warnings" icon="info" />
-      <UecmStat label="Critical" :value="critical" icon="alert-triangle" />
-    </section>
-    <div class="overflow-auto rounded-lg border bg-card">
-      <p v-if="machines.machines.length === 0" class="p-6 text-sm text-muted-foreground">
-        No machines registered yet. Use Machines > Scan to build the health matrix.
-      </p>
-      <table v-else class="min-w-[900px] w-full text-sm">
-        <thead class="bg-muted text-muted-foreground">
-          <tr>
-            <th class="sticky left-0 bg-muted px-4 py-3 text-left">Machine</th>
-            <th v-for="check in HEALTH_CHECKS" :key="check.id" class="px-3 py-3 text-center">{{ check.label }}</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y">
-          <tr v-for="machine in machines.machines" :key="machine.id ?? machine.ip">
-            <td class="sticky left-0 bg-card px-4 py-3">
-              <div class="font-bold">{{ machine.hostname }}</div>
-              <div class="font-mono text-xs text-muted-foreground">{{ machine.ip }}</div>
-            </td>
-            <td v-for="check in HEALTH_CHECKS" :key="check.id" class="px-3 py-2 text-center">
-              <UecmMatrixCell :tone="statusTone(machine.status)" />
-            </td>
-          </tr>
-        </tbody>
-      </table>
+  <div class="flex h-full flex-col">
+    <div class="space-y-4 p-6">
+      <UecmPageHeader title="Health Check" eyebrow="Matrix" description="11 checks per machine with linked remediation detail.">
+        <template #actions>
+          <Button data-open-health-wizard-btn @click="showWizard = true">
+            <UecmIcon name="play" /> Run full check
+          </Button>
+        </template>
+      </UecmPageHeader>
+      <section class="grid grid-cols-5 gap-px overflow-hidden rounded-lg border bg-border">
+        <UecmScoreTile label="Cluster Score" :score="score" :tone="tone" :verdict="verdict" />
+        <UecmKpiTile label="Healthy" :value="health.summary.healthy" tone="healthy" />
+        <UecmKpiTile label="Warning" :value="health.summary.warning" tone="warning" />
+        <UecmKpiTile label="Critical" :value="health.summary.critical" tone="critical" />
+        <UecmKpiTile label="Offline" :value="health.summary.offline" tone="offline" />
+      </section>
     </div>
+
+    <section v-if="machines.machines.length === 0" class="grid flex-1 place-items-center text-center">
+      <p class="text-sm text-muted-foreground">No machines registered. Use Machines &gt; Scan first.</p>
+    </section>
+    <section v-else-if="health.scanRunId === null" class="grid flex-1 place-items-center text-center">
+      <div>
+        <UecmIcon name="heart-pulse" size="32" class="mx-auto text-muted-foreground" />
+        <h2 class="mt-4 font-display text-lg font-extrabold">Run a full health check</h2>
+        <p class="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">The matrix is populated after a scan completes.</p>
+      </div>
+    </section>
+    <section v-else class="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[3fr_2fr]">
+      <HealthMatrix class="border-r" :machines="machines.machines" :rows-by-machine="health.rowsByMachine" :selected-machine-id="selected?.machineId ?? null" :selected-check-id="selected?.checkId ?? null" @select="selected = $event" />
+      <aside data-health-detail class="overflow-y-auto p-6">
+        <p v-if="!selectedDetail" class="text-sm text-muted-foreground">Select a cell to inspect it.</p>
+        <div v-else class="space-y-4">
+          <header class="flex items-center gap-3">
+            <UecmStatusBadge :tone="selectedDetail.outcome?.status ?? 'unknown'" :label="selectedDetail.outcome?.status ?? 'unknown'" />
+            <div>
+              <h2 class="font-display text-lg font-extrabold">{{ selectedDetail.def?.label }}</h2>
+              <p class="font-mono text-xs text-muted-foreground">{{ selectedDetail.machine?.hostname }} · {{ selectedDetail.machine?.ip }}</p>
+            </div>
+          </header>
+          <div class="rounded-md border bg-card p-3">
+            <div class="font-mono text-[11px] font-bold uppercase text-muted-foreground">What</div>
+            <p class="mt-1 text-sm">{{ selectedDetail.def?.description }}</p>
+          </div>
+          <div class="rounded-md border bg-card p-3">
+            <div class="font-mono text-[11px] font-bold uppercase text-muted-foreground">Symptom</div>
+            <p class="mt-1 text-sm">{{ selectedDetail.def?.symptom }}</p>
+          </div>
+          <div class="rounded-md border bg-card p-3">
+            <div class="font-mono text-[11px] font-bold uppercase text-muted-foreground">How to fix</div>
+            <p class="mt-1 text-sm">{{ selectedDetail.outcome?.remediation ?? selectedDetail.def?.remediation }}</p>
+          </div>
+          <pre class="rounded-md border bg-card p-3 font-mono text-xs text-muted-foreground whitespace-pre-wrap">{{ selectedDetail.outcome?.message ?? "No probe output" }}</pre>
+        </div>
+      </aside>
+    </section>
+
+    <HealthCheckWizard :open="showWizard" @close="showWizard = false" />
   </div>
 </template>
