@@ -92,6 +92,9 @@ export const tauriApi = {
   async deleteMachine(id: number): Promise<void> {
     return invoke<void>("delete_machine", { id });
   },
+  async renameMachine(id: number, hostname: string): Promise<void> {
+    return invoke<void>("rename_machine", { id, hostname });
+  },
   async getMachineDetail(id: number): Promise<MachineDetail> {
     return invoke<MachineDetail>("get_machine_detail", { id });
   },

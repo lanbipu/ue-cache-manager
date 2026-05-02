@@ -1,7 +1,7 @@
 //! CRUD operations for the `machines` table.
 
 use crate::data::Db;
-use crate::error::UecmResult;
+use crate::error::{UecmError, UecmResult};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
@@ -111,6 +111,20 @@ pub fn delete(db: &Db, id: i64) -> UecmResult<()> {
     Ok(())
 }
 
+/// Updates the hostname for a machine row. Returns `InvalidInput` when no row matched.
+/// Plan 3 T6: lets users rename a machine after first discovery via the detail panel.
+pub fn rename(db: &Db, id: i64, new_hostname: &str) -> UecmResult<()> {
+    let conn = db.lock().unwrap();
+    let updated = conn.execute(
+        "UPDATE machines SET hostname = ? WHERE id = ?",
+        params![new_hostname, id],
+    )?;
+    if updated == 0 {
+        return Err(UecmError::InvalidInput(format!("machine {} not found", id)));
+    }
+    Ok(())
+}
+
 /// Stamps the machine row with `CURRENT_TIMESTAMP` and a fresh status.
 /// Called by `refresh_machine` so the UI online/offline badge reflects truth.
 pub fn mark_seen(db: &Db, id: i64, status: &str) -> UecmResult<()> {
@@ -207,6 +221,26 @@ mod tests {
         let after = find_by_id(&db, id).unwrap().unwrap();
         assert_eq!(after.status, "online");
         assert!(after.last_seen_at.is_some());
+    }
+
+    #[test]
+    fn rename_updates_hostname_for_existing_machine() {
+        let db = setup();
+        let id = insert(&db, &Machine::new("RENDER-OLD", "192.168.10.30")).unwrap();
+        rename(&db, id, "RENDER-NEW").unwrap();
+        let after = find_by_id(&db, id).unwrap().unwrap();
+        assert_eq!(after.hostname, "RENDER-NEW");
+    }
+
+    #[test]
+    fn rename_returns_error_for_unknown_id() {
+        let db = setup();
+        let result = rename(&db, 9999, "X");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            UecmError::InvalidInput(msg) => assert!(msg.contains("9999")),
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
     }
 
     #[test]

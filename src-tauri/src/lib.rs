@@ -37,6 +37,7 @@ pub fn run() {
             commands::machines::list_machines,
             commands::machines::add_machine,
             commands::machines::delete_machine,
+            commands::machines::rename_machine,
             commands::machines::get_machine_detail,
             commands::discovery::scan_network,
             commands::discovery::add_discovered_machine,

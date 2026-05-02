@@ -53,6 +53,19 @@ export const useMachinesStore = defineStore("machines", () => {
     }
   }
 
+  async function renameMachine(id: number, hostname: string) {
+    error.value = null;
+    try {
+      await tauriApi.renameMachine(id, hostname);
+      await loadMachines();
+      if (selectedDetail.value?.machine.id === id) {
+        await selectMachine(id);
+      }
+    } catch (e) {
+      error.value = e as UecmError;
+    }
+  }
+
   async function selectMachine(id: number) {
     isDetailLoading.value = true;
     error.value = null;
@@ -99,6 +112,7 @@ export const useMachinesStore = defineStore("machines", () => {
     loadMachines,
     addMachine,
     deleteMachine,
+    renameMachine,
     selectMachine,
     clearSelection,
     refreshSelected,

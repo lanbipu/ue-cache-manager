@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useMachinesStore } from "@/stores/machines";
+import HostnameEditor from "@/components/machines/HostnameEditor.vue";
 
 const store = useMachinesStore();
 
@@ -26,7 +27,12 @@ function statusBadgeClass(status: string): string {
       <header class="flex items-start justify-between mb-4">
         <div>
           <div class="flex items-center gap-2">
-            <h2 class="text-xl font-semibold">{{ store.selectedDetail.machine.hostname }}</h2>
+            <h2 class="text-xl font-semibold">
+              <HostnameEditor
+                :value="store.selectedDetail.machine.hostname"
+                @save="(v) => store.renameMachine(store.selectedDetail!.machine.id!, v)"
+              />
+            </h2>
             <span
               data-status-badge
               class="text-xs px-2 py-0.5 rounded-full"

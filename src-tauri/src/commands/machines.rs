@@ -35,6 +35,11 @@ pub fn delete_machine(db: State<'_, Db>, id: i64) -> UecmResult<()> {
 }
 
 #[tauri::command]
+pub fn rename_machine(db: State<'_, Db>, id: i64, hostname: String) -> UecmResult<()> {
+    data_machines::rename(&db, id, &hostname)
+}
+
+#[tauri::command]
 pub fn get_machine_detail(db: State<'_, Db>, id: i64) -> UecmResult<MachineDetail> {
     let machine = data_machines::find_by_id(&db, id)?
         .ok_or_else(|| UecmError::InvalidInput(format!("machine {} not found", id)))?;
