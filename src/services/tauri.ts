@@ -70,6 +70,39 @@ export interface WriteIniResponse {
   backup_path: string;
 }
 
+export type ShareMode = "open" | "managed";
+
+export interface ShareConfig {
+  id: number | null;
+  host_machine_id: number;
+  share_name: string;
+  unc_path: string;
+  local_path: string;
+  mode: ShareMode;
+  credential_alias: string | null;
+}
+
+export interface ShareCreateResult {
+  share_config_id: number;
+  unc_path: string;
+  mode: ShareMode;
+  credential_alias: string | null;
+}
+
+export interface InjectionResult {
+  client_machine_id: number;
+  ok: boolean;
+  message: string;
+}
+
+export type BatchStatus = "running" | "ok" | "err";
+
+export interface BatchEvent {
+  machine_id: number;
+  status: BatchStatus;
+  message: string | null;
+}
+
 export interface EchoResult {
   received: string;
   timestamp: string;
@@ -204,6 +237,74 @@ export const tauriApi = {
   ): Promise<WriteIniResponse> {
     return invoke<WriteIniResponse>("set_ini_key_with_credential", {
       machineId,
+      filePath,
+      section,
+      name,
+      value,
+      credentialAlias,
+    });
+  },
+
+  // Shares
+  async createShare(
+    hostMachineId: number,
+    mode: ShareMode,
+    shareName: string,
+    localPath: string,
+    operatorCredentialAlias: string | null,
+    svcUsername: string | null,
+  ): Promise<ShareCreateResult> {
+    return invoke<ShareCreateResult>("create_share", {
+      hostMachineId,
+      mode,
+      shareName,
+      localPath,
+      operatorCredentialAlias,
+      svcUsername,
+    });
+  },
+  async injectShareCredentialToClients(
+    shareConfigId: number,
+    clientMachineIds: number[],
+    operatorCredentialAlias: string | null,
+  ): Promise<InjectionResult[]> {
+    return invoke<InjectionResult[]>("inject_share_credential_to_clients", {
+      shareConfigId,
+      clientMachineIds,
+      operatorCredentialAlias,
+    });
+  },
+  async listShares(): Promise<ShareConfig[]> {
+    return invoke<ShareConfig[]>("list_shares");
+  },
+  async deleteShare(shareConfigId: number, alsoRemoveRemote: boolean): Promise<void> {
+    return invoke<void>("delete_share", { shareConfigId, alsoRemoveRemote });
+  },
+
+  // Batch
+  async batchSetEnvVar(
+    machineIds: number[],
+    name: string,
+    value: string,
+    credentialAlias: string,
+  ): Promise<void> {
+    return invoke<void>("batch_set_env_var", {
+      machineIds,
+      name,
+      value,
+      credentialAlias,
+    });
+  },
+  async batchSetIniKey(
+    machineIds: number[],
+    filePath: string,
+    section: string,
+    name: string,
+    value: string,
+    credentialAlias: string,
+  ): Promise<void> {
+    return invoke<void>("batch_set_ini_key", {
+      machineIds,
       filePath,
       section,
       name,

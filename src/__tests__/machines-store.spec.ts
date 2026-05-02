@@ -7,6 +7,7 @@ const { mockApi } = vi.hoisted(() => ({
     listMachines: vi.fn(),
     addMachine: vi.fn(),
     deleteMachine: vi.fn(),
+    renameMachine: vi.fn(),
     getMachineDetail: vi.fn(),
     refreshMachine: vi.fn(),
   },
@@ -24,6 +25,7 @@ describe("machines store", () => {
     mockApi.listMachines.mockReset();
     mockApi.addMachine.mockReset();
     mockApi.deleteMachine.mockReset();
+    mockApi.renameMachine.mockReset();
     mockApi.getMachineDetail.mockReset();
     mockApi.refreshMachine.mockReset();
   });
@@ -95,6 +97,18 @@ describe("machines store", () => {
     const store = useMachinesStore();
     await store.selectMachine(5);
     expect(store.selectedDetail?.machine.hostname).toBe("X");
+  });
+
+  it("renameMachine calls api then reloads list", async () => {
+    mockApi.renameMachine.mockResolvedValue(undefined);
+    mockApi.listMachines.mockResolvedValue([
+      { id: 1, hostname: "NEW", ip: "1.1.1.1", role: "render", status: "online", last_seen_at: null },
+    ]);
+    const store = useMachinesStore();
+    await store.renameMachine(1, "NEW");
+    expect(mockApi.renameMachine).toHaveBeenCalledWith(1, "NEW");
+    expect(mockApi.listMachines).toHaveBeenCalled();
+    expect(store.machines[0].hostname).toBe("NEW");
   });
 
   it("refreshSelected re-reads detail after refresh", async () => {
