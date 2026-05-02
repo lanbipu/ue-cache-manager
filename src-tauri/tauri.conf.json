@@ -29,7 +29,8 @@
     "active": true,
     "targets": "all",
     "resources": {
-      "../ps-scripts": "ps-scripts"
+      "../ps-scripts": "ps-scripts",
+      "../vendor": "vendor"
     },
     "icon": [
       "icons/32x32.png",
