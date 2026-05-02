@@ -47,11 +47,21 @@ if (-not (Test-Path $PsExecPath)) {
 try {
     $script = {
         param($TargetHost, $SvcUsername, $SvcPassword, $PsExecPath)
-        & cmdkey.exe "/add:$TargetHost" "/user:$SvcUsername" "/pass:$SvcPassword" | Out-Null
-        & $PsExecPath -accepteula -nobanner -s -i 0 cmdkey.exe "/add:$TargetHost" "/user:$SvcUsername" "/pass:$SvcPassword" | Out-Null
-        $listOut = & $PsExecPath -accepteula -nobanner -s -i 0 cmdkey.exe /list:$TargetHost
+        # PsExec writes "Connecting to local system..." status lines to stderr,
+        # which PowerShell with -ErrorActionPreference Stop treats as terminating.
+        # Suppress stderr explicitly on every PsExec call (and on cmdkey, which
+        # also writes to stderr on success).
+        $prevPref = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            cmdkey.exe "/add:$TargetHost" "/user:$SvcUsername" "/pass:$SvcPassword" 2>&1 | Out-Null
+            & $PsExecPath -accepteula -nobanner -s -i 0 cmdkey.exe "/add:$TargetHost" "/user:$SvcUsername" "/pass:$SvcPassword" 2>&1 | Out-Null
+            $listOut = (& $PsExecPath -accepteula -nobanner -s -i 0 cmdkey.exe /list:$TargetHost 2>&1) -join "`n"
+        } finally {
+            $ErrorActionPreference = $prevPref
+        }
         if ($listOut -notmatch [regex]::Escape($SvcUsername)) {
-            throw "SYSTEM cred verify failed; cmdkey /list under SYSTEM did not show '$SvcUsername'"
+            throw "SYSTEM cred verify failed; cmdkey /list under SYSTEM did not show '$SvcUsername'. Got: $listOut"
         }
         return "user + SYSTEM creds injected for $TargetHost"
     }
