@@ -194,8 +194,7 @@ mod dpapi {
     use windows::Win32::Security::Cryptography::{
         CryptProtectData, CryptUnprotectData, CRYPT_INTEGER_BLOB,
     };
-    use windows::Win32::System::Memory::LocalFree;
-    use windows::Win32::Foundation::HLOCAL;
+    use windows::Win32::Foundation::{HLOCAL, LocalFree};
 
     pub fn protect(plaintext: &[u8]) -> UecmResult<Vec<u8>> {
         let mut input = CRYPT_INTEGER_BLOB {
