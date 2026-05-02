@@ -501,10 +501,11 @@ Rust 通过 `Command::new("powershell.exe")` 调用，传参 + 解析 stdout JSO
 - [x] **Plan 2：发现与配置** — `docs/superpowers/plans/2026-05-01-uecm-plan-2-discovery-and-config.md`
   - 网络扫描 + UE/GPU 探测 + 凭据管理 + 单机环境变量配置 + 单机 ini 编辑 + WinRM 客户端封装
   - 工期：~2 周
-  - 状态：✅ Plan 文件已写好，待执行
-- [ ] **Plan 3：共享建立**
-  - SMB 共享一键创建向导（Mode A + Mode B）+ SYSTEM 凭据注入 + 配置生效验证
+  - 状态：✅ 已执行完成（2026-05-02 lanPC E2E 7/7 通过），20 commits + 3 个 fix commits
+- [x] **Plan 3：提权 + 共享 + 集群批量** — `docs/superpowers/plans/2026-05-02-uecm-plan-3-elevation-and-shares.md`
+  - 提权与显式凭据 + SMB 共享一键创建（Mode A + Mode B）+ SYSTEM 凭据注入 + 集群批量配置推送 + Plan 2 E2E 收口（hostname rename / last_seen_at / GPU VRAM DXGI fallback）
   - 工期：~2 周
+  - 状态：✅ Plan 文件已写好，待执行
 - [ ] **Plan 4：诊断模块**
   - INI 扫描器 + 冲突诊断 + 集群健康检查矩阵（11 项）
   - 工期：~2 周
