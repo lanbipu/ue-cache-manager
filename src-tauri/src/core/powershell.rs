@@ -98,16 +98,35 @@ pub fn run_script(script_path: &Path, args: &[&str]) -> UecmResult<ScriptResult>
 }
 
 /// Run a script and parse stdout as JSON of type T.
+///
+/// Most sidecars emit `{ ok: bool, ... }` to stdout AND `exit 1` on the
+/// catch path so callers that only check exit code see an empty stderr.
+/// Try to parse stdout first regardless of exit code — if it deserializes
+/// to T, return it (caller inspects the `ok` field). Only fall back to the
+/// raw exit-code error message when stdout doesn't parse cleanly.
 pub fn run_json<T: DeserializeOwned>(script_path: &Path, args: &[&str]) -> UecmResult<T> {
     let result = run_script(script_path, args)?;
+    if !result.stdout.trim().is_empty() {
+        if let Ok(parsed) = serde_json::from_str::<T>(&result.stdout) {
+            return Ok(parsed);
+        }
+    }
     if result.exit_code != 0 {
         return Err(UecmError::PowerShell(format!(
             "script exited with code {}: {}",
-            result.exit_code, result.stderr
+            result.exit_code,
+            if result.stderr.trim().is_empty() {
+                result.stdout.trim()
+            } else {
+                result.stderr.trim()
+            }
         )));
     }
     serde_json::from_str(&result.stdout).map_err(|e| {
-        UecmError::PowerShell(format!("failed to parse JSON output: {} (stdout: {})", e, result.stdout))
+        UecmError::PowerShell(format!(
+            "failed to parse JSON output: {} (stdout: {})",
+            e, result.stdout
+        ))
     })
 }
 
