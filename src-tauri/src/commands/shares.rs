@@ -150,7 +150,20 @@ pub fn create_share(
         mode,
         credential_alias: persisted_alias.clone(),
     };
-    let share_config_id = data_shares::insert(&db, &cfg)?;
+    // PS scripts replace existing host-side shares idempotently; mirror that
+    // on the SQLite side so a Mode A -> Mode B re-creation doesn't trip the
+    // (host_machine_id, share_name) UNIQUE constraint.
+    let existing = data_shares::find_by_host(&db, host_machine_id)?
+        .into_iter()
+        .find(|s| s.share_name == share_name);
+    let share_config_id = if let Some(prior) = existing {
+        if let Some(prior_id) = prior.id {
+            data_shares::delete(&db, prior_id)?;
+        }
+        data_shares::insert(&db, &cfg)?
+    } else {
+        data_shares::insert(&db, &cfg)?
+    };
 
     Ok(CreateShareResponse {
         share_config_id,
