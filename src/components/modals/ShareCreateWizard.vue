@@ -194,13 +194,17 @@ async function onCreate() {
         >
           <option :value="null">— current process token —</option>
           <option
-            v-for="c in credentials.credentials"
+            v-for="c in credentials.credentials.filter((cred) => cred.kind === 'winrm')"
             :key="c.id ?? c.alias"
             :value="c.alias"
           >
             {{ c.alias }} ({{ c.username }})
           </option>
         </select>
+        <p class="mt-1 text-xs text-gray-500">
+          Only WinRM credentials are listed. Share-kind aliases authorize SMB
+          mounts, not remote admin operations on the host.
+        </p>
       </div>
 
       <div v-else-if="step === 4">
