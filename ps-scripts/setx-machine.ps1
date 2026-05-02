@@ -16,6 +16,12 @@ $ErrorActionPreference = 'Stop'
 function Build-CredentialOrNull {
     param([string]$User, [string]$Pass)
     if ([string]::IsNullOrEmpty($User) -or [string]::IsNullOrEmpty($Pass)) { return $null }
+    # Bare usernames default to MicrosoftAccount domain on MS-account-logged-in
+    # hosts, breaking NTLM (status 0xC000006A). Force the local SAM domain for
+    # unqualified names; existing DOMAIN\user or user@upn pass through.
+    if ($User -notmatch '[\\@]') {
+        $User = ".\$User"
+    }
     $secure = ConvertTo-SecureString -String $Pass -AsPlainText -Force
     return New-Object System.Management.Automation.PSCredential($User, $secure)
 }

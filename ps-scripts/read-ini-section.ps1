@@ -16,6 +16,9 @@ $ErrorActionPreference = 'Stop'
 function Build-CredentialOrNull {
     param([string]$User, [string]$Pass)
     if ([string]::IsNullOrEmpty($User) -or [string]::IsNullOrEmpty($Pass)) { return $null }
+    if ($User -notmatch '[\\@]') {
+        $User = ".\$User"
+    }
     $secure = ConvertTo-SecureString -String $Pass -AsPlainText -Force
     return New-Object System.Management.Automation.PSCredential($User, $secure)
 }
