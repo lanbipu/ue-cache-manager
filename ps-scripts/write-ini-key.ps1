@@ -76,7 +76,12 @@ try {
         return $backup
     } -ArgumentList $FilePath, $Section, $Name, $Value -ErrorAction Stop
 
-    @{ ok = $true; backup_path = $remoteResult; message = "" } | ConvertTo-Json -Compress
+    # Invoke-Command wraps the returned string in a PSObject with
+    # PSComputerName/RunspaceId metadata; force-cast to plain string so
+    # ConvertTo-Json emits a flat field instead of a nested object.
+    $backupPath = "$remoteResult"
+
+    @{ ok = $true; backup_path = $backupPath; message = "" } | ConvertTo-Json -Compress
 }
 catch {
     @{ ok = $false; backup_path = ""; message = $_.Exception.Message } | ConvertTo-Json -Compress
