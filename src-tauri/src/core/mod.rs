@@ -9,6 +9,7 @@ pub mod ini_diagnostics;
 pub mod ini_editor;
 pub mod ini_scanner;
 pub mod network;
+pub mod remote_path;
 pub mod powershell;
 pub mod psexec;
 pub mod shares;

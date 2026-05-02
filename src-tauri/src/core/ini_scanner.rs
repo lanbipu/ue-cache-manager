@@ -1,6 +1,6 @@
 //! INI scanner orchestration and path enumeration.
 
-use crate::core::{env_vars, ini_diagnostics, powershell};
+use crate::core::{env_vars, ini_diagnostics, powershell, remote_path};
 use crate::data::{self, Db, IniFinding, UeInstall};
 use crate::error::{UecmError, UecmResult};
 use serde::{Deserialize, Serialize};
@@ -104,15 +104,22 @@ pub fn run_scan(
         if let Ok(value) = env_vars::get_with_credential(&machine.ip, ini_diagnostics::SHARED_DDC_ENV, &credential.username, &password) {
             env_state.insert(ini_diagnostics::SHARED_DDC_ENV.to_string(), value);
         }
-        let ctx = ini_diagnostics::DiagnosticContext {
-            env_vars: env_state,
-            path_reachability: HashMap::new(),
-        };
         for target in targets {
             match read_file_with_credential(&machine.ip, &target.file_path, &credential.username, &password) {
                 Ok(doc) => {
                     summary.total_files += 1;
                     let diagnostics_doc = to_diagnostics_doc(&target, doc);
+                    let path_reachability = probe_reachable_paths(
+                        &machine.ip,
+                        &diagnostics_doc,
+                        &env_state,
+                        &credential.username,
+                        &password,
+                    );
+                    let ctx = ini_diagnostics::DiagnosticContext {
+                        env_vars: env_state.clone(),
+                        path_reachability,
+                    };
                     for finding in ini_diagnostics::diagnose(&diagnostics_doc, &ctx) {
                         bump_summary(&mut summary, finding.severity);
                         data::ini_findings::insert(db, &to_data_finding(scan_run_id, *machine_id, finding))?;
@@ -224,6 +231,53 @@ fn to_data_finding(scan_run_id: i64, machine_id: i64, finding: ini_diagnostics::
     }
 }
 
+fn probe_reachable_paths(
+    host: &str,
+    doc: &ini_diagnostics::IniDocument,
+    env_state: &HashMap<String, Option<String>>,
+    username: &str,
+    password: &str,
+) -> HashMap<String, bool> {
+    let mut out = HashMap::new();
+    for path in collect_reachable_candidates(doc, env_state) {
+        let reachable = remote_path::exists_with_credential(host, &path, username, password).unwrap_or(false);
+        out.insert(path, reachable);
+    }
+    out
+}
+
+fn collect_reachable_candidates(
+    doc: &ini_diagnostics::IniDocument,
+    env_state: &HashMap<String, Option<String>>,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for entry in &doc.entries {
+        if !entry.section.eq_ignore_ascii_case(ini_diagnostics::DDC_SECTION) {
+            continue;
+        }
+        let key = ini_diagnostics::normalized_key(&entry.key);
+        if key == "Path" && looks_like_path(&entry.value) {
+            out.push(entry.value.clone());
+        } else if key == "EnvPathOverride" {
+            if let Some(Some(value)) = env_state.get(entry.value.trim()) {
+                if looks_like_path(value) {
+                    out.push(value.clone());
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn looks_like_path(value: &str) -> bool {
+    let value = value.trim();
+    value.starts_with("\\\\")
+        || value.starts_with("//")
+        || (value.len() >= 3 && value.as_bytes()[1] == b':' && value.as_bytes()[0].is_ascii_alphabetic())
+}
+
 fn bump_summary(summary: &mut IniScanSummary, severity: ini_diagnostics::Severity) {
     match severity {
         ini_diagnostics::Severity::Critical => summary.critical += 1,
@@ -261,5 +315,21 @@ mod tests {
         assert!(targets.iter().any(|t| t.file_path.ends_with("DefaultEngine.ini")));
         assert!(targets.iter().any(|t| t.file_path.ends_with("BaseEngine.ini")));
         assert!(targets.iter().any(|t| t.file_path.ends_with("EditorPerProjectUserSettings.ini")));
+    }
+
+    #[test]
+    fn collect_reachable_candidates_includes_ddc_path_and_env_value() {
+        let doc = ini_diagnostics::parse_ini(
+            "DefaultEngine.ini",
+            "project",
+            "[/Script/UnrealEd.DerivedDataCacheSettings]\nPath=\\\\HOST\\Bad\nEnvPathOverride=UE-SharedDataCachePath",
+        );
+        let mut env = HashMap::new();
+        env.insert(
+            ini_diagnostics::SHARED_DDC_ENV.into(),
+            Some("\\\\HOST\\Good".into()),
+        );
+        let paths = collect_reachable_candidates(&doc, &env);
+        assert_eq!(paths, vec!["\\\\HOST\\Bad", "\\\\HOST\\Good"]);
     }
 }

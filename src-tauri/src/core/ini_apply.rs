@@ -31,7 +31,7 @@ pub fn apply(db: &Db, finding_id: i64, credential_alias: &str) -> UecmResult<App
             let value = finding.recommended_value.as_deref().ok_or_else(|| {
                 UecmError::InvalidInput("set finding has no recommended value".into())
             })?;
-            Some(ini_editor::set_key_with_credential(
+            let backup = ini_editor::set_key_with_credential(
                 &machine.ip,
                 &finding.file_path,
                 &section,
@@ -39,20 +39,39 @@ pub fn apply(db: &Db, finding_id: i64, credential_alias: &str) -> UecmResult<App
                 value,
                 &credential.username,
                 &password,
-            )?)
+            )?;
+            let keys = ini_editor::read_section_with_credential(
+                &machine.ip,
+                &finding.file_path,
+                &section,
+                &credential.username,
+                &password,
+            )?;
+            verify_key_value(&keys, key, value)?;
+            Some(backup)
         }
         "remove" => {
             let key = finding.key_name.as_deref().ok_or_else(|| {
                 UecmError::InvalidInput("remove finding has no key name".into())
             })?;
-            Some(ini_editor::remove_key_with_credential(
+            let normalized = ini_diagnostics::normalized_key(key);
+            let backup = ini_editor::remove_key_with_credential(
                 &machine.ip,
                 &finding.file_path,
                 &section,
-                ini_diagnostics::normalized_key(key),
+                normalized,
                 &credential.username,
                 &password,
-            )?)
+            )?;
+            let keys = ini_editor::read_section_with_credential(
+                &machine.ip,
+                &finding.file_path,
+                &section,
+                &credential.username,
+                &password,
+            )?;
+            verify_key_absent(&keys, normalized)?;
+            Some(backup)
         }
         "set_env_override_remove_path" => {
             let set_backup = ini_editor::set_key_with_credential(
@@ -72,6 +91,19 @@ pub fn apply(db: &Db, finding_id: i64, credential_alias: &str) -> UecmResult<App
                 &credential.username,
                 &password,
             )?;
+            let keys = ini_editor::read_section_with_credential(
+                &machine.ip,
+                &finding.file_path,
+                &section,
+                &credential.username,
+                &password,
+            )?;
+            verify_key_value(
+                &keys,
+                "EnvPathOverride",
+                finding.recommended_value.as_deref().unwrap_or(ini_diagnostics::SHARED_DDC_ENV),
+            )?;
+            verify_key_absent(&keys, "Path")?;
             Some(set_backup)
         }
         other => {
@@ -87,4 +119,59 @@ pub fn apply(db: &Db, finding_id: i64, credential_alias: &str) -> UecmResult<App
         backup_path,
         message: "applied".into(),
     })
+}
+
+fn verify_key_value(keys: &[ini_editor::IniKey], name: &str, expected: &str) -> UecmResult<()> {
+    let Some(found) = keys
+        .iter()
+        .find(|key| ini_diagnostics::normalized_key(&key.name).eq_ignore_ascii_case(name))
+    else {
+        return Err(UecmError::OperationFailed(format!(
+            "verification failed: key '{}' was not found after apply",
+            name
+        )));
+    };
+    if found.value.trim() != expected {
+        return Err(UecmError::OperationFailed(format!(
+            "verification failed: key '{}' value is '{}', expected '{}'",
+            name, found.value, expected
+        )));
+    }
+    Ok(())
+}
+
+fn verify_key_absent(keys: &[ini_editor::IniKey], name: &str) -> UecmResult<()> {
+    if keys
+        .iter()
+        .any(|key| ini_diagnostics::normalized_key(&key.name).eq_ignore_ascii_case(name))
+    {
+        return Err(UecmError::OperationFailed(format!(
+            "verification failed: key '{}' still exists after apply",
+            name
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verify_key_value_accepts_matching_key() {
+        let keys = vec![ini_editor::IniKey {
+            name: "EnvPathOverride".into(),
+            value: ini_diagnostics::SHARED_DDC_ENV.into(),
+        }];
+        verify_key_value(&keys, "EnvPathOverride", ini_diagnostics::SHARED_DDC_ENV).unwrap();
+    }
+
+    #[test]
+    fn verify_key_absent_rejects_prefixed_key() {
+        let keys = vec![ini_editor::IniKey {
+            name: "+Path".into(),
+            value: "D:\\Old".into(),
+        }];
+        assert!(verify_key_absent(&keys, "Path").is_err());
+    }
 }

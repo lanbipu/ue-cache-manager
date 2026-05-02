@@ -4,7 +4,9 @@ import UecmCodeBlock from "@/components/primitives/UecmCodeBlock.vue";
 import UecmStatusBadge from "@/components/primitives/UecmStatusBadge.vue";
 import Button from "@/components/ui/Button.vue";
 
-defineProps<{ finding: IniFinding | null; busy?: boolean }>();
+withDefaults(defineProps<{ finding: IniFinding | null; busy?: boolean; canApply?: boolean }>(), {
+  canApply: true,
+});
 const emit = defineEmits<{ apply: [finding: IniFinding]; skip: [finding: IniFinding] }>();
 </script>
 
@@ -35,7 +37,7 @@ const emit = defineEmits<{ apply: [finding: IniFinding]; skip: [finding: IniFind
       </section>
       <UecmCodeBlock :before="finding.snippet_before" :after="finding.snippet_after" />
       <div class="flex gap-2">
-        <Button data-apply-finding-btn :disabled="busy || finding.recommended_action === 'manual' || finding.fixed_at != null" @click="emit('apply', finding)">
+        <Button data-apply-finding-btn :disabled="!canApply || busy || finding.recommended_action === 'manual' || finding.fixed_at != null" @click="emit('apply', finding)">
           {{ busy ? "Applying" : "Apply suggestion" }}
         </Button>
         <Button variant="outline" @click="emit('skip', finding)">Skip</Button>

@@ -2,6 +2,7 @@
 
 use crate::data::{self, Db, HealthCheckRun};
 use crate::error::{UecmError, UecmResult};
+use crate::core::{ini_diagnostics, powershell};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
@@ -48,6 +49,24 @@ pub struct HealthSummary {
     pub total: i64,
 }
 
+#[derive(Debug, Deserialize)]
+struct ReadIniFileResult {
+    ok: bool,
+    sections: Vec<ReadIniSection>,
+    message: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReadIniSection {
+    keys: Vec<ReadIniKey>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReadIniKey {
+    name: String,
+    value: String,
+}
+
 pub fn run_health_check(
     db: &Db,
     machine_ids: &[i64],
@@ -69,7 +88,10 @@ pub fn run_health_check(
         )
         .unwrap_or_else(|err| offline_results(err.to_string()));
         results.insert("ini_consistency".into(), ini_consistency(db, *machine_id)?);
-        results.insert("pso_precaching".into(), pso_precaching(project_paths));
+        results.insert(
+            "pso_precaching".into(),
+            pso_precaching(&machine.ip, &credential.username, &password, project_paths),
+        );
         data::health_check_runs::insert(
             db,
             &HealthCheckRun {
@@ -179,7 +201,7 @@ fn ini_consistency(db: &Db, machine_id: i64) -> UecmResult<CheckOutcome> {
     })
 }
 
-fn pso_precaching(project_paths: &[String]) -> CheckOutcome {
+fn pso_precaching(host: &str, username: &str, password: &str, project_paths: &[String]) -> CheckOutcome {
     if project_paths.is_empty() {
         return CheckOutcome {
             status: CheckStatus::Na,
@@ -188,12 +210,92 @@ fn pso_precaching(project_paths: &[String]) -> CheckOutcome {
             remediation: "Supply project paths when running Health Check.".into(),
         };
     }
-    CheckOutcome {
-        status: CheckStatus::Warning,
-        message: "Project path supplied; verify r.PSOPrecaching and r.PSOPrecaching.Validation.".into(),
-        sample: project_paths.join("; "),
-        remediation: "Set PSO precaching CVars in project ConsoleVariables.ini before PSO collection.".into(),
+
+    let file_path = format!("{}\\Config\\ConsoleVariables.ini", trim_slashes(&project_paths[0]));
+    match read_ini_file(host, &file_path, username, password) {
+        Ok(read) => {
+            let values = cvar_values(read);
+            pso_precaching_from_values(&file_path, &values)
+        }
+        Err(err) => CheckOutcome {
+            status: CheckStatus::Warning,
+            message: format!("Could not read PSO CVar file: {}", err),
+            sample: file_path,
+            remediation: "Create Config\\ConsoleVariables.ini and set PSO precaching CVars.".into(),
+        },
     }
+}
+
+fn pso_precaching_from_values(file_path: &str, values: &HashMap<String, String>) -> CheckOutcome {
+    let precaching = values.get("r.PSOPrecaching").map(|v| truthy(v)).unwrap_or(false);
+    let validation = values
+        .get("r.PSOPrecaching.Validation")
+        .map(|v| !disabled(v))
+        .unwrap_or(false);
+    if precaching && validation {
+        CheckOutcome {
+            status: CheckStatus::Healthy,
+            message: "PSO precaching CVars are enabled.".into(),
+            sample: file_path.into(),
+            remediation: "No action required.".into(),
+        }
+    } else {
+        CheckOutcome {
+            status: CheckStatus::Warning,
+            message: format!(
+                "r.PSOPrecaching={}, r.PSOPrecaching.Validation={}",
+                values.get("r.PSOPrecaching").map(String::as_str).unwrap_or("<missing>"),
+                values
+                    .get("r.PSOPrecaching.Validation")
+                    .map(String::as_str)
+                    .unwrap_or("<missing>")
+            ),
+            sample: file_path.into(),
+            remediation: "Set r.PSOPrecaching=1 and r.PSOPrecaching.Validation=1 in Config\\ConsoleVariables.ini.".into(),
+        }
+    }
+}
+
+fn read_ini_file(host: &str, file_path: &str, username: &str, password: &str) -> UecmResult<ReadIniFileResult> {
+    let result: ReadIniFileResult = powershell::run_json(
+        &powershell::script_path("read-ini-file.ps1"),
+        &[
+            "-HostName",
+            host,
+            "-FilePath",
+            file_path,
+            "-Username",
+            username,
+            "-Password",
+            password,
+        ],
+    )?;
+    if !result.ok {
+        return Err(UecmError::OperationFailed(result.message));
+    }
+    Ok(result)
+}
+
+fn cvar_values(read: ReadIniFileResult) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    for section in read.sections {
+        for key in section.keys {
+            out.insert(ini_diagnostics::normalized_key(&key.name).to_string(), key.value);
+        }
+    }
+    out
+}
+
+fn truthy(value: &str) -> bool {
+    matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+}
+
+fn disabled(value: &str) -> bool {
+    matches!(value.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off")
+}
+
+fn trim_slashes(value: &str) -> &str {
+    value.trim().trim_end_matches(['\\', '/'])
 }
 
 fn offline_results(message: String) -> BTreeMap<String, CheckOutcome> {
@@ -240,6 +342,32 @@ mod tests {
         let result = gpu_consistency(&db, &[a, b, c]).unwrap();
         assert_eq!(result[&a].status, CheckStatus::Healthy);
         assert_eq!(result[&c].status, CheckStatus::Warning);
+    }
+
+    #[test]
+    fn pso_precaching_from_values_reports_healthy_when_required_cvars_enabled() {
+        let values = HashMap::from([
+            ("r.PSOPrecaching".into(), "1".into()),
+            ("r.PSOPrecaching.Validation".into(), "1".into()),
+        ]);
+        let outcome = pso_precaching_from_values("E:\\Proj\\Config\\ConsoleVariables.ini", &values);
+        assert_eq!(outcome.status, CheckStatus::Healthy);
+    }
+
+    #[test]
+    fn pso_precaching_from_values_warns_when_validation_missing() {
+        let values = HashMap::from([("r.PSOPrecaching".into(), "1".into())]);
+        let outcome = pso_precaching_from_values("E:\\Proj\\Config\\ConsoleVariables.ini", &values);
+        assert_eq!(outcome.status, CheckStatus::Warning);
+        assert!(outcome.message.contains("<missing>"));
+    }
+
+    #[test]
+    fn offline_results_returns_only_declared_health_checks() {
+        let results = offline_results("offline".into());
+        assert_eq!(results.len(), HEALTH_CHECK_IDS.len());
+        assert!(!results.contains_key("winrm"));
+        assert!(results.contains_key("system_write"));
     }
 
     fn gpu(machine_id: i64, model: &str, driver: &str) -> GpuInfo {

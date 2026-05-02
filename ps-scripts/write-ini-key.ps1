@@ -56,7 +56,7 @@ try {
                 $newLines.Add($line)
             }
             elseif ($inSection -and $trim.StartsWith('[') -and $trim.EndsWith(']')) {
-                if (-not $found) {
+                if (-not $found -and -not $RemoveKey) {
                     # Insert key at the end of this section
                     $newLines.Add("$Name=$Value")
                     $found = $true

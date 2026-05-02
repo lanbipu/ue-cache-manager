@@ -17,6 +17,7 @@ const machines = useMachinesStore();
 const credentials = useCredentialsStore();
 const showWizard = ref(false);
 const selectedFinding = ref<IniFinding | null>(null);
+const applyCredentialAlias = ref("");
 
 const hostnameById = computed<Record<number, string>>(() => {
   const out: Record<number, string> = {};
@@ -34,9 +35,8 @@ onMounted(async () => {
 });
 
 async function apply(finding: IniFinding) {
-  const alias = credentials.credentials[0]?.alias;
-  if (!alias || finding.id == null) return;
-  await diagnostics.applyFinding(finding.id, alias);
+  if (!applyCredentialAlias.value || finding.id == null) return;
+  await diagnostics.applyFinding(finding.id, applyCredentialAlias.value);
 }
 
 async function skip(finding: IniFinding) {
@@ -60,6 +60,13 @@ async function skip(finding: IniFinding) {
         <UecmKpiTile label="Healthy" :value="diagnostics.summary.healthy" tone="healthy" />
         <UecmKpiTile label="Files" :value="diagnostics.summary.total_files" tone="info" />
       </section>
+      <label v-if="diagnostics.findings.length > 0" class="block max-w-sm text-sm">
+        <span class="mb-1 block text-muted-foreground">Apply credential</span>
+        <select v-model="applyCredentialAlias" data-apply-credential class="h-9 w-full rounded-md border bg-background px-3 text-sm">
+          <option value="" disabled>Select credential for apply</option>
+          <option v-for="cred in credentials.credentials" :key="cred.alias" :value="cred.alias">{{ cred.alias }}</option>
+        </select>
+      </label>
     </div>
 
     <section v-if="diagnostics.findings.length === 0" class="grid flex-1 place-items-center text-center">
@@ -72,7 +79,7 @@ async function skip(finding: IniFinding) {
 
     <section v-else class="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[2fr_3fr]">
       <FindingHierarchy class="border-r" :findings="diagnostics.findings" :selected-id="selectedFinding?.id ?? null" :hostname-by-id="hostnameById" @select="selectedFinding = $event" />
-      <FindingDetail :finding="selectedFinding" :busy="diagnostics.isApplying" @apply="apply" @skip="skip" />
+      <FindingDetail :finding="selectedFinding" :busy="diagnostics.isApplying" :can-apply="applyCredentialAlias !== ''" @apply="apply" @skip="skip" />
     </section>
 
     <IniScanWizard :open="showWizard" @close="showWizard = false" />

@@ -30,8 +30,6 @@ try {
 
         $results = [ordered]@{}
 
-        $results.winrm = Outcome "healthy" "WinRM session established." $env:COMPUTERNAME "Enable WinRM and firewall rule if this fails."
-
         $smb = Get-Service -Name LanmanServer -ErrorAction SilentlyContinue
         if ($smb -and $smb.Status -eq 'Running') {
             $results.smb = Outcome "healthy" "LanmanServer service is running." "$($smb.Status)" "Start the Server service."
