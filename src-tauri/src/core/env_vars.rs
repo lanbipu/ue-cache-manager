@@ -52,6 +52,60 @@ pub fn get(host: &str, name: &str) -> UecmResult<Option<String>> {
     Ok(result.value)
 }
 
+/// Same as `set`, but authenticates the WinRM session with explicit
+/// `username` + `password` instead of inheriting the caller's identity.
+pub fn set_with_credential(
+    host: &str,
+    name: &str,
+    value: &str,
+    username: &str,
+    password: &str,
+) -> UecmResult<()> {
+    let result: SetResult = powershell::run_json(
+        &powershell::script_path("setx-machine.ps1"),
+        &[
+            "-HostName", host,
+            "-Name", name,
+            "-Value", value,
+            "-Username", username,
+            "-Password", password,
+        ],
+    )?;
+    if !result.ok {
+        return Err(UecmError::OperationFailed(format!(
+            "set env var failed: {}",
+            result.message
+        )));
+    }
+    Ok(())
+}
+
+/// Same as `get`, but authenticates the WinRM session with explicit
+/// `username` + `password` instead of inheriting the caller's identity.
+pub fn get_with_credential(
+    host: &str,
+    name: &str,
+    username: &str,
+    password: &str,
+) -> UecmResult<Option<String>> {
+    let result: GetResult = powershell::run_json(
+        &powershell::script_path("getx-machine.ps1"),
+        &[
+            "-HostName", host,
+            "-Name", name,
+            "-Username", username,
+            "-Password", password,
+        ],
+    )?;
+    if !result.ok {
+        return Err(UecmError::OperationFailed(format!(
+            "get env var failed: {}",
+            result.message
+        )));
+    }
+    Ok(result.value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -67,6 +121,26 @@ mod tests {
     #[test]
     fn get_returns_powershell_error_on_non_windows() {
         let result = get("RENDER-01", "UE-SharedDataCachePath");
+        assert!(matches!(result, Err(UecmError::PowerShell(_))));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn set_with_credential_returns_powershell_error_on_non_windows() {
+        let result = set_with_credential(
+            "RENDER-01",
+            "UE-SharedDataCachePath",
+            "\\\\HOST\\DDC",
+            "admin",
+            "p@ss",
+        );
+        assert!(matches!(result, Err(UecmError::PowerShell(_))));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn get_with_credential_returns_powershell_error_on_non_windows() {
+        let result = get_with_credential("RENDER-01", "UE-SharedDataCachePath", "admin", "p@ss");
         assert!(matches!(result, Err(UecmError::PowerShell(_))));
     }
 }

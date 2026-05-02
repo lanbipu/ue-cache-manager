@@ -130,6 +130,30 @@ export const tauriApi = {
   async getMachineEnvVar(machineId: number, name: string): Promise<string | null> {
     return invoke<string | null>("get_machine_env_var", { machineId, name });
   },
+  async setMachineEnvVarWithCredential(
+    machineId: number,
+    name: string,
+    value: string,
+    credentialAlias: string,
+  ): Promise<void> {
+    return invoke<void>("set_machine_env_var_with_credential", {
+      machineId,
+      name,
+      value,
+      credentialAlias,
+    });
+  },
+  async getMachineEnvVarWithCredential(
+    machineId: number,
+    name: string,
+    credentialAlias: string,
+  ): Promise<string | null> {
+    return invoke<string | null>("get_machine_env_var_with_credential", {
+      machineId,
+      name,
+      credentialAlias,
+    });
+  },
 
   // INI editor
   async readIniSection(
@@ -152,6 +176,36 @@ export const tauriApi = {
       section,
       name,
       value,
+    });
+  },
+  async readIniSectionWithCredential(
+    machineId: number,
+    filePath: string,
+    section: string,
+    credentialAlias: string,
+  ): Promise<IniKey[]> {
+    return invoke<IniKey[]>("read_ini_section_with_credential", {
+      machineId,
+      filePath,
+      section,
+      credentialAlias,
+    });
+  },
+  async setIniKeyWithCredential(
+    machineId: number,
+    filePath: string,
+    section: string,
+    name: string,
+    value: string,
+    credentialAlias: string,
+  ): Promise<WriteIniResponse> {
+    return invoke<WriteIniResponse>("set_ini_key_with_credential", {
+      machineId,
+      filePath,
+      section,
+      name,
+      value,
+      credentialAlias,
     });
   },
 
