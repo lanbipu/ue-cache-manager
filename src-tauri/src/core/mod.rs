@@ -4,4 +4,6 @@ pub mod env_vars;
 pub mod ini_editor;
 pub mod network;
 pub mod powershell;
+pub mod psexec;
+pub mod shares;
 pub mod winrm;

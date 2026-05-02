@@ -39,6 +39,26 @@ pub fn read_script(name: &str) -> UecmResult<String> {
     Ok(fs::read_to_string(script_path(name))?)
 }
 
+/// Resolve a vendored binary's on-disk path (e.g. `PsExec64.exe`). Mirrors the
+/// `script_path` lookup chain but searches `vendor/` instead of `ps-scripts/`.
+pub fn vendor_path(name: &str) -> PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let bundled = exe_dir.join("vendor").join(name);
+            if bundled.exists() {
+                return bundled;
+            }
+            for ancestor in exe_dir.ancestors().take(8) {
+                let candidate = ancestor.join("vendor").join(name);
+                if candidate.exists() {
+                    return candidate;
+                }
+            }
+        }
+    }
+    Path::new("..").join("vendor").join(name)
+}
+
 #[derive(Debug)]
 pub struct ScriptResult {
     pub stdout: String,
