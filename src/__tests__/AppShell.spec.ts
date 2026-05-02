@@ -10,7 +10,7 @@ describe("AppShell", () => {
     setActivePinia(createPinia());
   });
 
-  it("renders the activity bar with 8 nav items", async () => {
+  it("renders the sidebar with 7 nav items", async () => {
     const router = createRouter({
       history: createMemoryHistory(),
       routes,
@@ -23,7 +23,7 @@ describe("AppShell", () => {
     });
 
     const navItems = wrapper.findAll("[data-nav-item]");
-    expect(navItems).toHaveLength(8);
+    expect(navItems).toHaveLength(7);
   });
 
   it("renders the current route's component in the slot", async () => {

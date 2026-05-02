@@ -1,0 +1,33 @@
+# AGENTS.md
+
+<!-- DOCSMITH:KNOWLEDGE:BEGIN -->
+## Knowledge Base (Managed by Docsmith)
+
+- Knowledge entrypoint: `.Codex/knowledge/_INDEX.md`
+- Config file: `.Codex/knowledge.json`
+
+### Current Sources
+- `ue50-docs` (292 files) → `.Codex/knowledge/ue50-docs/`
+- `ue51-docs` (284 files) → `.Codex/knowledge/ue51-docs/`
+- `ue52-docs` (333 files) → `.Codex/knowledge/ue52-docs/`
+- `ue53-docs` (29 files) → `.Codex/knowledge/ue53-docs/`
+- `ue54-docs` (321 files) → `.Codex/knowledge/ue54-docs/`
+- `ue55-docs` (324 files) → `.Codex/knowledge/ue55-docs/`
+- `ue56-docs` (389 files) → `.Codex/knowledge/ue56-docs/`
+- `ue57-docs` (411 files) → `.Codex/knowledge/ue57-docs/`
+
+### Query Protocol
+1. Read `.Codex/knowledge/_INDEX.md` to route to the relevant source.
+2. Open `<source>/_INDEX.md` and shortlist target documents by `topic/summary/keywords`.
+3. Read target file TL;DR first, then read full content when needed.
+4. Before answering, prioritize evidence from `KnowledgeBase docs`; use external knowledge only when KB coverage is insufficient.
+5. In every answer, include:
+   - `Knowledge Sources`: exact KB document paths used.
+   - `External Inputs`: non-KB knowledge used and why.
+   - If no KB match: `No relevant KnowledgeBase docs found`.
+
+### Refresh Command
+```bash
+.venv/bin/python -m cli --project-links --refresh-index .
+```
+<!-- DOCSMITH:KNOWLEDGE:END -->

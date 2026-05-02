@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
 
 // vi.hoisted ensures mockApi is initialized before vi.mock factory runs
 const { mockApi } = vi.hoisted(() => ({
   mockApi: {
     testPowerShellBridge: vi.fn(),
+    listMachines: vi.fn(),
   },
 }));
 
@@ -16,7 +18,23 @@ import Dashboard from "@/views/Dashboard.vue";
 
 describe("Dashboard view", () => {
   beforeEach(() => {
+    setActivePinia(createPinia());
     mockApi.testPowerShellBridge.mockReset();
+    mockApi.listMachines.mockReset();
+    mockApi.listMachines.mockResolvedValue([]);
+  });
+
+  it("loads machine stats from the machines store instead of mock data", async () => {
+    mockApi.listMachines.mockResolvedValue([
+      { id: 1, hostname: "ONLY-REAL", ip: "10.0.0.1", role: "render", status: "online", last_seen_at: null },
+      { id: 2, hostname: "OFFLINE-REAL", ip: "10.0.0.2", role: "render", status: "offline", last_seen_at: null },
+    ]);
+    const wrapper = mount(Dashboard);
+    await flushPromises();
+
+    expect(mockApi.listMachines).toHaveBeenCalled();
+    expect(wrapper.text()).toContain("1 online");
+    expect(wrapper.text()).not.toContain("6 online");
   });
 
   it("clicking the bridge test button calls the backend and shows result", async () => {

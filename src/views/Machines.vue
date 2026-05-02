@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useMachinesStore } from "@/stores/machines";
+import Button from "@/components/ui/Button.vue";
+import UecmIcon from "@/components/primitives/UecmIcon.vue";
+import UecmPageHeader from "@/components/primitives/UecmPageHeader.vue";
 import MachineDetail from "@/components/machines/MachineDetail.vue";
 import DiscoveryWizard from "@/components/modals/DiscoveryWizard.vue";
 import CredentialDialog from "@/components/modals/CredentialDialog.vue";
@@ -35,7 +38,7 @@ async function onSelect(id: number | null) {
 async function onDelete(id: number | null) {
   if (id === null) return;
   await store.deleteMachine(id);
-  if (id != null) checkedIds.value.delete(id);
+  checkedIds.value.delete(id);
 }
 
 function toggleCheck(id: number | null) {
@@ -47,148 +50,91 @@ function toggleCheck(id: number | null) {
 }
 
 function toggleAll() {
-  const allIds = store.machines
-    .map((m) => m.id)
-    .filter((id): id is number => id != null);
-  if (checkedIds.value.size === allIds.length) {
-    checkedIds.value = new Set();
-  } else {
-    checkedIds.value = new Set(allIds);
-  }
+  const allIds = store.machines.map((machine) => machine.id).filter((id): id is number => id != null);
+  checkedIds.value = checkedIds.value.size === allIds.length ? new Set() : new Set(allIds);
 }
 
 const allChecked = computed(() => {
-  const total = store.machines.filter((m) => m.id != null).length;
+  const total = store.machines.filter((machine) => machine.id != null).length;
   return total > 0 && checkedIds.value.size === total;
 });
 </script>
 
 <template>
-  <div class="h-full flex">
-    <aside class="w-80 border-r overflow-auto p-4">
-      <header class="flex items-center justify-between mb-3 gap-2">
-        <h1 class="text-lg font-semibold">Machines</h1>
-        <div class="flex gap-1">
-          <button
-            data-create-share-btn
-            class="px-2 py-1 text-xs border rounded hover:bg-gray-100"
-            @click="showShareWizard = true"
-          >
-            Share
-          </button>
-          <button
-            data-discover-btn
-            class="px-3 py-1 text-sm bg-gray-200 rounded hover:bg-gray-300"
-            @click="showDiscovery = true"
-          >
-            Scan
-          </button>
+  <div class="grid h-full grid-rows-[auto_1fr] gap-4 p-6">
+    <UecmPageHeader title="Machines" eyebrow="Inventory" description="Discover, inspect, and batch-configure Windows hosts in the VP cluster.">
+      <template #actions>
+        <Button variant="outline" data-create-share-btn @click="showShareWizard = true">
+          <UecmIcon name="folder-open" />
+          Share
+        </Button>
+        <Button data-discover-btn @click="showDiscovery = true">
+          <UecmIcon name="radar" />
+          Scan
+        </Button>
+      </template>
+    </UecmPageHeader>
+
+    <div class="grid min-h-0 gap-4 lg:grid-cols-[22rem_1fr]">
+      <aside class="min-h-0 overflow-hidden rounded-lg border bg-card">
+        <div class="flex items-center justify-between gap-2 border-b p-3">
+          <label class="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">
+            <input data-select-all type="checkbox" :checked="allChecked" @change="toggleAll" />
+            {{ checkedIds.size }} selected
+          </label>
+          <div class="flex gap-1">
+            <Button data-batch-env-btn variant="outline" size="sm" :disabled="checkedIds.size === 0" @click="showBatchEnv = true">Batch env</Button>
+            <Button data-batch-ini-btn variant="outline" size="sm" :disabled="checkedIds.size === 0" @click="showBatchIni = true">Batch INI</Button>
+          </div>
         </div>
-      </header>
 
-      <div
-        v-if="store.machines.length > 0"
-        class="flex items-center justify-between mb-2 text-xs text-gray-600 border-b pb-2"
-      >
-        <label class="flex items-center gap-1 cursor-pointer">
-          <input
-            data-select-all
-            type="checkbox"
-            :checked="allChecked"
-            @change="toggleAll"
-          />
-          {{ checkedIds.size }} selected
-        </label>
-        <div class="flex gap-1">
-          <button
-            data-batch-env-btn
-            :disabled="checkedIds.size === 0"
-            class="px-2 py-0.5 text-xs border rounded hover:bg-gray-100 disabled:opacity-50"
-            @click="showBatchEnv = true"
-          >
-            Batch env
-          </button>
-          <button
-            data-batch-ini-btn
-            :disabled="checkedIds.size === 0"
-            class="px-2 py-0.5 text-xs border rounded hover:bg-gray-100 disabled:opacity-50"
-            @click="showBatchIni = true"
-          >
-            Batch INI
-          </button>
+        <div class="h-[calc(100%-3.5rem)] overflow-auto p-2">
+          <p v-if="store.isLoading" class="p-3 text-sm text-muted-foreground">Loading...</p>
+          <p v-else-if="store.machines.length === 0" class="p-3 text-sm text-muted-foreground">
+            No machines yet. Click Scan to discover.
+          </p>
+          <ul v-else class="space-y-1">
+            <li
+              v-for="machine in store.machines"
+              :key="machine.id ?? machine.ip"
+              data-machine-row
+              class="flex cursor-pointer items-center gap-3 rounded-md px-3 py-2 hover:bg-accent"
+              :class="store.selectedDetail?.machine.id === machine.id ? 'bg-accent' : ''"
+              @click="onSelect(machine.id)"
+            >
+              <input
+                data-machine-check
+                type="checkbox"
+                :checked="machine.id != null && checkedIds.has(machine.id)"
+                @click.stop
+                @change="toggleCheck(machine.id)"
+              />
+              <div class="min-w-0 flex-1">
+                <div class="truncate text-sm font-bold">{{ machine.hostname }}</div>
+                <div class="font-mono text-xs text-muted-foreground">{{ machine.ip }}</div>
+              </div>
+              <button class="text-xs text-destructive hover:underline" @click.stop="onDelete(machine.id)">Delete</button>
+            </li>
+          </ul>
+          <p v-if="store.error" class="mt-3 px-3 text-xs text-destructive">{{ store.error.message }}</p>
         </div>
-      </div>
+      </aside>
 
-      <p v-if="store.isLoading" class="text-sm text-gray-500">Loading...</p>
-      <p v-else-if="store.machines.length === 0" class="text-sm text-gray-500">
-        No machines yet. Click Scan to discover.
-      </p>
-      <ul v-else class="space-y-1">
-        <li
-          v-for="m in store.machines"
-          :key="m.id ?? m.ip"
-          data-machine-row
-          class="px-2 py-2 rounded cursor-pointer hover:bg-gray-100 flex items-center justify-between gap-2"
-          :class="store.selectedDetail?.machine.id === m.id ? 'bg-gray-200 font-medium' : ''"
-          @click="onSelect(m.id)"
-        >
-          <input
-            data-machine-check
-            type="checkbox"
-            :checked="m.id != null && checkedIds.has(m.id)"
-            class="flex-shrink-0"
-            @click.stop
-            @change="toggleCheck(m.id)"
-          />
-          <span class="truncate flex-1">
-            {{ m.hostname }}<br />
-            <span class="text-xs text-gray-500 font-normal">{{ m.ip }}</span>
-          </span>
-          <button
-            class="text-xs text-red-600 hover:underline ml-2"
-            @click.stop="onDelete(m.id)"
-          >
-            ×
-          </button>
-        </li>
-      </ul>
-
-      <p v-if="store.error" class="mt-3 text-xs text-red-600">
-        {{ store.error.message }}
-      </p>
-    </aside>
-
-    <main class="flex-1 overflow-auto">
-      <MachineDetail
-        @open-credential-modal="showCredentials = true"
-        @open-env-var-modal="showEnvVar = true"
-        @open-ini-edit-modal="showIniEdit = true"
-      />
-    </main>
+      <main class="min-h-0 overflow-auto rounded-lg border bg-card">
+        <MachineDetail
+          @open-credential-modal="showCredentials = true"
+          @open-env-var-modal="showEnvVar = true"
+          @open-ini-edit-modal="showIniEdit = true"
+        />
+      </main>
+    </div>
 
     <DiscoveryWizard :open="showDiscovery" @close="showDiscovery = false" />
     <CredentialDialog :open="showCredentials" @close="showCredentials = false" />
-    <EnvVarConfigModal
-      :open="showEnvVar"
-      :machine-id="selectedId"
-      var-name="UE-SharedDataCachePath"
-      @close="showEnvVar = false"
-    />
-    <IniEditModal
-      :open="showIniEdit"
-      :machine-id="selectedId"
-      @close="showIniEdit = false"
-    />
+    <EnvVarConfigModal :open="showEnvVar" :machine-id="selectedId" var-name="UE-SharedDataCachePath" @close="showEnvVar = false" />
+    <IniEditModal :open="showIniEdit" :machine-id="selectedId" @close="showIniEdit = false" />
     <ShareCreateWizard :open="showShareWizard" @close="showShareWizard = false" />
-    <BatchEnvVarModal
-      :open="showBatchEnv"
-      :machine-ids="checkedArray"
-      @close="showBatchEnv = false"
-    />
-    <BatchIniEditModal
-      :open="showBatchIni"
-      :machine-ids="checkedArray"
-      @close="showBatchIni = false"
-    />
+    <BatchEnvVarModal :open="showBatchEnv" :machine-ids="checkedArray" @close="showBatchEnv = false" />
+    <BatchIniEditModal :open="showBatchIni" :machine-ids="checkedArray" @close="showBatchIni = false" />
   </div>
 </template>
