@@ -16,6 +16,7 @@ pub mod remote_path;
 pub mod powershell;
 pub mod project_discovery;
 pub mod project_identity;
+pub mod pso_collect;
 pub mod psexec;
 pub mod shares;
 pub mod ue_runner;
