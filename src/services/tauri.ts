@@ -294,6 +294,72 @@ export interface PakDistributeProgressPayload {
   event: BatchEvent;
 }
 
+export interface PsoCacheFile {
+  id: number | null;
+  project_id: number;
+  source_machine_id: number;
+  file_path: string;
+  file_name: string;
+  size_bytes: number;
+  gpu_signature: string;
+  ue_version: string | null;
+  collected_at: string | null;
+}
+
+export interface PsoCollectJobResponse {
+  job_id: string;
+  source_machine_id: number;
+  project_id: number;
+}
+
+export interface PsoDistributePlanItem {
+  target_machine_id: number;
+  target_host: string;
+  source_unc: string;
+  target_local: string;
+  file_name: string;
+  credential_user: string | null;
+  source_smb_user: string | null;
+}
+
+export interface PsoDistributeJobResponse {
+  job_id: string;
+  plan: PsoDistributePlanItem[];
+}
+
+export interface PsoCollectFinalizedPayload {
+  job_id: string;
+  source_machine_id: number;
+  project_id: number;
+  files_collected: number;
+}
+
+export interface GpuSignature {
+  vendor: string;
+  model: string;
+  driver: string;
+}
+
+export type CellStatus = "match" | "deviation" | "unknown";
+
+export interface GpuSignatureCount {
+  signature: GpuSignature;
+  count: number;
+}
+
+export interface MachineGpuCell {
+  machine_id: number;
+  hostname: string;
+  signature: GpuSignature | null;
+  status: CellStatus;
+}
+
+export interface GpuMatrix {
+  signatures: GpuSignatureCount[];
+  baseline: GpuSignature | null;
+  cells: MachineGpuCell[];
+}
+
 export interface UecmError {
   code: string;
   message: string;
@@ -623,6 +689,57 @@ export const tauriApi = {
       operatorCredentialAlias: args.operatorCredentialAlias,
       sourceSmbCredentialAlias: args.sourceSmbCredentialAlias,
     });
+  },
+
+  // PSO Cache
+  async startPsoCollection(args: {
+    sourceMachineId: number;
+    projectId: number;
+    ueVersion: string | null;
+    resolutionW: number;
+    resolutionH: number;
+    windowed: boolean;
+    maxMinutes: number;
+    operatorCredentialAlias: string | null;
+  }): Promise<PsoCollectJobResponse> {
+    return invoke<PsoCollectJobResponse>("start_pso_collection", {
+      sourceMachineId: args.sourceMachineId,
+      projectId: args.projectId,
+      ueVersion: args.ueVersion,
+      resolutionW: args.resolutionW,
+      resolutionH: args.resolutionH,
+      windowed: args.windowed,
+      maxMinutes: args.maxMinutes,
+      operatorCredentialAlias: args.operatorCredentialAlias,
+    });
+  },
+  async listPsoCacheFiles(projectId: number): Promise<PsoCacheFile[]> {
+    return invoke<PsoCacheFile[]>("list_pso_cache_files", { projectId });
+  },
+  async distributePsoCache(args: {
+    fileId: number;
+    targetMachineIds: number[];
+    namedShareUnc: string | null;
+    operatorCredentialAlias: string | null;
+    sourceSmbCredentialAlias: string | null;
+    forceGpuMismatch: boolean;
+  }): Promise<PsoDistributeJobResponse> {
+    return invoke<PsoDistributeJobResponse>("distribute_pso_cache", {
+      request: {
+        file_id: args.fileId,
+        target_machine_ids: args.targetMachineIds,
+        named_share_unc: args.namedShareUnc,
+        operator_credential_alias: args.operatorCredentialAlias,
+        source_smb_credential_alias: args.sourceSmbCredentialAlias,
+        force_gpu_mismatch: args.forceGpuMismatch,
+      },
+    });
+  },
+  async verifyPsoPrecaching(request: ScanInisRequest): Promise<ScanInisResponse> {
+    return invoke<ScanInisResponse>("verify_pso_precaching", { request });
+  },
+  async getGpuConsistencyMatrix(): Promise<GpuMatrix> {
+    return invoke<GpuMatrix>("get_gpu_consistency_matrix");
   },
 
   // System

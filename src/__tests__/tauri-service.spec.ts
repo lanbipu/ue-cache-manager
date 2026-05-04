@@ -69,4 +69,74 @@ describe("tauri service", () => {
       request: { machine_ids: [1], credential_alias: "cred", project_paths: ["E:\\Proj"] },
     });
   });
+
+  it("startPsoCollection passes collection args", async () => {
+    mockInvoke.mockResolvedValue({ job_id: "job-1", source_machine_id: 1, project_id: 7 });
+    await tauriApi.startPsoCollection({
+      sourceMachineId: 1,
+      projectId: 7,
+      ueVersion: "5.4",
+      resolutionW: 1280,
+      resolutionH: 720,
+      windowed: true,
+      maxMinutes: 10,
+      operatorCredentialAlias: "winrm",
+    });
+    expect(mockInvoke).toHaveBeenCalledWith("start_pso_collection", {
+      sourceMachineId: 1,
+      projectId: 7,
+      ueVersion: "5.4",
+      resolutionW: 1280,
+      resolutionH: 720,
+      windowed: true,
+      maxMinutes: 10,
+      operatorCredentialAlias: "winrm",
+    });
+  });
+
+  it("distributePsoCache wraps backend request shape", async () => {
+    mockInvoke.mockResolvedValue({ job_id: "dist-1", plan: [] });
+    await tauriApi.distributePsoCache({
+      fileId: 5,
+      targetMachineIds: [2, 3],
+      namedShareUnc: "\\\\SOURCE\\PSO",
+      operatorCredentialAlias: "winrm",
+      sourceSmbCredentialAlias: "share",
+      forceGpuMismatch: false,
+    });
+    expect(mockInvoke).toHaveBeenCalledWith("distribute_pso_cache", {
+      request: {
+        file_id: 5,
+        target_machine_ids: [2, 3],
+        named_share_unc: "\\\\SOURCE\\PSO",
+        operator_credential_alias: "winrm",
+        source_smb_credential_alias: "share",
+        force_gpu_mismatch: false,
+      },
+    });
+  });
+
+  it("verifyPsoPrecaching wraps scanner request", async () => {
+    mockInvoke.mockResolvedValue({ scan_run_id: 11, summary: {}, findings: [] });
+    await tauriApi.verifyPsoPrecaching({
+      machine_ids: [4],
+      credential_alias: "cred",
+      project_paths: ["E:\\Proj"],
+      user_profile_path: null,
+    });
+    expect(mockInvoke).toHaveBeenCalledWith("verify_pso_precaching", {
+      request: {
+        machine_ids: [4],
+        credential_alias: "cred",
+        project_paths: ["E:\\Proj"],
+        user_profile_path: null,
+      },
+    });
+  });
+
+  it("getGpuConsistencyMatrix invokes matrix command", async () => {
+    mockInvoke.mockResolvedValue({ signatures: [], baseline: null, cells: [] });
+    await tauriApi.getGpuConsistencyMatrix();
+    expect(mockInvoke).toHaveBeenCalledWith("get_gpu_consistency_matrix");
+  });
 });
