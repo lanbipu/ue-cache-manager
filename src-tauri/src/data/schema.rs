@@ -185,6 +185,46 @@ const MIGRATIONS: &[(&str, &str)] = &[
         CREATE INDEX IF NOT EXISTS idx_project_locations_machine ON project_locations(machine_id);
         "#,
     ),
+    (
+        "011_pso_cache_files_table",
+        r#"
+        CREATE TABLE IF NOT EXISTS pso_cache_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            source_machine_id INTEGER NOT NULL,
+            file_path TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL DEFAULT 0,
+            gpu_signature TEXT NOT NULL,
+            ue_version TEXT,
+            collected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(project_id, source_machine_id, file_name),
+            FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+            FOREIGN KEY (source_machine_id) REFERENCES machines(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_pso_cache_files_project ON pso_cache_files(project_id);
+        CREATE INDEX IF NOT EXISTS idx_pso_cache_files_signature ON pso_cache_files(gpu_signature);
+        "#,
+    ),
+    (
+        "012_pso_distributions_table",
+        r#"
+        CREATE TABLE IF NOT EXISTS pso_distributions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pso_cache_file_id INTEGER NOT NULL,
+            target_machine_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            bytes_copied INTEGER NOT NULL DEFAULT 0,
+            distributed_at TEXT,
+            error_message TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(pso_cache_file_id, target_machine_id),
+            FOREIGN KEY (pso_cache_file_id) REFERENCES pso_cache_files(id) ON DELETE CASCADE,
+            FOREIGN KEY (target_machine_id) REFERENCES machines(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_pso_distributions_file ON pso_distributions(pso_cache_file_id);
+        "#,
+    ),
 ];
 
 pub fn migrate(conn: &mut Connection) -> UecmResult<()> {
@@ -417,6 +457,39 @@ mod tests {
         let result = conn.execute(
             "INSERT INTO project_locations (project_id, machine_id, abs_path, uproject_path) \
              VALUES (999, 1, 'C:\\X', 'C:\\X\\Y.uproject')",
+            [],
+        );
+        assert!(result.is_err(), "FK violation expected");
+    }
+
+    #[test]
+    fn migration_011_creates_pso_cache_files_with_unique_constraint() {
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='pso_cache_files'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn migration_012_creates_pso_distributions_with_fk() {
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        conn.execute("PRAGMA foreign_keys = ON;", []).unwrap();
+        conn.execute(
+            "INSERT INTO machines (hostname, ip) VALUES ('h', '1.1.1.1')",
+            [],
+        )
+        .unwrap();
+        let result = conn.execute(
+            "INSERT INTO pso_distributions (pso_cache_file_id, target_machine_id) VALUES (999, 1)",
             [],
         );
         assert!(result.is_err(), "FK violation expected");
