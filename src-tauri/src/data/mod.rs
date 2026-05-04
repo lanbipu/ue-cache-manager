@@ -3,6 +3,7 @@ pub mod credentials;
 pub mod machine_gpus;
 pub mod machine_ue_installs;
 pub mod machines;
+pub mod operations;
 pub mod project_locations;
 pub mod projects;
 pub mod schema;
