@@ -84,6 +84,57 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "#,
     ),
     (
+        "007_diagnostics_tables",
+        r#"
+        CREATE TABLE IF NOT EXISTS scan_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_type TEXT NOT NULL,
+            started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            finished_at TEXT,
+            machine_ids_json TEXT NOT NULL,
+            summary_json TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_scan_runs_type_started ON scan_runs(scan_type, started_at DESC);
+
+        CREATE TABLE IF NOT EXISTS ini_findings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_run_id INTEGER NOT NULL,
+            machine_id INTEGER NOT NULL,
+            rule_id TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            category TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            section TEXT,
+            key_name TEXT,
+            line_number INTEGER,
+            snippet_before TEXT NOT NULL,
+            snippet_after TEXT,
+            recommended_action TEXT NOT NULL,
+            recommended_value TEXT,
+            symptom TEXT NOT NULL,
+            rationale TEXT NOT NULL,
+            fixed_at TEXT,
+            skipped_at TEXT,
+            FOREIGN KEY (scan_run_id) REFERENCES scan_runs(id) ON DELETE CASCADE,
+            FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_ini_findings_run ON ini_findings(scan_run_id);
+        CREATE INDEX IF NOT EXISTS idx_ini_findings_machine ON ini_findings(machine_id);
+        CREATE INDEX IF NOT EXISTS idx_ini_findings_severity ON ini_findings(severity);
+
+        CREATE TABLE IF NOT EXISTS health_check_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_run_id INTEGER NOT NULL,
+            machine_id INTEGER NOT NULL,
+            machine_results_json TEXT NOT NULL,
+            FOREIGN KEY (scan_run_id) REFERENCES scan_runs(id) ON DELETE CASCADE,
+            FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_health_check_runs_run ON health_check_runs(scan_run_id);
+        CREATE INDEX IF NOT EXISTS idx_health_check_runs_machine ON health_check_runs(machine_id);
+        "#,
+    ),
+    (
         "008_operations_table",
         r#"
         CREATE TABLE IF NOT EXISTS operations (
@@ -271,6 +322,51 @@ mod tests {
         let count: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='share_configs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn migrate_creates_scan_runs_table() {
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='scan_runs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn migrate_creates_ini_findings_table() {
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='ini_findings'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn migrate_creates_health_check_runs_table() {
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='health_check_runs'",
                 [],
                 |r| r.get(0),
             )

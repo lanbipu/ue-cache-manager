@@ -9,3 +9,7 @@ export { default as UecmKV } from "./UecmKV.vue";
 export { default as UecmProgressBar } from "./UecmProgressBar.vue";
 export { default as UecmTaskCard } from "./UecmTaskCard.vue";
 export { default as UecmPathInput } from "./UecmPathInput.vue";
+export { default as UecmCodeBlock } from "./UecmCodeBlock.vue";
+export { default as UecmKpiTile } from "./UecmKpiTile.vue";
+export { default as UecmScoreTile } from "./UecmScoreTile.vue";
+export { default as UecmFilterChip } from "./UecmFilterChip.vue";

@@ -2,7 +2,7 @@
 
 Cross-machine Unreal Engine cache management tool for VP/XR render clusters.
 
-**Status:** Plan 5 (DDC Pak workflow) implemented locally. lanPC E2E is deferred until `192.168.10.20` is reachable again. See `docs/superpowers/plans/`.
+**Status:** Plan 4 (Diagnostics) and Plan 5 (DDC Pak workflow) implemented locally. lanPC E2E is deferred until `192.168.10.20` is reachable again. See `docs/superpowers/plans/`.
 
 ## What's working
 
@@ -20,13 +20,15 @@ Cross-machine Unreal Engine cache management tool for VP/XR render clusters.
 - **Cluster batch operations**: multi-select machines + apply env var / INI key to all of them; real-time per-machine progress (✓ / ✗ / ↻) via mpsc fan-out + Tauri `batch-progress` events; capped at 8 concurrent.
 - **Project inventory**: discover `*.uproject` files on Windows machines, group them by logical project identity, and maintain per-machine path mappings.
 - **DDC Pak workflow**: generate DDC pak files through a reusable UE runner, verify `.ddp` output, cancel active UE processes, and distribute verified pak files through Robocopy fan-out.
+- **INI Scanner**: project / user / engine INI scan, rule engine R001-R007, persisted findings, one-click apply for auto-fixable findings through the atomic backup write path.
+- **Cluster Health Check**: 11-check matrix with KPI strip, cluster score, derived INI consistency + GPU/driver consistency, and remediation details per cell.
+- **Diagnostic primitives**: diff code block, KPI tile, score tile, filter chip, finding hierarchy/detail, and health matrix components.
+- **Diagnostic PowerShell sidecars**: `read-ini-file.ps1` for whole-file INI reads and `health-probes.ps1` for one-round-trip machine probes.
 - **Hostname rename**: inline editor in the machine detail panel.
 - Builds to a single .exe / .dmg / .AppImage.
 
 ## What's NOT yet implemented (next plans)
 
-- INI conflict scanner + auto-fix (Plan 4)
-- Cluster health check matrix (Plan 4)
 - lanPC real UE E2E for DDC Pak generation/distribution (blocked by host reachability during this implementation pass)
 - PSO Cache operations + visual polish (Plan 6)
 

@@ -7,6 +7,9 @@ pub mod operations;
 pub mod project_locations;
 pub mod projects;
 pub mod schema;
+pub mod scan_runs;
+pub mod health_check_runs;
+pub mod ini_findings;
 pub mod share_configs;
 
 pub use connection::{open, open_in_memory, Db};
@@ -16,4 +19,7 @@ pub use machine_ue_installs::UeInstall;
 pub use machines::Machine;
 pub use project_locations::{DiscoveryStatus, ProjectLocation};
 pub use projects::Project;
+pub use scan_runs::ScanRun;
+pub use health_check_runs::HealthCheckRun;
+pub use ini_findings::{IniFinding, SeverityCounts};
 pub use share_configs::{ShareConfig, ShareMode};
