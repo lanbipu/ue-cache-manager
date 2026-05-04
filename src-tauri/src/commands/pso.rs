@@ -303,6 +303,7 @@ pub async fn distribute_pso_cache(
     let db_for_task: Db = (*db).clone();
     let file_id = request.file_id;
     let project_id = file.project_id;
+    let source_machine_id = file.source_machine_id;
     let job_id_for_task = job_id.clone();
 
     tokio::spawn(async move {
@@ -375,6 +376,7 @@ pub async fn distribute_pso_cache(
             struct Payload<'a> {
                 job_id: &'a str,
                 project_id: i64,
+                source_machine_id: i64,
                 event: batch::BatchEvent,
             }
             let _ = app_for_task.emit(
@@ -382,6 +384,7 @@ pub async fn distribute_pso_cache(
                 Payload {
                     job_id: &job_id_for_task,
                     project_id,
+                    source_machine_id,
                     event,
                 },
             );
