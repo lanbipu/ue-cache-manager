@@ -145,36 +145,29 @@ pub fn summarize_rows(rows: &[HealthCheckRun]) -> UecmResult<HealthSummary> {
 }
 
 pub fn gpu_consistency(db: &Db, machine_ids: &[i64]) -> UecmResult<HashMap<i64, CheckOutcome>> {
-    let mut combos: HashMap<(String, String), Vec<i64>> = HashMap::new();
-    for machine_id in machine_ids {
-        let gpus = data::machine_gpus::list_for_machine(db, *machine_id)?;
-        if let Some(gpu) = gpus.first() {
-            combos
-                .entry((gpu.gpu_model.clone(), gpu.driver_version.clone()))
-                .or_default()
-                .push(*machine_id);
-        }
-    }
-    let baseline = combos.iter().max_by_key(|(_, ids)| ids.len()).map(|(combo, _)| combo.clone());
+    let matrix = crate::core::gpu_consistency::build_matrix(db)?;
+    let baseline = matrix.baseline.as_ref().map(|signature| signature.as_string());
     let mut out = HashMap::new();
     for machine_id in machine_ids {
-        let gpus = data::machine_gpus::list_for_machine(db, *machine_id)?;
-        let Some(gpu) = gpus.first() else {
+        let Some(cell) = matrix.cells.iter().find(|cell| cell.machine_id == *machine_id) else {
             out.insert(*machine_id, unknown("No GPU inventory row"));
             continue;
         };
-        let combo = (gpu.gpu_model.clone(), gpu.driver_version.clone());
-        let status = if Some(&combo) == baseline.as_ref() {
-            CheckStatus::Healthy
-        } else {
-            CheckStatus::Warning
+        let Some(signature) = cell.signature.as_ref() else {
+            out.insert(*machine_id, unknown("No GPU inventory row"));
+            continue;
+        };
+        let status = match cell.status {
+            crate::core::gpu_consistency::CellStatus::Match => CheckStatus::Healthy,
+            crate::core::gpu_consistency::CellStatus::Deviation => CheckStatus::Warning,
+            crate::core::gpu_consistency::CellStatus::Unknown => CheckStatus::Unknown,
         };
         out.insert(
             *machine_id,
             CheckOutcome {
                 status,
-                message: format!("{} / driver {}", gpu.gpu_model, gpu.driver_version),
-                sample: gpu.gpu_model.clone(),
+                message: format!("{} / driver {}", signature.model, signature.driver),
+                sample: baseline.clone().unwrap_or_default(),
                 remediation: "Align GPU model and driver version across render machines before PSO work.".into(),
             },
         );
@@ -228,11 +221,15 @@ fn pso_precaching(host: &str, username: &str, password: &str, project_paths: &[S
 
 fn pso_precaching_from_values(file_path: &str, values: &HashMap<String, String>) -> CheckOutcome {
     let precaching = values.get("r.PSOPrecaching").map(|v| truthy(v)).unwrap_or(false);
-    let validation = values
-        .get("r.PSOPrecaching.Validation")
-        .map(|v| !disabled(v))
+    let compile = values
+        .get("r.PSOPrecache.Compile")
+        .map(|v| truthy(v))
         .unwrap_or(false);
-    if precaching && validation {
+    let global_shaders = values
+        .get("r.PSOPrecache.GlobalShaders")
+        .map(|v| truthy(v))
+        .unwrap_or(false);
+    if precaching && compile && global_shaders {
         CheckOutcome {
             status: CheckStatus::Healthy,
             message: "PSO precaching CVars are enabled.".into(),
@@ -241,17 +238,21 @@ fn pso_precaching_from_values(file_path: &str, values: &HashMap<String, String>)
         }
     } else {
         CheckOutcome {
-            status: CheckStatus::Warning,
+            status: if precaching { CheckStatus::Warning } else { CheckStatus::Critical },
             message: format!(
-                "r.PSOPrecaching={}, r.PSOPrecaching.Validation={}",
+                "r.PSOPrecaching={}, r.PSOPrecache.Compile={}, r.PSOPrecache.GlobalShaders={}",
                 values.get("r.PSOPrecaching").map(String::as_str).unwrap_or("<missing>"),
                 values
-                    .get("r.PSOPrecaching.Validation")
+                    .get("r.PSOPrecache.Compile")
+                    .map(String::as_str)
+                    .unwrap_or("<missing>"),
+                values
+                    .get("r.PSOPrecache.GlobalShaders")
                     .map(String::as_str)
                     .unwrap_or("<missing>")
             ),
             sample: file_path.into(),
-            remediation: "Set r.PSOPrecaching=1 and r.PSOPrecaching.Validation=1 in Config\\ConsoleVariables.ini.".into(),
+            remediation: "Set r.PSOPrecaching=1, r.PSOPrecache.Compile=1, and r.PSOPrecache.GlobalShaders=1 in Config\\ConsoleVariables.ini.".into(),
         }
     }
 }
@@ -288,10 +289,6 @@ fn cvar_values(read: ReadIniFileResult) -> HashMap<String, String> {
 
 fn truthy(value: &str) -> bool {
     matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
-}
-
-fn disabled(value: &str) -> bool {
-    matches!(value.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off")
 }
 
 fn trim_slashes(value: &str) -> &str {
@@ -348,18 +345,26 @@ mod tests {
     fn pso_precaching_from_values_reports_healthy_when_required_cvars_enabled() {
         let values = HashMap::from([
             ("r.PSOPrecaching".into(), "1".into()),
-            ("r.PSOPrecaching.Validation".into(), "1".into()),
+            ("r.PSOPrecache.Compile".into(), "1".into()),
+            ("r.PSOPrecache.GlobalShaders".into(), "1".into()),
         ]);
         let outcome = pso_precaching_from_values("E:\\Proj\\Config\\ConsoleVariables.ini", &values);
         assert_eq!(outcome.status, CheckStatus::Healthy);
     }
 
     #[test]
-    fn pso_precaching_from_values_warns_when_validation_missing() {
+    fn pso_precaching_from_values_warns_when_optional_pso_cvar_missing() {
         let values = HashMap::from([("r.PSOPrecaching".into(), "1".into())]);
         let outcome = pso_precaching_from_values("E:\\Proj\\Config\\ConsoleVariables.ini", &values);
         assert_eq!(outcome.status, CheckStatus::Warning);
         assert!(outcome.message.contains("<missing>"));
+    }
+
+    #[test]
+    fn pso_precaching_from_values_is_critical_when_precaching_missing() {
+        let values = HashMap::new();
+        let outcome = pso_precaching_from_values("E:\\Proj\\Config\\ConsoleVariables.ini", &values);
+        assert_eq!(outcome.status, CheckStatus::Critical);
     }
 
     #[test]

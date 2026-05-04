@@ -6,6 +6,7 @@ import HealthCheck from "@/views/HealthCheck.vue";
 vi.mock("@/services/tauri", () => ({
   tauriApi: {
     listMachines: vi.fn(async () => []),
+    getGpuConsistencyMatrix: vi.fn(async () => ({ signatures: [], baseline: null, cells: [] })),
   },
 }));
 

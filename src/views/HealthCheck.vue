@@ -1,23 +1,29 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { RouterLink } from "vue-router";
 import UecmPageHeader from "@/components/primitives/UecmPageHeader.vue";
 import UecmIcon from "@/components/primitives/UecmIcon.vue";
 import UecmKpiTile from "@/components/primitives/UecmKpiTile.vue";
+import UecmGpuMatrix from "@/components/primitives/UecmGpuMatrix.vue";
 import UecmScoreTile from "@/components/primitives/UecmScoreTile.vue";
 import UecmStatusBadge from "@/components/primitives/UecmStatusBadge.vue";
 import Button from "@/components/ui/Button.vue";
 import HealthMatrix from "@/components/diagnostics/HealthMatrix.vue";
 import HealthCheckWizard from "@/components/modals/HealthCheckWizard.vue";
-import { HEALTH_CHECKS } from "@/lib/healthChecks";
+import { HEALTH_CHECKS, type HealthCheckDefinition } from "@/lib/healthChecks";
+import { useGpuConsistencyStore } from "@/stores/gpuConsistency";
 import { useHealthCheckStore } from "@/stores/healthCheck";
 import { useMachinesStore } from "@/stores/machines";
 
 const machines = useMachinesStore();
 const health = useHealthCheckStore();
+const gpuStore = useGpuConsistencyStore();
 const showWizard = ref(false);
 const selected = ref<{ machineId: number; checkId: string } | null>(null);
 
-onMounted(() => machines.loadMachines());
+onMounted(() => {
+  void Promise.all([machines.loadMachines(), gpuStore.load()]);
+});
 
 const score = computed(() => {
   const total = health.summary.total || 1;
@@ -27,7 +33,9 @@ const tone = computed(() => health.summary.critical > 0 ? "critical" : health.su
 const verdict = computed(() => tone.value === "critical" ? "ATTENTION" : tone.value === "warning" ? "DEGRADED" : tone.value === "healthy" ? "HEALTHY" : "IDLE");
 const selectedDetail = computed(() => {
   if (!selected.value) return null;
-  const def = HEALTH_CHECKS.find((check) => check.id === selected.value?.checkId);
+  const def = HEALTH_CHECKS.find((check) => check.id === selected.value?.checkId) as
+    | HealthCheckDefinition
+    | undefined;
   const outcome = health.rowsByMachine[selected.value.machineId]?.[selected.value.checkId];
   const machine = machines.machines.find((m) => m.id === selected.value?.machineId);
   return { def, outcome, machine };
@@ -72,9 +80,20 @@ const selectedDetail = computed(() => {
             <UecmStatusBadge :tone="selectedDetail.outcome?.status ?? 'unknown'" :label="selectedDetail.outcome?.status ?? 'unknown'" />
             <div>
               <h2 class="font-display text-lg font-extrabold">{{ selectedDetail.def?.label }}</h2>
+              <p v-if="selectedDetail.def?.subtitle" class="text-xs text-muted-foreground">{{ selectedDetail.def.subtitle }}</p>
               <p class="font-mono text-xs text-muted-foreground">{{ selectedDetail.machine?.hostname }} · {{ selectedDetail.machine?.ip }}</p>
             </div>
           </header>
+          <div v-if="selectedDetail.def?.id === 'pso_precaching'" class="rounded-md border bg-card p-3">
+            <RouterLink class="text-sm font-bold text-primary hover:underline" to="/ini-scanner?finding=R008">
+              Open INI Scanner R008-R010
+            </RouterLink>
+          </div>
+          <div v-else-if="selectedDetail.def?.id === 'gpu_consistency'" class="rounded-md border bg-card p-3">
+            <RouterLink class="text-sm font-bold text-primary hover:underline" to="/health-check?gpu=true">
+              Open GPU matrix
+            </RouterLink>
+          </div>
           <div class="rounded-md border bg-card p-3">
             <div class="font-mono text-[11px] font-bold uppercase text-muted-foreground">What</div>
             <p class="mt-1 text-sm">{{ selectedDetail.def?.description }}</p>
@@ -90,6 +109,14 @@ const selectedDetail = computed(() => {
           <pre class="rounded-md border bg-card p-3 font-mono text-xs text-muted-foreground whitespace-pre-wrap">{{ selectedDetail.outcome?.message ?? "No probe output" }}</pre>
         </div>
       </aside>
+    </section>
+
+    <section data-health-gpu-section class="space-y-2 border-t p-6">
+      <h2 class="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">GPU / driver matrix</h2>
+      <p class="text-xs text-muted-foreground">
+        Baseline: {{ gpuStore.baselineLabel }} / {{ gpuStore.deviationCount }} machine(s) deviating
+      </p>
+      <UecmGpuMatrix :matrix="gpuStore.matrix" />
     </section>
 
     <HealthCheckWizard :open="showWizard" @close="showWizard = false" />
