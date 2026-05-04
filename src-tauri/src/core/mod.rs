@@ -5,6 +5,7 @@ pub mod discovery;
 pub mod env_vars;
 pub mod ini_editor;
 pub mod network;
+pub mod pak_distribute;
 pub mod powershell;
 pub mod project_discovery;
 pub mod project_identity;
