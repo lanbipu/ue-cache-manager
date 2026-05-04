@@ -8,6 +8,7 @@ import PsoJobCard from "@/components/pso/PsoJobCard.vue";
 import UecmIcon from "@/components/primitives/UecmIcon.vue";
 import UecmPageHeader from "@/components/primitives/UecmPageHeader.vue";
 import UecmStat from "@/components/primitives/UecmStat.vue";
+import UecmStateBlock from "@/components/primitives/UecmStateBlock.vue";
 import UecmStatusBadge from "@/components/primitives/UecmStatusBadge.vue";
 import { useMachinesStore } from "@/stores/machines";
 import { useProjectsStore } from "@/stores/projects";
@@ -104,8 +105,8 @@ function targetTone(status: string) {
             </option>
           </select>
         </div>
-        <div v-if="selectedProjectId == null" data-pso-cache-empty class="p-6 text-sm text-muted-foreground">
-          Select a project or start a collection job.
+        <div v-if="selectedProjectId == null" data-pso-cache-empty class="p-4">
+          <UecmStateBlock variant="empty" title="No PSO project selected" message="Select a project or start a collection job." />
         </div>
         <PsoFileExplorer
           v-else
