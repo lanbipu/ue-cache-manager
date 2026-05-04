@@ -55,6 +55,7 @@ pub fn run() {
             commands::ini_editor::read_ini_section_with_credential,
             commands::ini_editor::set_ini_key_with_credential,
             commands::ini_scanner::scan_inis,
+            commands::ini_scanner::verify_pso_precaching,
             commands::ini_scanner::list_scan_runs,
             commands::ini_scanner::list_findings,
             commands::ini_scanner::get_finding,

@@ -23,22 +23,43 @@ pub struct ScanInisResponse {
 
 #[tauri::command]
 pub fn scan_inis(db: State<'_, Db>, request: ScanInisRequest) -> UecmResult<ScanInisResponse> {
+    scan_inis_inner(&db, request)
+}
+
+pub fn scan_inis_inner(db: &Db, request: ScanInisRequest) -> UecmResult<ScanInisResponse> {
     if request.machine_ids.is_empty() {
         return Err(UecmError::InvalidInput("machine_ids cannot be empty".into()));
     }
     let summary = ini_scanner::run_scan(
-        &db,
+        db,
         &request.machine_ids,
         &request.credential_alias,
         &request.project_paths,
         request.user_profile_path.as_deref(),
     )?;
-    let findings = ini_findings::list_for_run(&db, summary.scan_run_id)?;
+    let findings = ini_findings::list_for_run(db, summary.scan_run_id)?;
     Ok(ScanInisResponse {
         scan_run_id: summary.scan_run_id,
         summary,
         findings,
     })
+}
+
+#[tauri::command]
+pub fn verify_pso_precaching(
+    db: State<'_, Db>,
+    request: ScanInisRequest,
+) -> UecmResult<ScanInisResponse> {
+    verify_pso_precaching_inner(&db, request)
+}
+
+pub fn verify_pso_precaching_inner(db: &Db, request: ScanInisRequest) -> UecmResult<ScanInisResponse> {
+    if request.project_paths.is_empty() {
+        return Err(UecmError::InvalidInput(
+            "project_paths cannot be empty for PSO precaching verification".into(),
+        ));
+    }
+    scan_inis_inner(db, request)
 }
 
 #[tauri::command]
@@ -85,6 +106,21 @@ mod tests {
         }
         let _ = machines::insert(&db, &Machine::new("RENDER-01", "192.168.10.21")).unwrap();
         let result = ini_apply::apply(&db, 999, "UECM:winrm:RENDER-01");
+        assert!(matches!(result, Err(UecmError::InvalidInput(_))));
+    }
+
+    #[test]
+    fn verify_pso_precaching_requires_project_paths() {
+        let db = open_in_memory().unwrap();
+        let result = verify_pso_precaching_inner(
+            &db,
+            ScanInisRequest {
+                machine_ids: vec![1],
+                credential_alias: "missing".into(),
+                project_paths: Vec::new(),
+                user_profile_path: None,
+            },
+        );
         assert!(matches!(result, Err(UecmError::InvalidInput(_))));
     }
 }
