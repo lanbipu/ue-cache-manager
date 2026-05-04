@@ -9,5 +9,6 @@ pub mod ini_editor;
 pub mod ini_scanner;
 pub mod machines;
 pub mod projects;
+pub mod pso;
 pub mod shares;
 pub mod system;
