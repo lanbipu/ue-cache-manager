@@ -3,6 +3,8 @@ pub mod credentials;
 pub mod machine_gpus;
 pub mod machine_ue_installs;
 pub mod machines;
+pub mod project_locations;
+pub mod projects;
 pub mod schema;
 pub mod share_configs;
 
@@ -11,4 +13,6 @@ pub use credentials::{CredentialKind, CredentialRecord};
 pub use machine_gpus::{GpuInfo, GpuVendor};
 pub use machine_ue_installs::UeInstall;
 pub use machines::Machine;
+pub use project_locations::{DiscoveryStatus, ProjectLocation};
+pub use projects::Project;
 pub use share_configs::{ShareConfig, ShareMode};
