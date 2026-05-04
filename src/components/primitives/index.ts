@@ -6,3 +6,6 @@ export { default as UecmPageHeader } from "./UecmPageHeader.vue";
 export { default as UecmStat } from "./UecmStat.vue";
 export { default as UecmMatrixCell } from "./UecmMatrixCell.vue";
 export { default as UecmKV } from "./UecmKV.vue";
+export { default as UecmProgressBar } from "./UecmProgressBar.vue";
+export { default as UecmTaskCard } from "./UecmTaskCard.vue";
+export { default as UecmPathInput } from "./UecmPathInput.vue";
