@@ -49,6 +49,9 @@ coverage/
 # Brainstorming companion (already used)
 .superpowers/
 
+# Local Claude worktrees
+.claude/worktrees/
+
 # Tauri build output
 src-tauri/target/
 
