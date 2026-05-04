@@ -2,12 +2,12 @@
 
 Cross-machine Unreal Engine cache management tool for VP/XR render clusters.
 
-**Status:** Plan 4 (Diagnostics) and Plan 5 (DDC Pak workflow) implemented locally. lanPC E2E is deferred until `192.168.10.20` is reachable again. See `docs/superpowers/plans/`.
+**Status:** v1.0 — feature-complete locally for Plans 1-6. lanPC E2E is deferred until `192.168.10.20` is reachable again. See `docs/superpowers/plans/`.
 
 ## What's working
 
 - Tauri 2.x app shell with 8 navigable views (Dashboard / Machines / Shares / Projects / DDC Pak / PSO Cache / INI Scanner / Health Check)
-- SQLite persistence: machines + machine_ue_installs + machine_gpus + credentials + share_configs + operations + projects + project_locations
+- SQLite persistence: machines + machine_ue_installs + machine_gpus + credentials + share_configs + operations + projects + project_locations + PSO cache metadata
 - **Network discovery**: scan a CIDR, probe ports 5985 (WinRM) and 445 (SMB), add reachable hosts
 - **Per-machine refresh**: probe WinRM, then read installed UE versions (registry) + GPU model + driver version (WMI). Updates `last_seen_at` + `status`; UI shows live online/offline badge. UE list persists even when GPU detect fails.
 - **GPU VRAM** read from display class `qwMemorySize` registry value, bypassing the WMI `AdapterRAM` 4 GB cap (RTX 3080 reports 10240 MB).
@@ -22,15 +22,21 @@ Cross-machine Unreal Engine cache management tool for VP/XR render clusters.
 - **DDC Pak workflow**: generate DDC pak files through a reusable UE runner, verify `.ddp` output, cancel active UE processes, and distribute verified pak files through Robocopy fan-out.
 - **INI Scanner**: project / user / engine INI scan, rule engine R001-R007, persisted findings, one-click apply for auto-fixable findings through the atomic backup write path.
 - **Cluster Health Check**: 11-check matrix with KPI strip, cluster score, derived INI consistency + GPU/driver consistency, and remediation details per cell.
+- **PSO Cache workflow**: verify PSO precaching CVars (R008-R010), collect `*.upipelinecache` / `*.stablepc.csv` through UE `-game` mode, persist collected files, and distribute them with GPU-mismatch guardrails.
+- **GPU/driver consistency matrix**: shared backend module + frontend matrix for PSO safety checks and Health Check #11.
+- **Visual polish baseline**: shared empty/loading/error state block, v1.0 Dashboard KPIs, PSO Cache file explorer, and GPU matrix surface.
 - **Diagnostic primitives**: diff code block, KPI tile, score tile, filter chip, finding hierarchy/detail, and health matrix components.
 - **Diagnostic PowerShell sidecars**: `read-ini-file.ps1` for whole-file INI reads and `health-probes.ps1` for one-round-trip machine probes.
 - **Hostname rename**: inline editor in the machine detail panel.
 - Builds to a single .exe / .dmg / .AppImage.
 
-## What's NOT yet implemented (next plans)
+## Deferred / not yet implemented
 
 - lanPC real UE E2E for DDC Pak generation/distribution (blocked by host reachability during this implementation pass)
-- PSO Cache operations + visual polish (Plan 6)
+- lanPC real UE E2E for PSO collection/distribution (blocked by host reachability during this implementation pass)
+- Automated PSO camera flythrough scripting
+- Multi-machine distributed PSO collection
+- AMD / Intel GPU E2E validation
 
 ## Third-party / vendored
 
@@ -67,12 +73,19 @@ End-to-end verification of WinRM-dependent features (discovery refresh, env var,
 - `ps-scripts/`: PowerShell sidecar scripts (Windows-only execution)
 - `docs/superpowers/specs/`: design docs
 - `docs/superpowers/plans/`: implementation plans
+- `docs/superpowers/changelog/`: release notes
 
 Frontend ↔ backend communication via Tauri commands. All command handlers in
 `src-tauri/src/commands/` are thin wrappers that delegate to logic in
 `src-tauri/src/core/` and data in `src-tauri/src/data/`. All cross-machine
 operations route through PowerShell sidecar via `core/winrm.rs` →
 `ps-scripts/invoke-remote.ps1`.
+
+Primary product/design reference: `docs/superpowers/specs/2026-05-01-uecm-design.md`.
+
+## Release notes
+
+See `docs/superpowers/changelog/2026-05-05-v1.0.md`.
 
 ## Platform support
 
