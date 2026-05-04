@@ -1,5 +1,6 @@
 pub mod batch;
 pub mod credentials;
+pub mod ddc_pak;
 pub mod discovery;
 pub mod env_vars;
 pub mod ini_editor;

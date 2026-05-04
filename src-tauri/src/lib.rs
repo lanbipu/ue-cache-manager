@@ -30,6 +30,7 @@ pub fn run() {
                 data::schema::migrate(&mut conn)?;
             }
             app.manage(db);
+            app.manage(commands::ddc_pak::UeJobRegistry::default());
             tracing::info!("UECM started, database at {}", db_path.display());
             Ok(())
         })
@@ -66,6 +67,9 @@ pub fn run() {
             commands::projects::delete_project,
             commands::projects::delete_project_location,
             commands::projects::create_project_manual,
+            commands::ddc_pak::generate_ddc_pak,
+            commands::ddc_pak::cancel_ue_job,
+            commands::ddc_pak::verify_pak_output,
             commands::system::test_powershell_bridge,
         ])
         .run(tauri::generate_context!())
