@@ -2,12 +2,12 @@
 
 Cross-machine Unreal Engine cache management tool for VP/XR render clusters.
 
-**Status:** Plan 3 (Elevation, SMB Shares & Cluster Batch) complete. See `docs/superpowers/plans/`.
+**Status:** Plan 5 (DDC Pak workflow) implemented locally. lanPC E2E is deferred until `192.168.10.20` is reachable again. See `docs/superpowers/plans/`.
 
 ## What's working
 
 - Tauri 2.x app shell with 8 navigable views (Dashboard / Machines / Shares / Projects / DDC Pak / PSO Cache / INI Scanner / Health Check)
-- SQLite persistence: machines + machine_ue_installs + machine_gpus + credentials + share_configs
+- SQLite persistence: machines + machine_ue_installs + machine_gpus + credentials + share_configs + operations + projects + project_locations
 - **Network discovery**: scan a CIDR, probe ports 5985 (WinRM) and 445 (SMB), add reachable hosts
 - **Per-machine refresh**: probe WinRM, then read installed UE versions (registry) + GPU model + driver version (WMI). Updates `last_seen_at` + `status`; UI shows live online/offline badge. UE list persists even when GPU detect fails.
 - **GPU VRAM** read from display class `qwMemorySize` registry value, bypassing the WMI `AdapterRAM` 4 GB cap (RTX 3080 reports 10240 MB).
@@ -18,6 +18,8 @@ Cross-machine Unreal Engine cache management tool for VP/XR render clusters.
   - Mode A — open Guest + Everyone:Full, for trusted-LAN environments.
   - Mode B — dedicated `ddc-svc` local account on the host, share authorized only to that account; SYSTEM credential injection via vendored PsExec64 lets LocalSystem services (e.g. RenderStream Service) mount the share.
 - **Cluster batch operations**: multi-select machines + apply env var / INI key to all of them; real-time per-machine progress (✓ / ✗ / ↻) via mpsc fan-out + Tauri `batch-progress` events; capped at 8 concurrent.
+- **Project inventory**: discover `*.uproject` files on Windows machines, group them by logical project identity, and maintain per-machine path mappings.
+- **DDC Pak workflow**: generate DDC pak files through a reusable UE runner, verify `.ddp` output, cancel active UE processes, and distribute verified pak files through Robocopy fan-out.
 - **Hostname rename**: inline editor in the machine detail panel.
 - Builds to a single .exe / .dmg / .AppImage.
 
@@ -25,7 +27,7 @@ Cross-machine Unreal Engine cache management tool for VP/XR render clusters.
 
 - INI conflict scanner + auto-fix (Plan 4)
 - Cluster health check matrix (Plan 4)
-- DDC Pak generation + distribution (Plan 5)
+- lanPC real UE E2E for DDC Pak generation/distribution (blocked by host reachability during this implementation pass)
 - PSO Cache operations + visual polish (Plan 6)
 
 ## Third-party / vendored
