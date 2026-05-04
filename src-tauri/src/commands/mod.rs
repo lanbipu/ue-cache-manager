@@ -3,6 +3,7 @@ pub mod credentials;
 pub mod ddc_pak;
 pub mod discovery;
 pub mod env_vars;
+pub mod gpu_consistency;
 pub mod health_check;
 pub mod ini_editor;
 pub mod ini_scanner;

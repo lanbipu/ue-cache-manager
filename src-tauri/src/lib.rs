@@ -64,6 +64,7 @@ pub fn run() {
             commands::health_check::run_health_check,
             commands::health_check::list_health_check_runs,
             commands::health_check::list_health_results_for_run,
+            commands::gpu_consistency::get_gpu_consistency_matrix,
             commands::batch::batch_set_env_var,
             commands::batch::batch_set_ini_key,
             commands::shares::create_share,
