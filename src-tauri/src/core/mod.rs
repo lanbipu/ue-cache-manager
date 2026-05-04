@@ -9,4 +9,5 @@ pub mod project_discovery;
 pub mod project_identity;
 pub mod psexec;
 pub mod shares;
+pub mod ue_runner;
 pub mod winrm;
