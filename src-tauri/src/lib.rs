@@ -70,6 +70,7 @@ pub fn run() {
             commands::ddc_pak::generate_ddc_pak,
             commands::ddc_pak::cancel_ue_job,
             commands::ddc_pak::verify_pak_output,
+            commands::ddc_pak::distribute_ddc_pak,
             commands::system::test_powershell_bridge,
         ])
         .run(tauri::generate_context!())

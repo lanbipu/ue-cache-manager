@@ -1,7 +1,7 @@
 //! DDC Pak generation, verification, cancellation, and distribution commands.
 
-use crate::core::ddc_pak;
 use crate::core::ue_runner::{RunnerCancel, UeRunnerBackend, UeRunnerEvent};
+use crate::core::{batch, ddc_pak, pak_distribute};
 use crate::data::{
     credentials as data_credentials, machine_ue_installs, machines as data_machines, operations,
     project_locations, Db,
@@ -55,6 +55,14 @@ pub struct GenerateJobResponse {
     pub source_machine_id: i64,
     pub project_id: i64,
     pub backend: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DistributeJobResponse {
+    pub job_id: String,
+    pub project_id: i64,
+    pub source_machine_id: i64,
+    pub plan: Vec<pak_distribute::DistributePlanItem>,
 }
 
 fn now_millis() -> u128 {
@@ -367,6 +375,141 @@ pub fn verify_pak_output(
         op_user.as_deref(),
         op_pass.as_deref(),
     )
+}
+
+#[tauri::command]
+pub async fn distribute_ddc_pak(
+    app: AppHandle,
+    db: State<'_, Db>,
+    source_machine_id: i64,
+    project_id: i64,
+    target_machine_ids: Vec<i64>,
+    named_share_unc: Option<String>,
+    operator_credential_alias: Option<String>,
+    source_smb_credential_alias: Option<String>,
+) -> UecmResult<DistributeJobResponse> {
+    let source_machine = data_machines::find_by_id(&db, source_machine_id)?
+        .ok_or_else(|| UecmError::InvalidInput(format!("machine {} not found", source_machine_id)))?;
+    let source_location =
+        project_locations::get_for_project_machine(&db, project_id, source_machine_id)?
+            .ok_or_else(|| {
+                UecmError::InvalidInput(format!(
+                    "project {} not located on machine {}",
+                    project_id, source_machine_id
+                ))
+            })?;
+    let (op_user, op_pass) = resolve_operator_creds(&db, operator_credential_alias.as_deref())?;
+    let (smb_user, smb_pass) = if source_smb_credential_alias.is_some() {
+        resolve_operator_creds(&db, source_smb_credential_alias.as_deref())?
+    } else {
+        (op_user.clone(), op_pass.clone())
+    };
+
+    let plan = pak_distribute::plan(
+        &db,
+        source_machine_id,
+        &source_machine.ip,
+        &source_location,
+        &target_machine_ids,
+        project_id,
+        named_share_unc.as_deref(),
+        op_user.clone(),
+        op_pass.clone(),
+        smb_user,
+        smb_pass,
+    )?;
+    if plan.is_empty() {
+        return Err(UecmError::InvalidInput(
+            "distribution plan has no non-source targets".into(),
+        ));
+    }
+
+    for item in &plan {
+        pak_distribute::preflight_one(item).await.map_err(|e| {
+            UecmError::OperationFailed(format!(
+                "target {} cannot reach source UNC: {}",
+                item.target_machine_id, e
+            ))
+        })?;
+    }
+
+    let operation_id = operations::start(&db, "ddc_pak.distribute", &target_machine_ids)?;
+    let job_id = format!("ddc-pak-dist-{}-{}", source_machine_id, now_millis());
+    let plan_for_task = Arc::new(plan.clone());
+    let db_for_task: Db = (*db).clone();
+    let app_for_task = app.clone();
+    let job_id_for_task = job_id.clone();
+
+    tokio::spawn(async move {
+        let machine_ids: Vec<i64> = plan_for_task
+            .iter()
+            .map(|item| item.target_machine_id)
+            .collect();
+        let plan_lookup = plan_for_task.clone();
+        let mut rx = batch::run_batch(
+            machine_ids,
+            batch::DEFAULT_MAX_CONCURRENCY,
+            move |machine_id| {
+                let plan_lookup = plan_lookup.clone();
+                async move {
+                    let item = plan_lookup
+                        .iter()
+                        .find(|item| item.target_machine_id == machine_id)
+                        .ok_or_else(|| {
+                            UecmError::InvalidInput(format!(
+                                "distribution plan missing machine {}",
+                                machine_id
+                            ))
+                        })?
+                        .clone();
+                    let outcome = pak_distribute::run_one(item).await?;
+                    if !outcome.ok {
+                        return Err(UecmError::OperationFailed(format!(
+                            "robocopy exit {}: {}",
+                            outcome.exit_code,
+                            outcome
+                                .message
+                                .unwrap_or_else(|| outcome.stdout_tail.clone())
+                        )));
+                    }
+                    Ok::<_, UecmError>(outcome)
+                }
+            },
+        )
+        .await;
+
+        let mut had_error = false;
+        while let Some(event) = rx.recv().await {
+            if matches!(event.status, batch::BatchStatus::Err) {
+                had_error = true;
+            }
+            #[derive(Clone, Serialize)]
+            struct Payload<'a> {
+                job_id: &'a str,
+                project_id: i64,
+                source_machine_id: i64,
+                event: batch::BatchEvent,
+            }
+            let _ = app_for_task.emit(
+                "pak-distribute-progress",
+                Payload {
+                    job_id: &job_id_for_task,
+                    project_id,
+                    source_machine_id,
+                    event,
+                },
+            );
+        }
+        let status = if had_error { "err" } else { "ok" };
+        let _ = operations::finish(&db_for_task, operation_id, status, None);
+    });
+
+    Ok(DistributeJobResponse {
+        job_id,
+        project_id,
+        source_machine_id,
+        plan,
+    })
 }
 
 #[cfg(test)]
