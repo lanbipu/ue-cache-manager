@@ -109,6 +109,105 @@ export interface EchoResult {
   machine: string;
 }
 
+export type DiscoveryStatus = "auto" | "manual_alias" | "manual_path";
+
+export interface ProjectSummary {
+  id: number;
+  uproject_name: string;
+  display_name: string | null;
+  uproject_guid: string | null;
+  location_count: number;
+}
+
+export interface ProjectLocation {
+  id: number | null;
+  project_id: number;
+  machine_id: number;
+  abs_path: string;
+  uproject_path: string;
+  discovery_status: DiscoveryStatus;
+  discovered_at: string | null;
+}
+
+export interface DiscoveryResult {
+  project_id: number;
+  location_id: number;
+  uproject_filename: string;
+  abs_path: string;
+}
+
+export type UeRunnerEventKind =
+  | "spawned"
+  | "log_line"
+  | "progress"
+  | "completed"
+  | "cancelled"
+  | "error";
+
+export interface UeRunnerEvent {
+  kind: UeRunnerEventKind;
+  pid?: number;
+  log_path?: string;
+  text?: string;
+  parsed_kind?: string | null;
+  pct?: number | null;
+  label?: string;
+  exit_code?: number;
+  log_tail?: string[];
+  message?: string;
+}
+
+export interface UeRunnerProgressPayload {
+  job_id: string;
+  source_machine_id: number;
+  project_id: number;
+  event: UeRunnerEvent;
+}
+
+export type BackendChoice = "remote" | "local";
+
+export interface GenerateJobResponse {
+  job_id: string;
+  source_machine_id: number;
+  project_id: number;
+  backend: BackendChoice;
+}
+
+export interface PakOutput {
+  path: string;
+  size_bytes: number;
+}
+
+export interface PakVerifiedPayload {
+  job_id: string;
+  project_id: number;
+  verified: boolean;
+  output: PakOutput | null;
+}
+
+export interface DistributePlanItem {
+  target_machine_id: number;
+  target_host: string;
+  source_unc: string;
+  target_local: string;
+  credential_user: string | null;
+  source_smb_user: string | null;
+}
+
+export interface DistributeJobResponse {
+  job_id: string;
+  project_id: number;
+  source_machine_id: number;
+  plan: DistributePlanItem[];
+}
+
+export interface PakDistributeProgressPayload {
+  job_id: string;
+  project_id: number;
+  source_machine_id: number;
+  event: BatchEvent;
+}
+
 export interface UecmError {
   code: string;
   message: string;
@@ -310,6 +409,104 @@ export const tauriApi = {
       name,
       value,
       credentialAlias,
+    });
+  },
+
+  // Projects
+  async listProjects(): Promise<ProjectSummary[]> {
+    return invoke<ProjectSummary[]>("list_projects");
+  },
+  async listProjectLocations(projectId: number): Promise<ProjectLocation[]> {
+    return invoke<ProjectLocation[]>("list_project_locations", { projectId });
+  },
+  async discoverProjects(
+    machineId: number,
+    searchRoots: string[],
+    operatorCredentialAlias: string | null,
+  ): Promise<DiscoveryResult[]> {
+    return invoke<DiscoveryResult[]>("discover_projects", {
+      machineId,
+      searchRoots,
+      operatorCredentialAlias,
+    });
+  },
+  async setProjectLocation(
+    projectId: number,
+    machineId: number,
+    absPath: string,
+    uprojectPath: string,
+    manual: boolean,
+  ): Promise<number> {
+    return invoke<number>("set_project_location", {
+      projectId,
+      machineId,
+      absPath,
+      uprojectPath,
+      manual,
+    });
+  },
+  async deleteProject(projectId: number): Promise<void> {
+    return invoke<void>("delete_project", { projectId });
+  },
+  async deleteProjectLocation(locationId: number): Promise<void> {
+    return invoke<void>("delete_project_location", { locationId });
+  },
+  async createProjectManual(
+    uprojectName: string,
+    displayName: string | null,
+  ): Promise<number> {
+    return invoke<number>("create_project_manual", { uprojectName, displayName });
+  },
+
+  // DDC Pak
+  async generateDdcPak(args: {
+    backend: BackendChoice;
+    sourceMachineId: number | null;
+    projectId: number;
+    localUprojectPath: string | null;
+    localEnginePath: string | null;
+    ueVersion: string | null;
+    operatorCredentialAlias: string | null;
+  }): Promise<GenerateJobResponse> {
+    return invoke<GenerateJobResponse>("generate_ddc_pak", {
+      backend: args.backend,
+      sourceMachineId: args.sourceMachineId,
+      projectId: args.projectId,
+      localUprojectPath: args.localUprojectPath,
+      localEnginePath: args.localEnginePath,
+      ueVersion: args.ueVersion,
+      operatorCredentialAlias: args.operatorCredentialAlias,
+    });
+  },
+  async cancelUeJob(jobId: string): Promise<boolean> {
+    return invoke<boolean>("cancel_ue_job", { jobId });
+  },
+  async verifyPakOutput(
+    machineId: number,
+    projectId: number,
+    operatorCredentialAlias: string | null,
+  ): Promise<PakOutput> {
+    return invoke<PakOutput>("verify_pak_output", {
+      machineId,
+      projectId,
+      operatorCredentialAlias,
+    });
+  },
+  async distributeDdcPak(args: {
+    sourceMachineId: number;
+    projectId: number;
+    targetMachineIds: number[];
+    namedShareUnc: string | null;
+    operatorCredentialAlias: string | null;
+    sourceSmbCredentialAlias: string | null;
+  }): Promise<DistributeJobResponse> {
+    return invoke<DistributeJobResponse>("distribute_ddc_pak", {
+      sourceMachineId: args.sourceMachineId,
+      projectId: args.projectId,
+      targetMachineIds: args.targetMachineIds,
+      namedShareUnc: args.namedShareUnc,
+      operatorCredentialAlias: args.operatorCredentialAlias,
+      sourceSmbCredentialAlias: args.sourceSmbCredentialAlias,
     });
   },
 
