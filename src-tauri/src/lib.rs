@@ -59,6 +59,13 @@ pub fn run() {
             commands::shares::inject_share_credential_to_clients,
             commands::shares::list_shares,
             commands::shares::delete_share,
+            commands::projects::list_projects,
+            commands::projects::list_project_locations,
+            commands::projects::discover_projects,
+            commands::projects::set_project_location,
+            commands::projects::delete_project,
+            commands::projects::delete_project_location,
+            commands::projects::create_project_manual,
             commands::system::test_powershell_bridge,
         ])
         .run(tauri::generate_context!())
