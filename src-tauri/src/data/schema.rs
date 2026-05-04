@@ -83,6 +83,57 @@ const MIGRATIONS: &[(&str, &str)] = &[
         CREATE INDEX IF NOT EXISTS idx_share_configs_host ON share_configs(host_machine_id);
         "#,
     ),
+    (
+        "008_operations_table",
+        r#"
+        CREATE TABLE IF NOT EXISTS operations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            action_type TEXT NOT NULL,
+            target_machines TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'pending',
+            started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            finished_at TEXT,
+            log_text TEXT,
+            snapshot_blob BLOB
+        );
+        CREATE INDEX IF NOT EXISTS idx_operations_action_type ON operations(action_type);
+        CREATE INDEX IF NOT EXISTS idx_operations_status ON operations(status);
+        "#,
+    ),
+    (
+        "009_projects_table",
+        r#"
+        CREATE TABLE IF NOT EXISTS projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uproject_name TEXT NOT NULL,
+            uproject_stem_lower TEXT NOT NULL UNIQUE,
+            uproject_guid TEXT,
+            display_name TEXT,
+            first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_projects_stem ON projects(uproject_stem_lower);
+        "#,
+    ),
+    (
+        "010_project_locations_table",
+        r#"
+        CREATE TABLE IF NOT EXISTS project_locations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            machine_id INTEGER NOT NULL,
+            abs_path TEXT NOT NULL,
+            uproject_path TEXT NOT NULL,
+            discovery_status TEXT NOT NULL DEFAULT 'auto',
+            discovered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(project_id, machine_id),
+            FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+            FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_project_locations_project ON project_locations(project_id);
+        CREATE INDEX IF NOT EXISTS idx_project_locations_machine ON project_locations(machine_id);
+        "#,
+    ),
 ];
 
 pub fn migrate(conn: &mut Connection) -> UecmResult<()> {
@@ -225,5 +276,53 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn migrate_creates_operations_table() {
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='operations'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn migrate_creates_projects_table() {
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='projects'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn migrate_creates_project_locations_table_with_fks() {
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        conn.execute(
+            "INSERT INTO machines (hostname, ip) VALUES ('h', '1.1.1.1')",
+            [],
+        )
+        .unwrap();
+        let result = conn.execute(
+            "INSERT INTO project_locations (project_id, machine_id, abs_path, uproject_path) \
+             VALUES (999, 1, 'C:\\X', 'C:\\X\\Y.uproject')",
+            [],
+        );
+        assert!(result.is_err(), "FK violation expected");
     }
 }
