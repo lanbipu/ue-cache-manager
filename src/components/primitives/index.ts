@@ -13,3 +13,5 @@ export { default as UecmCodeBlock } from "./UecmCodeBlock.vue";
 export { default as UecmKpiTile } from "./UecmKpiTile.vue";
 export { default as UecmScoreTile } from "./UecmScoreTile.vue";
 export { default as UecmFilterChip } from "./UecmFilterChip.vue";
+export { default as UecmGpuMatrix } from "./UecmGpuMatrix.vue";
+export { default as UecmHorizontalSplit } from "./UecmHorizontalSplit.vue";
