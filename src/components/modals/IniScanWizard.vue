@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import BaseModal from "./BaseModal.vue";
 import Button from "@/components/ui/Button.vue";
 import Input from "@/components/ui/Input.vue";
@@ -8,6 +9,7 @@ import { useCredentialsStore } from "@/stores/credentials";
 import { useDiagnosticsStore } from "@/stores/diagnostics";
 import { formatUecmError } from "@/services/tauri";
 
+const { t } = useI18n();
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ close: [] }>();
 
@@ -35,7 +37,7 @@ async function onRun() {
   for (const id of ids) perMachine[id] = projectPaths.value;
   await diag.runScan(ids, perMachine, userProfile.value, credAlias.value);
   if (diag.error) {
-    window.alert(`Scan failed: ${formatUecmError(diag.error)}`);
+    window.alert(t("iniScanner.scanFailed", { error: formatUecmError(diag.error) }));
     return;
   }
   emit("close");
@@ -49,10 +51,10 @@ function toggle(id: number) {
 </script>
 
 <template>
-  <BaseModal :open="open" title="Run INI scan" size="lg" @close="emit('close')">
+  <BaseModal :open="open" :title="t('modal.iniScanWizard.title')" size="lg" @close="emit('close')">
     <div class="space-y-4">
       <div>
-        <p class="mb-2 font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Machines</p>
+        <p class="mb-2 font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{{ t("modal.iniScanWizard.machinesLabel") }}</p>
         <ul class="grid grid-cols-2 gap-1 text-sm">
           <li v-for="m in machines.machines" :key="m.id ?? m.ip" class="flex items-center gap-2">
             <input type="checkbox" :checked="m.id != null && selected.has(m.id)" @change="m.id != null && toggle(m.id)" />
@@ -61,26 +63,26 @@ function toggle(id: number) {
         </ul>
       </div>
       <div>
-        <p class="mb-2 font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Credential</p>
+        <p class="mb-2 font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{{ t("modal.iniScanWizard.credentialLabel") }}</p>
         <select data-cred-select v-model="credAlias" class="w-full rounded-md border bg-background px-2 py-1 text-sm">
-          <option value="">— pick —</option>
+          <option value="">{{ t("modal.iniScanWizard.pickPlaceholder") }}</option>
           <option v-for="c in winrmCreds" :key="c.alias" :value="c.alias">{{ c.alias }}</option>
         </select>
       </div>
       <div>
-        <p class="mb-2 font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">User profile</p>
+        <p class="mb-2 font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{{ t("modal.iniScanWizard.userProfileLabel") }}</p>
         <Input v-model="userProfile" placeholder="C:\\Users\\lanpc" />
       </div>
       <div>
-        <p class="mb-2 font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Project paths (optional, one per line)</p>
+        <p class="mb-2 font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{{ t("modal.iniScanWizard.projectPathsLabel") }}</p>
         <textarea v-model="projectPathsRaw" rows="3" class="w-full rounded-md border bg-background px-2 py-1 font-mono text-xs"
                   placeholder="E:\\Work\\EXLY"></textarea>
       </div>
     </div>
     <template #footer>
-      <Button variant="outline" @click="emit('close')">Cancel</Button>
+      <Button variant="outline" @click="emit('close')">{{ t("common.cancel") }}</Button>
       <Button data-run-scan-btn :disabled="!credAlias || selected.size === 0 || diag.isScanning" @click="onRun">
-        {{ diag.isScanning ? "Scanning…" : `Run on ${selected.size} machine(s)` }}
+        {{ diag.isScanning ? t("modal.iniScanWizard.scanning") : t("modal.iniScanWizard.runOn", { count: selected.size }) }}
       </Button>
     </template>
   </BaseModal>

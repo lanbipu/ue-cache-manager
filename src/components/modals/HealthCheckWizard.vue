@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import BaseModal from "./BaseModal.vue";
 import Button from "@/components/ui/Button.vue";
 import { useMachinesStore } from "@/stores/machines";
 import { useCredentialsStore } from "@/stores/credentials";
 import { useHealthCheckStore } from "@/stores/healthCheck";
 
+const { t } = useI18n();
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ close: [] }>();
 
@@ -42,10 +44,10 @@ function toggle(id: number) {
 </script>
 
 <template>
-  <BaseModal :open="open" title="Run health check" size="lg" @close="emit('close')">
+  <BaseModal :open="open" :title="t('modal.healthCheckWizard.title')" size="lg" @close="emit('close')">
     <div class="space-y-4">
       <div>
-        <p class="mb-2 font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Machines</p>
+        <p class="mb-2 font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{{ t("modal.healthCheckWizard.machinesLabel") }}</p>
         <ul class="grid grid-cols-2 gap-1 text-sm">
           <li v-for="m in machines.machines" :key="m.id ?? m.ip" class="flex items-center gap-2">
             <input type="checkbox" :checked="m.id != null && selected.has(m.id)" @change="m.id != null && toggle(m.id)" />
@@ -54,22 +56,22 @@ function toggle(id: number) {
         </ul>
       </div>
       <div>
-        <p class="mb-2 font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Credential</p>
+        <p class="mb-2 font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{{ t("modal.healthCheckWizard.credentialLabel") }}</p>
         <select data-health-cred-select v-model="credAlias" class="w-full rounded-md border bg-background px-2 py-1 text-sm">
-          <option value="">— pick —</option>
+          <option value="">{{ t("modal.healthCheckWizard.pickPlaceholder") }}</option>
           <option v-for="c in winrmCreds" :key="c.alias" :value="c.alias">{{ c.alias }}</option>
         </select>
       </div>
       <div>
-        <p class="mb-2 font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Project paths (optional, one per line)</p>
+        <p class="mb-2 font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{{ t("modal.healthCheckWizard.projectPathsLabel") }}</p>
         <textarea v-model="projectPathsRaw" rows="3" class="w-full rounded-md border bg-background px-2 py-1 font-mono text-xs"
                   placeholder="E:\\Work\\EXLY"></textarea>
       </div>
     </div>
     <template #footer>
-      <Button variant="outline" @click="emit('close')">Cancel</Button>
+      <Button variant="outline" @click="emit('close')">{{ t("common.cancel") }}</Button>
       <Button data-run-health-btn :disabled="!credAlias || selected.size === 0 || hc.isRunning" @click="onRun">
-        {{ hc.isRunning ? "Running…" : `Run on ${selected.size} machine(s)` }}
+        {{ hc.isRunning ? t("modal.healthCheckWizard.running") : t("modal.healthCheckWizard.runOn", { count: selected.size }) }}
       </Button>
     </template>
   </BaseModal>

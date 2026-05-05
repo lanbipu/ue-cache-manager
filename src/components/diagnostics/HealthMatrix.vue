@@ -1,9 +1,11 @@
 <script setup lang="ts">
+import { useI18n } from "vue-i18n";
 import UecmMatrixCell from "@/components/primitives/UecmMatrixCell.vue";
 import UecmStatusDot from "@/components/primitives/UecmStatusDot.vue";
 import { HEALTH_CHECKS, type StatusKind } from "@/lib/healthChecks";
 import type { Machine, CheckOutcome } from "@/services/tauri";
 
+const { t } = useI18n();
 const props = defineProps<{
   machines: Machine[];
   rowsByMachine: Record<number, Record<string, CheckOutcome>>;
@@ -22,7 +24,7 @@ function cellStatus(machineId: number, checkId: string): StatusKind {
     <table data-health-matrix class="min-w-[920px] border-collapse text-xs">
       <thead class="sticky top-0 bg-card">
         <tr>
-          <th class="sticky left-0 z-10 min-w-[180px] border-b bg-card px-3 py-2 text-left">Machine</th>
+          <th class="sticky left-0 z-10 min-w-[180px] border-b bg-card px-3 py-2 text-left">{{ t("healthCheck.headerMachine") }}</th>
           <th
             v-for="c in HEALTH_CHECKS" :key="c.id"
             class="border-b px-2 py-2 text-center align-bottom"
