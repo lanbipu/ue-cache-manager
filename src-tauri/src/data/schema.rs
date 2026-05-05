@@ -132,6 +132,8 @@ const MIGRATIONS: &[(&str, &str)] = &[
         );
         CREATE INDEX IF NOT EXISTS idx_health_check_runs_run ON health_check_runs(scan_run_id);
         CREATE INDEX IF NOT EXISTS idx_health_check_runs_machine ON health_check_runs(machine_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_health_check_runs_run_machine
+            ON health_check_runs(scan_run_id, machine_id);
         "#,
     ),
 ];
