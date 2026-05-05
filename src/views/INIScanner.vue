@@ -32,13 +32,36 @@ onMounted(async () => {
   await creds.load();
 });
 
-async function onApply(f: IniFinding) {
-  if (creds.credentials.length === 0) return;
-  applying.value = true;
-  await diag.applyFinding(f.id!, creds.credentials[0].alias);
-  applying.value = false;
+function pickWinrmCred() {
+  return creds.credentials.find((c) => c.kind === "winrm");
 }
-async function onSkip(f: IniFinding) { await diag.skipFinding(f.id!); }
+
+async function onApply(f: IniFinding) {
+  const cred = pickWinrmCred();
+  if (!cred) {
+    window.alert("No WinRM credential configured. Add one in the Credentials manager.");
+    return;
+  }
+  applying.value = true;
+  await diag.applyFinding(f.id!, cred.alias);
+  applying.value = false;
+  if (diag.error) {
+    const msg = typeof diag.error === "string"
+      ? diag.error
+      : (diag.error as { message?: string })?.message ?? JSON.stringify(diag.error);
+    window.alert(`Apply failed: ${msg}`);
+  }
+}
+
+async function onSkip(f: IniFinding) {
+  await diag.skipFinding(f.id!);
+  if (diag.error) {
+    const msg = typeof diag.error === "string"
+      ? diag.error
+      : (diag.error as { message?: string })?.message ?? JSON.stringify(diag.error);
+    window.alert(`Skip failed: ${msg}`);
+  }
+}
 </script>
 
 <template>
