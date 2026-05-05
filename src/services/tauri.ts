@@ -114,6 +114,77 @@ export interface UecmError {
   message: string;
 }
 
+export type Severity = "critical" | "warning" | "healthy" | "info";
+export type Category = "project" | "user" | "engine";
+export type RecommendedAction = "set" | "remove" | "manual";
+
+export interface IniFinding {
+  id: number | null;
+  scan_run_id: number;
+  machine_id: number;
+  rule_id: string;
+  severity: Severity;
+  category: Category;
+  file_path: string;
+  section: string | null;
+  key_name: string | null;
+  line_number: number | null;
+  snippet_before: string;
+  snippet_after: string | null;
+  recommended_action: RecommendedAction;
+  recommended_value: string | null;
+  symptom: string;
+  rationale: string;
+  fixed_at: string | null;
+  skipped_at: string | null;
+}
+
+export interface ScanRun {
+  id: number | null;
+  scan_type: "ini" | "health";
+  started_at: string | null;
+  finished_at: string | null;
+  machine_ids: number[];
+  summary: Record<string, number> | null;
+}
+
+export interface ScanRunSummary {
+  scan_run_id: number;
+  critical: number;
+  warning: number;
+  healthy: number;
+}
+
+export type HealthStatus = "healthy" | "warning" | "critical" | "na" | "offline" | "unknown";
+
+export interface CheckOutcome {
+  status: HealthStatus;
+  message: string;
+  sample: string;
+}
+
+export interface HealthCheckRow {
+  scan_run_id: number;
+  machine_id: number;
+  machine_results: Record<string, CheckOutcome>;
+}
+
+export interface HealthRunSummary {
+  scan_run_id: number;
+  healthy: number;
+  warning: number;
+  critical: number;
+  offline: number;
+  total: number;
+}
+
+export interface HealthProgressEvent {
+  scan_run_id: number;
+  machine_id: number;
+  done: boolean;
+  error: string | null;
+}
+
 export const tauriApi = {
   // Machines
   async listMachines(): Promise<Machine[]> {
@@ -316,5 +387,46 @@ export const tauriApi = {
   // System
   async testPowerShellBridge(message: string): Promise<EchoResult> {
     return invoke<EchoResult>("test_powershell_bridge", { message });
+  },
+
+  // Diagnostics — INI scanner
+  async scanInis(
+    machineIds: number[],
+    projectPathsPerMachine: Record<number, string[]>,
+    userProfile: string,
+    credentialAlias: string,
+  ): Promise<ScanRunSummary> {
+    return invoke<ScanRunSummary>("scan_inis", {
+      machineIds, projectPathsPerMachine, userProfile, credentialAlias,
+    });
+  },
+  async listFindingsForRun(scanRunId: number): Promise<IniFinding[]> {
+    return invoke<IniFinding[]>("list_findings_for_run", { scanRunId });
+  },
+  async listRecentIniRuns(limit: number): Promise<ScanRun[]> {
+    return invoke<ScanRun[]>("list_recent_ini_runs", { limit });
+  },
+  async applyFinding(findingId: number, credentialAlias: string): Promise<string> {
+    return invoke<string>("apply_finding", { findingId, credentialAlias });
+  },
+  async skipFinding(findingId: number): Promise<void> {
+    return invoke<void>("skip_finding", { findingId });
+  },
+
+  // Diagnostics — Health check
+  async runHealthCheck(
+    machineIds: number[],
+    projectPathsPerMachine: Record<number, string[]>,
+    credentialAlias: string,
+  ): Promise<HealthRunSummary> {
+    return invoke<HealthRunSummary>("run_health_check", {
+      machineIds, projectPathsPerMachine, credentialAlias,
+    });
+  },
+  async listRecentHealthRuns(limit: number): Promise<ScanRun[]> {
+    return invoke<ScanRun[]>("list_recent_health_runs", { limit });
+  },
+  async listHealthResultsForRun(scanRunId: number): Promise<HealthCheckRow[]> {
+    return invoke<HealthCheckRow[]>("list_health_results_for_run", { scanRunId });
   },
 };
