@@ -114,6 +114,12 @@ export interface UecmError {
   message: string;
 }
 
+export function formatUecmError(e: unknown): string {
+  return typeof e === "string"
+    ? e
+    : (e as { message?: string })?.message ?? JSON.stringify(e);
+}
+
 export type Severity = "critical" | "warning" | "healthy" | "info";
 export type Category = "project" | "user" | "engine";
 export type RecommendedAction = "set" | "remove" | "manual";

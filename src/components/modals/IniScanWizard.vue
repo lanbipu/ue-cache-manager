@@ -6,6 +6,7 @@ import Input from "@/components/ui/Input.vue";
 import { useMachinesStore } from "@/stores/machines";
 import { useCredentialsStore } from "@/stores/credentials";
 import { useDiagnosticsStore } from "@/stores/diagnostics";
+import { formatUecmError } from "@/services/tauri";
 
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ close: [] }>();
@@ -33,6 +34,10 @@ async function onRun() {
   const perMachine: Record<number, string[]> = {};
   for (const id of ids) perMachine[id] = projectPaths.value;
   await diag.runScan(ids, perMachine, userProfile.value, credAlias.value);
+  if (diag.error) {
+    window.alert(`Scan failed: ${formatUecmError(diag.error)}`);
+    return;
+  }
   emit("close");
 }
 

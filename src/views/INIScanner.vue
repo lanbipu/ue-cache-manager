@@ -10,7 +10,7 @@ import IniScanWizard from "@/components/modals/IniScanWizard.vue";
 import { useDiagnosticsStore } from "@/stores/diagnostics";
 import { useMachinesStore } from "@/stores/machines";
 import { useCredentialsStore } from "@/stores/credentials";
-import type { IniFinding } from "@/services/tauri";
+import { formatUecmError, type IniFinding } from "@/services/tauri";
 
 const diag = useDiagnosticsStore();
 const machines = useMachinesStore();
@@ -45,22 +45,12 @@ async function onApply(f: IniFinding) {
   applying.value = true;
   await diag.applyFinding(f.id!, cred.alias);
   applying.value = false;
-  if (diag.error) {
-    const msg = typeof diag.error === "string"
-      ? diag.error
-      : (diag.error as { message?: string })?.message ?? JSON.stringify(diag.error);
-    window.alert(`Apply failed: ${msg}`);
-  }
+  if (diag.error) window.alert(`Apply failed: ${formatUecmError(diag.error)}`);
 }
 
 async function onSkip(f: IniFinding) {
   await diag.skipFinding(f.id!);
-  if (diag.error) {
-    const msg = typeof diag.error === "string"
-      ? diag.error
-      : (diag.error as { message?: string })?.message ?? JSON.stringify(diag.error);
-    window.alert(`Skip failed: ${msg}`);
-  }
+  if (diag.error) window.alert(`Skip failed: ${formatUecmError(diag.error)}`);
 }
 </script>
 
