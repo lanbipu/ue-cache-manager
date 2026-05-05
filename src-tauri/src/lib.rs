@@ -53,6 +53,11 @@ pub fn run() {
             commands::ini_editor::set_ini_key,
             commands::ini_editor::read_ini_section_with_credential,
             commands::ini_editor::set_ini_key_with_credential,
+            commands::ini_scanner::scan_inis,
+            commands::ini_scanner::list_findings_for_run,
+            commands::ini_scanner::list_recent_ini_runs,
+            commands::ini_scanner::apply_finding,
+            commands::ini_scanner::skip_finding,
             commands::batch::batch_set_env_var,
             commands::batch::batch_set_ini_key,
             commands::shares::create_share,
@@ -60,6 +65,9 @@ pub fn run() {
             commands::shares::list_shares,
             commands::shares::delete_share,
             commands::system::test_powershell_bridge,
+            commands::health_check::run_health_check,
+            commands::health_check::list_recent_health_runs,
+            commands::health_check::list_health_results_for_run,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
