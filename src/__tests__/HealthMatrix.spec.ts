@@ -1,9 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { mount } from "@vue/test-utils";
 import HealthMatrix from "@/components/diagnostics/HealthMatrix.vue";
+import type { CheckOutcome, Machine } from "@/services/tauri";
 
-const machines = [{ id: 1, hostname: "RENDER-01", ip: "192.168.10.21", role: "render", status: "online", last_seen_at: null }];
-const rows = { 1: { smb: { status: "healthy", message: "ok", sample: "" } } };
+const machines: Machine[] = [{ id: 1, hostname: "RENDER-01", ip: "192.168.10.21", role: "render", status: "online", last_seen_at: null }];
+const rows: Record<number, Record<string, CheckOutcome>> = {
+  1: { smb: { status: "healthy", message: "ok", sample: "" } },
+};
 
 describe("HealthMatrix", () => {
   it("renders a header row + 11 columns", () => {

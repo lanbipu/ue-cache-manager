@@ -17,7 +17,7 @@ vi.mock("@/services/tauri", () => ({
 import HealthCheck from "@/views/HealthCheck.vue";
 
 describe("HealthCheck view", () => {
-  beforeEach(() => setActivePinia(createPinia()));
+  beforeEach(() => { setActivePinia(createPinia()); });
   it("renders empty state with run button", () => {
     const w = mount(HealthCheck);
     expect(w.find("[data-open-health-wizard-btn]").exists()).toBe(true);

@@ -18,7 +18,7 @@ vi.mock("@/services/tauri", () => ({
 }));
 
 describe("useDiagnosticsStore", () => {
-  beforeEach(() => setActivePinia(createPinia()));
+  beforeEach(() => { setActivePinia(createPinia()); });
 
   it("runScan populates findings", async () => {
     const s = useDiagnosticsStore();

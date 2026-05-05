@@ -15,7 +15,7 @@ vi.mock("@/services/tauri", () => ({
 }));
 
 describe("useHealthCheckStore", () => {
-  beforeEach(() => setActivePinia(createPinia()));
+  beforeEach(() => { setActivePinia(createPinia()); });
 
   it("runs and stores rows by machine", async () => {
     const s = useHealthCheckStore();
