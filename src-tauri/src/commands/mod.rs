@@ -3,6 +3,7 @@ pub mod credentials;
 pub mod discovery;
 pub mod env_vars;
 pub mod ini_editor;
+pub mod ini_scanner;
 pub mod machines;
 pub mod shares;
 pub mod system;
