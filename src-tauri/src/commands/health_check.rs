@@ -59,6 +59,24 @@ pub fn run_health_check(
     };
     let gpu_report = aggregate_gpu_consistency(&all_gpus);
 
+    // Cluster-wide DDC share to validate from every machine. Fix codex P1:
+    // previously this used `share_configs::find_by_host(mid)` per row, which
+    // returned shares hosted ON the machine being checked, so client machines
+    // probed an empty UNC and reported `na` for share_reachable / ntfs_perm /
+    // system_write instead of validating their access to the configured share.
+    let primary_share = share_configs::list_all(&db).unwrap_or_default()
+        .into_iter().next();
+    let cluster_share_unc = primary_share.as_ref().map(|s| s.unc_path.clone()).unwrap_or_default();
+    // The share's stored `credential_alias` is the UECM alias (e.g.
+    // `UECM:share:HOST-A:ddc-svc`); resolve it to the actual Windows account
+    // name (`ddc-svc`) before passing to health-probes.ps1.
+    let cluster_svc_username = match primary_share.as_ref().and_then(|s| s.credential_alias.clone()) {
+        Some(alias) => data_credentials::find_by_alias(&db, &alias)?
+            .map(|c| c.username)
+            .unwrap_or_else(|| "ddc-svc".to_string()),
+        None => "ddc-svc".to_string(),
+    };
+
     let mut summary = HealthRunSummary {
         scan_run_id: scan_id,
         healthy: 0, warning: 0, critical: 0, offline: 0,
@@ -71,12 +89,8 @@ pub fn run_health_check(
             None => continue,
         };
 
-        let host_share = share_configs::find_by_host(&db, mid).unwrap_or_default()
-            .into_iter().next();
-        let share_unc = host_share.as_ref().map(|s| s.unc_path.clone()).unwrap_or_default();
-        let svc_username = host_share.as_ref()
-            .and_then(|s| s.credential_alias.clone())
-            .unwrap_or_else(|| "ddc-svc".to_string());
+        let share_unc = cluster_share_unc.clone();
+        let svc_username = cluster_svc_username.clone();
         let expected_shared = share_unc.clone();
 
         let probes = match health_probes::run(

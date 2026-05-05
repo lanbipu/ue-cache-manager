@@ -28,11 +28,12 @@ try {
         $lines = Get-Content -Path $FilePath -Encoding UTF8
         $out = New-Object System.Collections.ArrayList
         $inSection = $false
+        $sectionSeen = $false
         $written = $false
         $bracket = "[$Section]"
         foreach ($line in $lines) {
             $trim = $line.Trim()
-            if ($trim -eq $bracket) { $inSection = $true; [void]$out.Add($line); continue }
+            if ($trim -eq $bracket) { $inSection = $true; $sectionSeen = $true; [void]$out.Add($line); continue }
             if ($inSection -and $trim.StartsWith('[') -and $trim.EndsWith(']')) {
                 if (-not $Remove -and -not $written) {
                     [void]$out.Add("$Name=$Value"); $written = $true
@@ -49,6 +50,20 @@ try {
         }
         if (-not $Remove -and -not $written -and $inSection) {
             [void]$out.Add("$Name=$Value")
+            $written = $true
+        }
+        # Section never appeared: append it (with the key) so callers can
+        # create new sections instead of silently writing the file unchanged.
+        # The pre-Plan-4 behavior of write-ini-key.ps1 had this fallback;
+        # restore it. Skip in -RemoveKey mode (nothing to remove).
+        if (-not $Remove -and -not $sectionSeen) {
+            if ($out.Count -gt 0) {
+                $last = [string]$out[$out.Count - 1]
+                if ($last.Trim().Length -ne 0) { [void]$out.Add("") }
+            }
+            [void]$out.Add($bracket)
+            [void]$out.Add("$Name=$Value")
+            $written = $true
         }
         Set-Content -Path $FilePath -Value $out -Encoding UTF8
         return "$backup"

@@ -117,23 +117,36 @@ pub struct ScanInputs<'a> {
     pub env_state: EnvVarState,
 }
 
-pub fn scan_machine(inputs: &ScanInputs) -> UecmResult<Vec<Finding>> {
+/// Per-file outcome of one scan pass for a single machine.
+///
+/// `errors` keeps human-readable failure reasons (with file path attached) so the
+/// caller can show "scan completed with N errors" instead of silently reporting 0
+/// findings when the credential / WinRM is broken.
+#[derive(Debug, Default)]
+pub struct ScanOutcome {
+    pub findings: Vec<Finding>,
+    pub errors: Vec<String>,
+}
+
+pub fn scan_machine(inputs: &ScanInputs) -> UecmResult<ScanOutcome> {
     let mut targets: Vec<TargetFile> = Vec::new();
     targets.extend(enumerate_engine_paths(inputs.installs));
     targets.extend(enumerate_user_paths(inputs.installs, inputs.user_profile));
     targets.extend(enumerate_project_paths(inputs.project_roots));
 
-    let mut findings = Vec::new();
+    let mut outcome = ScanOutcome::default();
     for tf in &targets {
         match read_file(inputs.host, tf, inputs.credential) {
-            Ok(Some(pf)) => findings.extend(ini_diagnostics::run_rules(&pf, &inputs.env_state)),
+            Ok(Some(pf)) => outcome.findings.extend(ini_diagnostics::run_rules(&pf, &inputs.env_state)),
             Ok(None) => {}
             Err(e) => {
-                eprintln!("[ini_scanner] INI read failed for {}: {}", tf.path, e);
+                let msg = format!("{}: {}", tf.path, e);
+                eprintln!("[ini_scanner] {}", msg);
+                outcome.errors.push(msg);
             }
         }
     }
-    Ok(findings)
+    Ok(outcome)
 }
 
 #[cfg(test)]

@@ -42,6 +42,7 @@ pub fn scan_inis(
     let mut total_critical = 0i64;
     let mut total_warning = 0i64;
     let mut total_healthy = 0i64;
+    let mut all_errors: Vec<String> = Vec::new();
 
     for &mid in &machine_ids {
         let machine = data_machines::find_by_id(&db, mid)?
@@ -68,8 +69,11 @@ pub fn scan_inis(
             env_state,
         };
 
-        let findings = ini_scanner::scan_machine(&inputs)?;
-        for f in findings {
+        let outcome = ini_scanner::scan_machine(&inputs)?;
+        for err in &outcome.errors {
+            all_errors.push(format!("{}: {}", machine.hostname, err));
+        }
+        for f in outcome.findings {
             let row = IniFinding {
                 id: None,
                 scan_run_id: scan_id,
@@ -100,12 +104,30 @@ pub fn scan_inis(
         }
     }
 
-    let summary = json!({
+    let total_findings = total_critical + total_warning + total_healthy;
+    let mut summary = json!({
         "critical": total_critical,
         "warning": total_warning,
         "healthy": total_healthy,
     });
+    if !all_errors.is_empty() {
+        let preview: Vec<String> = all_errors.iter().take(10).cloned().collect();
+        summary["errors_count"] = json!(all_errors.len());
+        summary["errors"] = json!(preview);
+    }
     scan_runs::finish(&db, scan_id, &summary)?;
+
+    // If every read failed (zero findings + at least one error), surface the
+    // failure to the caller so the wizard alerts instead of showing an empty
+    // "healthy" summary.
+    if total_findings == 0 && !all_errors.is_empty() {
+        return Err(UecmError::OperationFailed(format!(
+            "INI scan produced no findings; {} read errors. First: {}",
+            all_errors.len(),
+            all_errors.first().cloned().unwrap_or_default()
+        )));
+    }
+
     Ok(ScanRunSummary {
         scan_run_id: scan_id,
         critical: total_critical,
