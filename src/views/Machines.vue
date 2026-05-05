@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { useMachinesStore } from "@/stores/machines";
 import Button from "@/components/ui/Button.vue";
 import UecmIcon from "@/components/primitives/UecmIcon.vue";
@@ -13,6 +14,7 @@ import ShareCreateWizard from "@/components/modals/ShareCreateWizard.vue";
 import BatchEnvVarModal from "@/components/modals/BatchEnvVarModal.vue";
 import BatchIniEditModal from "@/components/modals/BatchIniEditModal.vue";
 
+const { t } = useI18n();
 const store = useMachinesStore();
 const showDiscovery = ref(false);
 const showCredentials = ref(false);
@@ -62,15 +64,15 @@ const allChecked = computed(() => {
 
 <template>
   <div class="grid h-full grid-rows-[auto_1fr] gap-4 p-6">
-    <UecmPageHeader title="Machines" eyebrow="Inventory" description="Discover, inspect, and batch-configure Windows hosts in the VP cluster.">
+    <UecmPageHeader :title="t('machines.title')" :eyebrow="t('machines.eyebrow')" :description="t('machines.description')">
       <template #actions>
         <Button variant="outline" data-create-share-btn @click="showShareWizard = true">
           <UecmIcon name="folder-open" />
-          Share
+          {{ t("machines.share") }}
         </Button>
         <Button data-discover-btn @click="showDiscovery = true">
           <UecmIcon name="radar" />
-          Scan
+          {{ t("machines.scan") }}
         </Button>
       </template>
     </UecmPageHeader>
@@ -80,18 +82,18 @@ const allChecked = computed(() => {
         <div class="flex items-center justify-between gap-2 border-b p-3">
           <label class="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">
             <input data-select-all type="checkbox" :checked="allChecked" @change="toggleAll" />
-            {{ checkedIds.size }} selected
+            {{ t("machines.selectedCount", { count: checkedIds.size }) }}
           </label>
           <div class="flex gap-1">
-            <Button data-batch-env-btn variant="outline" size="sm" :disabled="checkedIds.size === 0" @click="showBatchEnv = true">Batch env</Button>
-            <Button data-batch-ini-btn variant="outline" size="sm" :disabled="checkedIds.size === 0" @click="showBatchIni = true">Batch INI</Button>
+            <Button data-batch-env-btn variant="outline" size="sm" :disabled="checkedIds.size === 0" @click="showBatchEnv = true">{{ t("machines.batchEnv") }}</Button>
+            <Button data-batch-ini-btn variant="outline" size="sm" :disabled="checkedIds.size === 0" @click="showBatchIni = true">{{ t("machines.batchIni") }}</Button>
           </div>
         </div>
 
         <div class="h-[calc(100%-3.5rem)] overflow-auto p-2">
-          <p v-if="store.isLoading" class="p-3 text-sm text-muted-foreground">Loading...</p>
+          <p v-if="store.isLoading" class="p-3 text-sm text-muted-foreground">{{ t("common.loading") }}</p>
           <p v-else-if="store.machines.length === 0" class="p-3 text-sm text-muted-foreground">
-            No machines yet. Click Scan to discover.
+            {{ t("machines.noMachines") }}
           </p>
           <ul v-else class="space-y-1">
             <li
@@ -113,7 +115,7 @@ const allChecked = computed(() => {
                 <div class="truncate text-sm font-bold">{{ machine.hostname }}</div>
                 <div class="font-mono text-xs text-muted-foreground">{{ machine.ip }}</div>
               </div>
-              <button class="text-xs text-destructive hover:underline" @click.stop="onDelete(machine.id)">Delete</button>
+              <button class="text-xs text-destructive hover:underline" @click.stop="onDelete(machine.id)">{{ t("common.delete") }}</button>
             </li>
           </ul>
           <p v-if="store.error" class="mt-3 px-3 text-xs text-destructive">{{ store.error.message }}</p>

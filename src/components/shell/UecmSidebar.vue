@@ -1,22 +1,24 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useRoute } from "vue-router";
+import { useI18n } from "vue-i18n";
 import UecmIcon from "@/components/primitives/UecmIcon.vue";
 import UecmStatusDot from "@/components/primitives/UecmStatusDot.vue";
 import { useClusterStore } from "@/stores/cluster";
 
 const route = useRoute();
 const cluster = useClusterStore();
+const { t } = useI18n();
 
-const navItems = [
-  { to: "/", label: "Dashboard", icon: "layout-dashboard" },
-  { to: "/machines", label: "Machines", icon: "server" },
-  { to: "/projects", label: "Projects", icon: "folder-git-2" },
-  { to: "/ddc-pak", label: "DDC Pak", icon: "package" },
-  { to: "/pso-cache", label: "PSO Cache", icon: "database" },
-  { to: "/ini-scanner", label: "INI Scanner", icon: "file-search" },
-  { to: "/health-check", label: "Health Check", icon: "heart-pulse" },
-];
+const navItems = computed(() => [
+  { to: "/", label: t("nav.dashboard"), icon: "layout-dashboard" },
+  { to: "/machines", label: t("nav.machines"), icon: "server" },
+  { to: "/projects", label: t("nav.projects"), icon: "folder-git-2" },
+  { to: "/ddc-pak", label: t("nav.ddcPak"), icon: "package" },
+  { to: "/pso-cache", label: t("nav.psoCache"), icon: "database" },
+  { to: "/ini-scanner", label: t("nav.iniScanner"), icon: "file-search" },
+  { to: "/health-check", label: t("nav.healthCheck"), icon: "heart-pulse" },
+]);
 
 const activePath = computed(() => route.path);
 </script>
@@ -26,7 +28,7 @@ const activePath = computed(() => route.path);
     <div class="flex h-16 items-center gap-3 border-b border-sidebar-border px-4">
       <img src="@/assets/uecm-mark.svg" alt="" class="size-8" />
       <div class="min-w-0">
-        <div class="font-display text-sm font-extrabold">UE Cache Manager</div>
+        <div class="font-display text-sm font-extrabold">{{ t("shell.appName") }}</div>
         <div class="text-xs text-muted-foreground">{{ cluster.summary }}</div>
       </div>
     </div>
@@ -48,12 +50,12 @@ const activePath = computed(() => route.path);
     <div class="border-t border-sidebar-border p-4">
       <div class="rounded-lg border border-sidebar-border bg-background/40 p-3">
         <div class="flex items-center justify-between">
-          <span class="text-xs font-bold uppercase tracking-wide text-muted-foreground">Cluster Score</span>
+          <span class="text-xs font-bold uppercase tracking-wide text-muted-foreground">{{ t("shell.clusterScore") }}</span>
           <UecmStatusDot :tone="cluster.critical ? 'critical' : cluster.warning ? 'warning' : 'healthy'" />
         </div>
         <div class="mt-2 font-display text-2xl font-extrabold">{{ cluster.score }}</div>
         <div class="mt-1 text-xs text-muted-foreground">
-          {{ cluster.critical }} critical · {{ cluster.warning }} warning
+          {{ t("shell.criticalWarningSummary", { critical: cluster.critical, warning: cluster.warning }) }}
         </div>
       </div>
     </div>

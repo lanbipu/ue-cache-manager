@@ -51,6 +51,7 @@ coverage/
 
 # Local Claude worktrees
 .claude/worktrees/
+.claire/worktrees/
 
 # Tauri build output
 src-tauri/target/

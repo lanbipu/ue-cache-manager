@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import BaseModal from "./BaseModal.vue";
 import { tauriApi, type IniKey, type UecmError } from "@/services/tauri";
 
@@ -9,6 +10,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ (e: "close"): void }>();
 
+const { t } = useI18n();
 const filePath = ref("");
 const section = ref("");
 const keyName = ref("");
@@ -72,14 +74,13 @@ async function onApply() {
 </script>
 
 <template>
-  <BaseModal :open="props.open" title="Edit INI key" @close="emit('close')">
+  <BaseModal :open="props.open" :title="t('modal.iniEdit.title')" @close="emit('close')">
     <div>
       <p class="text-xs text-gray-500 mb-2">
-        Reads/writes a single key in an [section] of an INI file on the remote machine.
-        Auto-backs up the file before writing.
+        {{ t("modal.iniEdit.hint") }}
       </p>
 
-      <label class="block text-sm mb-1">File path (remote)</label>
+      <label class="block text-sm mb-1">{{ t("modal.iniEdit.filePath") }}</label>
       <input
         data-ini-path
         v-model="filePath"
@@ -87,7 +88,7 @@ async function onApply() {
         class="w-full border rounded px-2 py-1 text-sm font-mono mb-2"
       />
 
-      <label class="block text-sm mb-1">Section (without brackets)</label>
+      <label class="block text-sm mb-1">{{ t("modal.iniEdit.sectionLabel") }}</label>
       <input
         data-ini-section
         v-model="section"
@@ -101,14 +102,14 @@ async function onApply() {
         class="px-3 py-1 text-sm border rounded hover:bg-gray-100 disabled:opacity-50 mb-3"
         @click="onRead"
       >
-        {{ reading ? "Reading..." : "Read section" }}
+        {{ reading ? t("common.reading") : t("modal.iniEdit.readSection") }}
       </button>
 
       <div v-if="loadedKeys.length > 0" class="mb-3">
-        <p class="text-sm font-medium mb-1">Existing keys</p>
+        <p class="text-sm font-medium mb-1">{{ t("modal.iniEdit.existingKeys") }}</p>
         <table class="w-full text-xs border">
           <thead class="bg-gray-50">
-            <tr><th class="text-left px-2 py-1">Name</th><th class="text-left px-2 py-1">Value</th></tr>
+            <tr><th class="text-left px-2 py-1">{{ t("modal.iniEdit.headerName") }}</th><th class="text-left px-2 py-1">{{ t("modal.iniEdit.headerValue") }}</th></tr>
           </thead>
           <tbody>
             <tr v-for="k in loadedKeys" :key="k.name" data-ini-row class="border-t">
@@ -121,7 +122,7 @@ async function onApply() {
 
       <hr class="my-3" />
 
-      <label class="block text-sm mb-1">Key name</label>
+      <label class="block text-sm mb-1">{{ t("modal.iniEdit.keyName") }}</label>
       <input
         data-ini-key
         v-model="keyName"
@@ -129,7 +130,7 @@ async function onApply() {
         class="w-full border rounded px-2 py-1 text-sm font-mono mb-2"
       />
 
-      <label class="block text-sm mb-1">New value</label>
+      <label class="block text-sm mb-1">{{ t("modal.iniEdit.newValue") }}</label>
       <input
         data-ini-value
         v-model="keyValue"
@@ -138,13 +139,13 @@ async function onApply() {
       />
 
       <p v-if="lastBackup" class="text-xs text-green-700">
-        Applied. Backup saved to <span class="font-mono">{{ lastBackup }}</span>
+        {{ t("modal.iniEdit.backupSavedPrefix") }}<span class="font-mono">{{ lastBackup }}</span>
       </p>
       <p v-if="error" class="text-xs text-red-600">{{ error.message }}</p>
     </div>
     <template #footer>
       <button class="px-3 py-1 text-sm border rounded hover:bg-gray-100" @click="emit('close')">
-        Cancel
+        {{ t("common.cancel") }}
       </button>
       <button
         data-ini-apply-btn
@@ -152,7 +153,7 @@ async function onApply() {
         class="px-3 py-1 text-sm bg-gray-200 rounded hover:bg-gray-300 disabled:opacity-50"
         @click="onApply"
       >
-        {{ applying ? "Applying..." : "Apply" }}
+        {{ applying ? t("common.applying") : t("common.apply") }}
       </button>
     </template>
   </BaseModal>

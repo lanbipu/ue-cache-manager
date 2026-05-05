@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { useI18n } from "vue-i18n";
 import { useMachinesStore } from "@/stores/machines";
 import HostnameEditor from "@/components/machines/HostnameEditor.vue";
 
+const { t } = useI18n();
 const store = useMachinesStore();
 
 const emit = defineEmits<{
@@ -20,7 +22,7 @@ function statusBadgeClass(status: string): string {
 <template>
   <div class="h-full flex flex-col">
     <div v-if="!store.selectedDetail" class="p-6 text-sm text-gray-500">
-      Select a machine from the list to view details.
+      {{ t("machineDetail.selectHint") }}
     </div>
 
     <div v-else class="p-6 overflow-auto">
@@ -50,50 +52,50 @@ function statusBadgeClass(status: string): string {
             class="px-3 py-1 text-sm border rounded hover:bg-gray-100 disabled:opacity-50"
             @click="store.refreshSelected()"
           >
-            {{ store.isRefreshing ? "Refreshing..." : "Refresh" }}
+            {{ store.isRefreshing ? t("common.refreshing") : t("common.refresh") }}
           </button>
           <button
             class="px-3 py-1 text-sm border rounded hover:bg-gray-100"
             @click="emit('openCredentialModal')"
           >
-            Credentials
+            {{ t("machineDetail.credentials") }}
           </button>
           <button
             class="px-3 py-1 text-sm border rounded hover:bg-gray-100"
             @click="emit('openEnvVarModal')"
           >
-            Env vars
+            {{ t("machineDetail.envVars") }}
           </button>
           <button
             class="px-3 py-1 text-sm border rounded hover:bg-gray-100"
             @click="emit('openIniEditModal')"
           >
-            Edit INI
+            {{ t("machineDetail.editIni") }}
           </button>
         </div>
       </header>
 
       <section class="mt-4">
-        <h3 class="font-medium mb-2">Basics</h3>
+        <h3 class="font-medium mb-2">{{ t("machineDetail.basics") }}</h3>
         <table class="text-sm w-full">
           <tbody>
-            <tr><td class="py-1 text-gray-500 w-32">Role</td><td>{{ store.selectedDetail.machine.role }}</td></tr>
-            <tr><td class="py-1 text-gray-500">Status</td><td>{{ store.selectedDetail.machine.status }}</td></tr>
-            <tr><td class="py-1 text-gray-500">Last seen</td><td>{{ store.selectedDetail.machine.last_seen_at ?? "—" }}</td></tr>
+            <tr><td class="py-1 text-gray-500 w-32">{{ t("machineDetail.role") }}</td><td>{{ store.selectedDetail.machine.role }}</td></tr>
+            <tr><td class="py-1 text-gray-500">{{ t("machineDetail.status") }}</td><td>{{ store.selectedDetail.machine.status }}</td></tr>
+            <tr><td class="py-1 text-gray-500">{{ t("machineDetail.lastSeen") }}</td><td>{{ store.selectedDetail.machine.last_seen_at ?? "—" }}</td></tr>
           </tbody>
         </table>
       </section>
 
       <section class="mt-6">
-        <h3 class="font-medium mb-2">UE installs</h3>
+        <h3 class="font-medium mb-2">{{ t("machineDetail.ueInstalls") }}</h3>
         <p v-if="store.selectedDetail.ue_installs.length === 0" class="text-sm text-gray-500">
-          No UE installs detected. Click Refresh to scan.
+          {{ t("machineDetail.noUeInstalls") }}
         </p>
         <table v-else class="text-sm w-full border">
           <thead class="bg-gray-50">
             <tr>
-              <th class="text-left px-3 py-1">Version</th>
-              <th class="text-left px-3 py-1">Install path</th>
+              <th class="text-left px-3 py-1">{{ t("machineDetail.headerVersion") }}</th>
+              <th class="text-left px-3 py-1">{{ t("machineDetail.headerInstallPath") }}</th>
             </tr>
           </thead>
           <tbody>
@@ -110,16 +112,16 @@ function statusBadgeClass(status: string): string {
       </section>
 
       <section class="mt-6">
-        <h3 class="font-medium mb-2">GPUs</h3>
+        <h3 class="font-medium mb-2">{{ t("machineDetail.gpus") }}</h3>
         <p v-if="store.selectedDetail.gpus.length === 0" class="text-sm text-gray-500">
-          No GPU info. Click Refresh to scan.
+          {{ t("machineDetail.noGpus") }}
         </p>
         <table v-else class="text-sm w-full border">
           <thead class="bg-gray-50">
             <tr>
-              <th class="text-left px-3 py-1">Model</th>
-              <th class="text-left px-3 py-1">Driver</th>
-              <th class="text-left px-3 py-1">VRAM</th>
+              <th class="text-left px-3 py-1">{{ t("machineDetail.headerModel") }}</th>
+              <th class="text-left px-3 py-1">{{ t("machineDetail.headerDriver") }}</th>
+              <th class="text-left px-3 py-1">{{ t("machineDetail.headerVram") }}</th>
             </tr>
           </thead>
           <tbody>
@@ -137,7 +139,7 @@ function statusBadgeClass(status: string): string {
       </section>
 
       <section v-if="store.refreshError" class="mt-4 text-sm text-red-600">
-        Refresh failed: {{ store.refreshError }}
+        {{ t("machineDetail.refreshFailed", { message: store.refreshError }) }}
       </section>
     </div>
   </div>
