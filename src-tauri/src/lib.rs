@@ -65,6 +65,9 @@ pub fn run() {
             commands::shares::list_shares,
             commands::shares::delete_share,
             commands::system::test_powershell_bridge,
+            commands::health_check::run_health_check,
+            commands::health_check::list_recent_health_runs,
+            commands::health_check::list_health_results_for_run,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
