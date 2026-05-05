@@ -2,6 +2,8 @@ pub mod batch;
 pub mod credentials;
 pub mod discovery;
 pub mod env_vars;
+pub mod health_check;
+pub mod health_probes;
 pub mod ini_apply;
 pub mod ini_diagnostics;
 pub mod ini_editor;
