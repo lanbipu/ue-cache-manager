@@ -29,6 +29,12 @@ pub fn run(
         "-ExpectedSharedDataCachePath".into(), expected_shared_path.into(),
     ];
     if loopback::is_loopback_target(host) {
+        // Loopback runs the probe scriptblock inside the current PowerShell
+        // process — switching to an admin token mid-process is not safe, so
+        // any explicit credential is intentionally dropped here. SYSTEM-context
+        // probes (PsExec -s) still succeed when UECM itself was launched
+        // elevated. See docs/.../uecm-plan-4-followup-scan-ux.md for an
+        // out-of-process elevation path.
         let _ = cred;
         args.push("-Local".into());
     } else if let Some((u, p)) = cred {

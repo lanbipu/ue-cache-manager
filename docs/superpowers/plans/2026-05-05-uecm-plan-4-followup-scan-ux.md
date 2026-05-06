@@ -56,3 +56,21 @@
 - 14 文件 INI scan ≤ 10 秒（成功路径）。
 - 中途取消 ≤ 1 秒。
 - 失败 file 立刻在进度条上标红，不会拖到全部 timeout。
+
+## 4. Loopback 路径 admin elevation（中等工作量，~1 天）
+
+发现于 2026-05-06 Codex review 后续清理（commit `9c999b8` 留的 P2 flag）。
+
+`core::health_probes::run` 命中 loopback 时直接走 `-Local` 模式，把 caller 提供的 admin credential explicit drop 掉。原因是同进程内安全切换 token 不可靠，但带来的副作用是：UECM 以普通 user token 启动时，即使 wizard 选了 admin cred，依赖 `PsExec -s`/SYSTEM 视角的 probe（`Probe-CredSystem`、`Probe-SystemWrite`）仍跑在 medium IL 下，结果就是 lanPC 普通模式跑出来的 `cred_system` / `system_write` 永远偏向 warning/critical。
+
+**改动思路：**
+- `health-probes.ps1` `-Local` 分支接受 `-Username`/`-Password`，存在时用 `Start-Process -Credential -Verb RunAs` 启动一个 elevated PowerShell child，让它跑 scriptblock 并把 JSON 写到临时文件，父进程读回后清理。
+- `core::health_probes::run` 在 loopback + cred 都有的情况下，把 cred 透传给 ps-script，不再 drop。
+- `core::ini_scanner` 的 loopback bypass 同问题：`std::fs::read_to_string` 用当前 token，admin-only path（如 `C:\ProgramData\Epic\UnrealEngineLauncher`）读不到。同样用 elevated child process 的话需要 ini_scanner 也走 ps-script `-Local` 模式而不是 std::fs，这个改造更大。
+
+**约束：**
+- `Start-Process -Verb RunAs` 会触发 UAC 弹窗。要么 wizard 提示用户接受，要么仅在已经是 admin token 时才走这条路。
+- elevated child 写临时文件的位置要选 user 都能读的地方（`$env:TEMP` 通常 OK）。
+- 取消逻辑要能 kill child process，不能挂在 `Start-Process` 上。
+
+**收益：** loopback + admin cred 真的能产生 admin probe 结果，UECM 普通模式下也能正确 verify SYSTEM-level credential / NTFS ACL。当前是无法绕开的盲区。

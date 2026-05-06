@@ -23,7 +23,8 @@ function Build-CredentialOrNull {
     if ([string]::IsNullOrEmpty($User) -or [string]::IsNullOrEmpty($Pass)) { return $null }
     $User = $User.Trim()
     if ([string]::IsNullOrEmpty($User)) { return $null }
-    if ($User.StartsWith(".\") -or $User.StartsWith("./")) { $User = $User.Substring(2) }
+    if ($User.StartsWith("./")) { $User = ".\" + $User.Substring(2) }
+    elseif ($User -notmatch '[\\@]') { $User = ".\$User" }
     $secure = ConvertTo-SecureString -String $Pass -AsPlainText -Force
     return New-Object System.Management.Automation.PSCredential($User, $secure)
 }

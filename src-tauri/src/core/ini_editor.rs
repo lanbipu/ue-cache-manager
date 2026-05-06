@@ -188,7 +188,7 @@ fn read_section_local(file_path: &str, section: &str) -> UecmResult<Vec<IniKey>>
 
     for line in contents.lines() {
         let trim = line.trim();
-        if trim == section_marker {
+        if trim.eq_ignore_ascii_case(&section_marker) {
             in_section = true;
             continue;
         }
@@ -233,7 +233,7 @@ fn write_key_local(
 
     for line in contents.lines() {
         let trim = line.trim();
-        if trim == section_marker {
+        if trim.eq_ignore_ascii_case(&section_marker) {
             in_section = true;
             section_seen = true;
             out.push(line.to_string());
@@ -381,6 +381,37 @@ mod tests {
         let updated = std::fs::read_to_string(&path).unwrap();
         assert!(updated.contains("Path=New"));
         assert!(std::path::Path::new(&backup).exists());
+    }
+
+    #[test]
+    fn read_section_local_is_case_insensitive() {
+        // The file uses [DDC] but caller asks for "ddc" — should still match,
+        // matching the remote PowerShell path's case-insensitive comparison.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("DefaultEngine.ini");
+        std::fs::write(&path, "[DDC]\nPath=Old\nSize=1024\n").unwrap();
+
+        let keys = read_section_local(path.to_str().unwrap(), "ddc").unwrap();
+        assert!(keys.iter().any(|k| k.name == "Path" && k.value == "Old"));
+        assert!(keys.iter().any(|k| k.name == "Size" && k.value == "1024"));
+    }
+
+    #[test]
+    fn set_key_with_credential_section_match_is_case_insensitive() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("DefaultEngine.ini");
+        std::fs::write(&path, "[DDC]\nPath=Old\n").unwrap();
+
+        set_key_with_credential(
+            "localhost", &path.to_string_lossy(),
+            "ddc", "Path", "New",
+            "ignored", "ignored",
+        ).unwrap();
+
+        let updated = std::fs::read_to_string(&path).unwrap();
+        assert!(updated.contains("[DDC]"), "original section header preserved");
+        assert!(updated.contains("Path=New"));
+        assert!(!updated.contains("Path=Old"));
     }
 
     #[test]
