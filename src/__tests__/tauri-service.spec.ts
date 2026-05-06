@@ -116,6 +116,19 @@ describe("tauri service", () => {
     });
   });
 
+  it("listPsoCacheFiles passes optional filters", async () => {
+    mockInvoke.mockResolvedValue([]);
+    await tauriApi.listPsoCacheFiles(7, {
+      sourceMachineId: 2,
+      gpuSignature: " NVIDIA:RTX 3080 :535.98 ",
+    });
+    expect(mockInvoke).toHaveBeenCalledWith("list_pso_cache_files", {
+      projectId: 7,
+      sourceMachineId: 2,
+      gpuSignature: " NVIDIA:RTX 3080 :535.98 ",
+    });
+  });
+
   it("verifyPsoPrecaching wraps scanner request", async () => {
     mockInvoke.mockResolvedValue({ scan_run_id: 11, summary: {}, findings: [] });
     await tauriApi.verifyPsoPrecaching({

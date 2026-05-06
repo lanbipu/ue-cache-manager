@@ -366,7 +366,7 @@ pub async fn cancel_ue_job(
 }
 
 #[tauri::command]
-pub fn verify_pak_output(
+pub async fn verify_pak_output(
     db: State<'_, Db>,
     machine_id: i64,
     project_id: i64,
@@ -382,12 +382,18 @@ pub fn verify_pak_output(
             ))
         })?;
     let (op_user, op_pass) = resolve_operator_creds(&db, operator_credential_alias.as_deref())?;
-    ddc_pak::verify_output(
-        &machine.ip,
-        &location.abs_path,
-        op_user.as_deref(),
-        op_pass.as_deref(),
-    )
+    let host = machine.ip;
+    let project_dir = location.abs_path;
+    tokio::task::spawn_blocking(move || {
+        ddc_pak::verify_output(
+            &host,
+            &project_dir,
+            op_user.as_deref(),
+            op_pass.as_deref(),
+        )
+    })
+    .await
+    .map_err(|err| UecmError::OperationFailed(format!("verify_pak_output task failed: {err}")))?
 }
 
 #[tauri::command]
@@ -448,7 +454,14 @@ pub async fn distribute_ddc_pak(
         })?;
     }
 
-    let operation_id = operations::start(&db, "ddc_pak.distribute", &target_machine_ids)?;
+    let mut operation_machines = Vec::with_capacity(target_machine_ids.len() + 1);
+    operation_machines.push(source_machine_id);
+    for machine_id in target_machine_ids.iter().copied() {
+        if !operation_machines.contains(&machine_id) {
+            operation_machines.push(machine_id);
+        }
+    }
+    let operation_id = operations::start(&db, "ddc_pak.distribute", &operation_machines)?;
     let job_id = format!("ddc-pak-dist-{}-{}", source_machine_id, now_millis());
     let plan_for_task = Arc::new(plan.clone());
     let db_for_task: Db = (*db).clone();

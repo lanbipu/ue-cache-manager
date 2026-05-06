@@ -26,4 +26,14 @@ describe("ProjectMatchingModal", () => {
     });
     expect(wrapper.find("[data-project-matching-modal]").exists()).toBe(true);
   });
+
+  it("does not create a project before required mapping fields are present", async () => {
+    const wrapper = mount(ProjectMatchingModal, {
+      props: { open: true, projects: [], machines: [] },
+    });
+    await wrapper.find("input[placeholder='Demo.uproject']").setValue("Demo.uproject");
+    await wrapper.find("[data-save-project-mapping]").trigger("click");
+    expect(mockApi.createProjectManual).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain("Complete machine and path fields");
+  });
 });

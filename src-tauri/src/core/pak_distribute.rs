@@ -93,7 +93,7 @@ pub fn plan(
     }
 
     let source_unc = if let Some(unc) = named_share_unc {
-        format!("{}\\{}", unc.trim_end_matches('\\'), profile.source_subdir)
+        append_source_subdir_once(unc, &profile.source_subdir)
     } else {
         admin_share_unc(source_host, &source_location.abs_path, &profile.source_subdir)?
     };
@@ -117,11 +117,7 @@ pub fn plan(
             target_machine_id: *target_id,
             target_host: target.ip,
             source_unc: source_unc.clone(),
-            target_local: format!(
-                "{}\\{}",
-                location.abs_path.trim_end_matches('\\'),
-                profile.source_subdir
-            ),
+            target_local: append_source_subdir_once(&location.abs_path, &profile.source_subdir),
             file_name: None,
             credential_user: credential_user.clone(),
             credential_pass: credential_pass.clone(),
@@ -145,13 +141,35 @@ fn admin_share_unc(source_host: &str, abs_path: &str, source_subdir: &str) -> Ue
         )));
     }
     let rest = &normalized[2..];
-    Ok(format!(
-        "\\\\{}\\{}$\\{}\\{}",
-        source_host,
-        drive,
-        rest.trim_start_matches('\\'),
-        source_subdir
-    ))
+    let base_unc = format!("\\\\{}\\{}$\\{}", source_host, drive, rest.trim_start_matches('\\'));
+    Ok(append_source_subdir_once(&base_unc, source_subdir))
+}
+
+fn append_source_subdir_once(base_path: &str, source_subdir: &str) -> String {
+    let base = base_path.trim_end_matches(['\\', '/']);
+    let subdir = source_subdir.trim_matches(['\\', '/']).replace('/', "\\");
+    if subdir.is_empty() || path_ends_with_segments(base, &subdir) {
+        return base.to_string();
+    }
+    format!("{}\\{}", base, subdir)
+}
+
+fn path_ends_with_segments(path: &str, suffix: &str) -> bool {
+    let path_segments: Vec<_> = path
+        .split(['\\', '/'])
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let suffix_segments: Vec<_> = suffix
+        .split(['\\', '/'])
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    if suffix_segments.is_empty() || suffix_segments.len() > path_segments.len() {
+        return false;
+    }
+    path_segments[path_segments.len() - suffix_segments.len()..]
+        .iter()
+        .zip(suffix_segments.iter())
+        .all(|(left, right)| left.eq_ignore_ascii_case(right))
 }
 
 fn build_distribute_args(
@@ -453,5 +471,48 @@ mod tests {
         )
         .unwrap();
         assert_eq!(items[0].source_unc, "\\\\HOST\\DDC\\DerivedDataCache");
+    }
+
+    #[test]
+    fn plan_does_not_duplicate_named_share_suffix() {
+        let (db, source, target, project_id) = setup();
+        project_locations::upsert(
+            &db,
+            &ProjectLocation {
+                id: None,
+                project_id,
+                machine_id: target,
+                abs_path: "E:\\Y\\DerivedDataCache".into(),
+                uproject_path: "E:\\Y\\X.uproject".into(),
+                discovery_status: crate::data::DiscoveryStatus::Auto,
+                discovered_at: None,
+            },
+        )
+        .unwrap();
+        let items = plan(
+            &DistributeProfile::ddc_pak(),
+            &db,
+            source,
+            "1.1.1.1",
+            &source_loc(project_id, source),
+            &[target],
+            project_id,
+            Some("\\\\HOST\\DDC\\DerivedDataCache"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(items[0].source_unc, "\\\\HOST\\DDC\\DerivedDataCache");
+        assert_eq!(items[0].target_local, "E:\\Y\\DerivedDataCache");
+    }
+
+    #[test]
+    fn pso_profile_does_not_duplicate_nested_suffix() {
+        assert_eq!(
+            append_source_subdir_once("\\\\HOST\\PSO\\Saved\\CollectedPSOs", "Saved\\CollectedPSOs"),
+            "\\\\HOST\\PSO\\Saved\\CollectedPSOs"
+        );
     }
 }

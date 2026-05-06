@@ -45,4 +45,20 @@ describe("PSOCache view", () => {
     await wrapper.find("[data-pso-collect-btn]").trigger("click");
     expect(wrapper.find("[data-pso-collect-wizard]").exists()).toBe(true);
   });
+
+  it("auto-selects the only project and loads its files", async () => {
+    mockApi.listProjects.mockResolvedValue([
+      {
+        id: 42,
+        uproject_name: "Demo.uproject",
+        display_name: null,
+        uproject_guid: null,
+        location_count: 1,
+      },
+    ]);
+    const wrapper = mount(PSOCache);
+    await flushPromises();
+    expect((wrapper.find("[data-pso-project-select]").element as HTMLSelectElement).value).toBe("42");
+    expect(mockApi.listPsoCacheFiles).toHaveBeenCalledWith(42);
+  });
 });

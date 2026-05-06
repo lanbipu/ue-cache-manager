@@ -50,10 +50,12 @@ try {
 
             $stdoutPath = Join-Path -Path $env:TEMP -ChildPath "robocopy-pso-stdout-$PID.log"
             $stderrPath = Join-Path -Path $env:TEMP -ChildPath "robocopy-pso-stderr-$PID.log"
-            $args = @(
+            $roboArgs = @(
                 "$SourceUnc",
                 "$TargetLocal",
                 "$FileName",
+                '/Z',
+                '/MT:8',
                 '/R:3',
                 '/W:5',
                 '/NP',
@@ -62,7 +64,7 @@ try {
                 '/NJS',
                 '/BYTES'
             )
-            $proc = Start-Process -FilePath 'robocopy.exe' -ArgumentList $args -PassThru -Wait -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+            $proc = Start-Process -FilePath 'robocopy.exe' -ArgumentList $roboArgs -PassThru -Wait -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
             $code = $proc.ExitCode
             $stdout = Get-Content -LiteralPath $stdoutPath -Raw -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $stdoutPath -ErrorAction SilentlyContinue

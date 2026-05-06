@@ -69,7 +69,7 @@ export const usePsoStore = defineStore("pso", () => {
       },
     );
     unlistenDistribute = await listen<PakDistributeProgressPayload>(
-      "pak-distribute-progress",
+      "pso-distribute-progress",
       (event) => {
         onDistributeEvent(event.payload);
       },

@@ -26,6 +26,7 @@ const selectedProjectId = ref<number | null>(null);
 
 onMounted(async () => {
   await Promise.all([machines.loadMachines(), projects.load(), pso.attach()]);
+  selectOnlyProjectWhenEmpty();
 });
 
 onUnmounted(() => {
@@ -35,6 +36,12 @@ onUnmounted(() => {
 watch(selectedProjectId, async (projectId) => {
   if (projectId != null) await pso.loadFiles(projectId);
 });
+watch(
+  () => projects.projects.length,
+  () => {
+    selectOnlyProjectWhenEmpty();
+  },
+);
 
 const files = computed(() =>
   selectedProjectId.value != null
@@ -54,6 +61,11 @@ function machineLabel(id: number) {
 
 function projectLabel(id: number) {
   return projects.projects.find((project) => project.id === id)?.uproject_name ?? `project#${id}`;
+}
+
+function selectOnlyProjectWhenEmpty() {
+  if (selectedProjectId.value != null || projects.projects.length !== 1) return;
+  selectedProjectId.value = projects.projects[0].id;
 }
 
 async function cancel(jobId: string) {

@@ -28,6 +28,10 @@ const error = ref<string | null>(null);
 
 async function save() {
   error.value = null;
+  if (!selectedMachineId.value || !absPath.value.trim() || !uprojectPath.value.trim()) {
+    error.value = "Complete machine and path fields";
+    return;
+  }
   let projectId = selectedProjectId.value;
   if (!projectId) {
     if (!uprojectName.value.trim()) {
@@ -35,10 +39,6 @@ async function save() {
       return;
     }
     projectId = await store.createManual(uprojectName.value.trim(), displayName.value.trim() || null);
-  }
-  if (!selectedMachineId.value || !absPath.value.trim() || !uprojectPath.value.trim()) {
-    error.value = "Complete machine and path fields";
-    return;
   }
   await store.setLocation(
     projectId,

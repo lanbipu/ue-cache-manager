@@ -287,6 +287,6 @@ mod tests {
         .unwrap();
         assert_eq!(ids.len(), 1);
         let files = pso_cache_files::list_by_project(&db, project_id).unwrap();
-        assert_eq!(files[0].gpu_signature, "nvidia:RTX 4090:551.86");
+        assert_eq!(files[0].gpu_signature, "nvidia:rtx 4090:551.86");
     }
 }

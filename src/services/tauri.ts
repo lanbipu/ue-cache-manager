@@ -769,8 +769,15 @@ export const tauriApi = {
       operatorCredentialAlias: args.operatorCredentialAlias,
     });
   },
-  async listPsoCacheFiles(projectId: number): Promise<PsoCacheFile[]> {
-    return invoke<PsoCacheFile[]>("list_pso_cache_files", { projectId });
+  async listPsoCacheFiles(
+    projectId: number,
+    filters?: { sourceMachineId?: number | null; gpuSignature?: string | null },
+  ): Promise<PsoCacheFile[]> {
+    return invoke<PsoCacheFile[]>("list_pso_cache_files", {
+      projectId,
+      sourceMachineId: filters?.sourceMachineId ?? null,
+      gpuSignature: filters?.gpuSignature ?? null,
+    });
   },
   async distributePsoCache(args: {
     fileId: number;

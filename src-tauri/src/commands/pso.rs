@@ -249,8 +249,32 @@ pub async fn start_pso_collection(
 }
 
 #[tauri::command]
-pub fn list_pso_cache_files(db: State<'_, Db>, project_id: i64) -> UecmResult<Vec<PsoCacheFile>> {
-    pso_cache_files::list_by_project(&db, project_id)
+pub fn list_pso_cache_files(
+    db: State<'_, Db>,
+    project_id: i64,
+    source_machine_id: Option<i64>,
+    gpu_signature: Option<String>,
+) -> UecmResult<Vec<PsoCacheFile>> {
+    let normalized_filter = gpu_signature
+        .as_deref()
+        .map(crate::core::gpu_consistency::normalize_signature_string);
+    Ok(pso_cache_files::list_by_project(&db, project_id)?
+        .into_iter()
+        .filter(|file| {
+            source_machine_id
+                .map(|machine_id| file.source_machine_id == machine_id)
+                .unwrap_or(true)
+        })
+        .filter(|file| {
+            normalized_filter
+                .as_ref()
+                .map(|filter| {
+                    crate::core::gpu_consistency::normalize_signature_string(&file.gpu_signature)
+                        == *filter
+                })
+                .unwrap_or(true)
+        })
+        .collect())
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -293,7 +317,9 @@ pub async fn distribute_pso_cache(
                     target_id
                 )));
             };
-            if signature.as_string() != file.gpu_signature {
+            if crate::core::gpu_consistency::normalize_signature_string(&signature.as_string())
+                != crate::core::gpu_consistency::normalize_signature_string(&file.gpu_signature)
+            {
                 return Err(UecmError::InvalidInput(format!(
                     "target machine {} GPU signature {} does not match file signature {}",
                     target_id,
@@ -412,7 +438,7 @@ pub async fn distribute_pso_cache(
                 event: batch::BatchEvent,
             }
             let _ = app_for_task.emit(
-                "pak-distribute-progress",
+                "pso-distribute-progress",
                 Payload {
                     job_id: &job_id_for_task,
                     project_id,
