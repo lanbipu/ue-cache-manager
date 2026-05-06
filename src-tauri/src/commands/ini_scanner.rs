@@ -161,7 +161,6 @@ fn scan_inis_summary(
         }
     }
 
-    let total_findings = total_critical + total_warning + total_healthy;
     let mut summary = json!({
         "critical": total_critical,
         "warning": total_warning,

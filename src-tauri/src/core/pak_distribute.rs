@@ -270,7 +270,7 @@ pub async fn run_one_with_profile(
 }
 
 fn run_local_robocopy(
-    profile: &DistributeProfile,
+    _profile: &DistributeProfile,
     item: &DistributePlanItem,
     preflight: bool,
 ) -> UecmResult<DistributeOutcome> {
@@ -279,7 +279,7 @@ fn run_local_robocopy(
         let mut args = vec![
             item.source_unc.as_str(),
             item.target_local.as_str(),
-            item.file_name.as_deref().unwrap_or(profile.file_glob.as_str()),
+            item.file_name.as_deref().unwrap_or(_profile.file_glob.as_str()),
             "/E",
             "/R:3",
             "/W:5",
