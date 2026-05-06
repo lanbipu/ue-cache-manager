@@ -183,7 +183,7 @@ pub async fn start_pso_collection(
                             ue_version_for_task.as_deref(),
                             &files,
                         ) {
-                            Ok(()) => {
+                            Ok(_) => {
                                 let _ = app_for_task.emit(
                                     "pso-collect-finalized",
                                     FinalizedPayload {

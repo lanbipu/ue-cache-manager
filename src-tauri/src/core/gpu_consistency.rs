@@ -180,7 +180,7 @@ mod tests {
         seed(&db, "C", "3.3.3.3", "RTX 4090", "560.00");
 
         let matrix = build_matrix(&db).unwrap();
-        assert_eq!(matrix.baseline.unwrap().model, "RTX 3080");
+        assert_eq!(matrix.baseline.unwrap().model, "rtx 3080");
         assert_eq!(
             matrix
                 .cells

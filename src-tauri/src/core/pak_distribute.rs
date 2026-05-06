@@ -173,7 +173,7 @@ fn path_ends_with_segments(path: &str, suffix: &str) -> bool {
 }
 
 fn build_distribute_args(
-    profile: &DistributeProfile,
+    _profile: &DistributeProfile,
     item: &DistributePlanItem,
     preflight: bool,
 ) -> Vec<String> {

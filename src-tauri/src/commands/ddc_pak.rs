@@ -20,11 +20,11 @@ pub struct UeJobRegistry {
 }
 
 impl UeJobRegistry {
-    async fn insert(&self, job_id: &str, cancel: Arc<Mutex<RunnerCancel>>) {
+    pub(crate) async fn insert(&self, job_id: &str, cancel: Arc<Mutex<RunnerCancel>>) {
         self.jobs.lock().await.insert(job_id.to_string(), cancel);
     }
 
-    async fn remove(&self, job_id: &str) {
+    pub(crate) async fn remove(&self, job_id: &str) {
         self.jobs.lock().await.remove(job_id);
     }
 
