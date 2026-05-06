@@ -136,6 +136,57 @@ const MIGRATIONS: &[(&str, &str)] = &[
             ON health_check_runs(scan_run_id, machine_id);
         "#,
     ),
+    (
+        "008_operations_table",
+        r#"
+        CREATE TABLE IF NOT EXISTS operations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            action_type TEXT NOT NULL,
+            target_machines TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'pending',
+            started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            finished_at TEXT,
+            log_text TEXT,
+            snapshot_blob BLOB
+        );
+        CREATE INDEX IF NOT EXISTS idx_operations_action_type ON operations(action_type);
+        CREATE INDEX IF NOT EXISTS idx_operations_status ON operations(status);
+        "#,
+    ),
+    (
+        "009_projects_table",
+        r#"
+        CREATE TABLE IF NOT EXISTS projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uproject_name TEXT NOT NULL,
+            uproject_stem_lower TEXT NOT NULL UNIQUE,
+            uproject_guid TEXT,
+            display_name TEXT,
+            first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_projects_stem ON projects(uproject_stem_lower);
+        "#,
+    ),
+    (
+        "010_project_locations_table",
+        r#"
+        CREATE TABLE IF NOT EXISTS project_locations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            machine_id INTEGER NOT NULL,
+            abs_path TEXT NOT NULL,
+            uproject_path TEXT NOT NULL,
+            discovery_status TEXT NOT NULL DEFAULT 'auto',
+            discovered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(project_id, machine_id),
+            FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+            FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_project_locations_project ON project_locations(project_id);
+        CREATE INDEX IF NOT EXISTS idx_project_locations_machine ON project_locations(machine_id);
+        "#,
+    ),
 ];
 
 pub fn migrate(conn: &mut Connection) -> UecmResult<()> {

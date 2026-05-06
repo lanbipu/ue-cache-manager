@@ -1,5 +1,6 @@
 pub mod batch;
 pub mod credentials;
+pub mod ddc_pak;
 pub mod discovery;
 pub mod env_vars;
 pub mod health_check;
@@ -10,7 +11,11 @@ pub mod ini_editor;
 pub mod ini_scanner;
 pub mod loopback;
 pub mod network;
+pub mod pak_distribute;
 pub mod powershell;
+pub mod project_discovery;
+pub mod project_identity;
 pub mod psexec;
 pub mod shares;
+pub mod ue_runner;
 pub mod winrm;

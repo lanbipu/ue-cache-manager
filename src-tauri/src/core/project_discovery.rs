@@ -1,0 +1,180 @@
+//! Project discovery through the `discover-uprojects.ps1` sidecar.
+
+use crate::core::powershell;
+use crate::core::project_identity::{stem_lower, DiscoveredUproject};
+use crate::data::{
+    project_locations::{self, DiscoveryStatus, ProjectLocation},
+    projects::{self, Project},
+    Db,
+};
+use crate::error::{UecmError, UecmResult};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Deserialize)]
+struct DiscoveryItemRaw {
+    uproject_filename: String,
+    uproject_path: String,
+    abs_path: String,
+    engine_association: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscoveryScriptResult {
+    ok: bool,
+    items: Vec<DiscoveryItemRaw>,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiscoveryResult {
+    pub project_id: i64,
+    pub location_id: i64,
+    pub uproject_filename: String,
+    pub abs_path: String,
+}
+
+pub fn run_discovery(
+    db: &Db,
+    machine_id: i64,
+    host: &str,
+    search_roots: &[String],
+    operator_user: Option<&str>,
+    operator_pass: Option<&str>,
+) -> UecmResult<Vec<DiscoveryResult>> {
+    if search_roots.is_empty() {
+        return Err(UecmError::InvalidInput("search_roots is empty".into()));
+    }
+
+    let roots_csv = search_roots.join(",");
+    let mut args = vec![
+        "-HostName".to_string(),
+        host.to_string(),
+        "-SearchRoots".to_string(),
+        roots_csv,
+    ];
+    if let (Some(user), Some(pass)) = (operator_user, operator_pass) {
+        args.push("-Username".into());
+        args.push(user.into());
+        args.push("-Password".into());
+        args.push(pass.into());
+    }
+    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
+    let result: DiscoveryScriptResult = powershell::run_json(
+        &powershell::script_path("discover-uprojects.ps1"),
+        &args_ref,
+    )?;
+
+    if !result.ok {
+        return Err(UecmError::OperationFailed(
+            result.message.unwrap_or_else(|| "project discovery failed".into()),
+        ));
+    }
+
+    persist_discovered(db, machine_id, result.items)
+}
+
+fn persist_discovered(
+    db: &Db,
+    machine_id: i64,
+    items: Vec<DiscoveryItemRaw>,
+) -> UecmResult<Vec<DiscoveryResult>> {
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let stem = stem_lower(&item.uproject_filename);
+        let project_id = projects::upsert(
+            db,
+            &Project {
+                id: None,
+                uproject_name: item.uproject_filename.clone(),
+                uproject_stem_lower: stem,
+                uproject_guid: item.engine_association.clone(),
+                display_name: None,
+                first_seen_at: None,
+                last_seen_at: None,
+            },
+        )?;
+        let location_id = project_locations::upsert(
+            db,
+            &ProjectLocation {
+                id: None,
+                project_id,
+                machine_id,
+                abs_path: item.abs_path.clone(),
+                uproject_path: item.uproject_path.clone(),
+                discovery_status: DiscoveryStatus::Auto,
+                discovered_at: None,
+            },
+        )?;
+        out.push(DiscoveryResult {
+            project_id,
+            location_id,
+            uproject_filename: item.uproject_filename,
+            abs_path: item.abs_path,
+        });
+    }
+    Ok(out)
+}
+
+pub fn to_discovered(machine_id: i64, items: &[DiscoveryResult]) -> Vec<DiscoveredUproject> {
+    items
+        .iter()
+        .map(|item| DiscoveredUproject {
+            machine_id,
+            abs_path: item.abs_path.clone(),
+            uproject_path: format!("{}\\{}", item.abs_path, item.uproject_filename),
+            uproject_filename: item.uproject_filename.clone(),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::{machines, open_in_memory, schema, Machine};
+
+    fn setup() -> (Db, i64) {
+        let db = open_in_memory().unwrap();
+        {
+            let mut conn = db.lock().unwrap();
+            schema::migrate(&mut conn).unwrap();
+        }
+        let machine_id = machines::insert(&db, &Machine::new("RENDER-01", "1.1.1.1")).unwrap();
+        (db, machine_id)
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn run_discovery_returns_powershell_error_on_non_windows() {
+        let (db, machine_id) = setup();
+        let result = run_discovery(
+            &db,
+            machine_id,
+            "RENDER-01",
+            &["D:\\Work".into()],
+            Some("user"),
+            Some("pass"),
+        );
+        assert!(matches!(result, Err(UecmError::PowerShell(_))));
+    }
+
+    #[test]
+    fn empty_search_roots_returns_invalid_input() {
+        let (db, machine_id) = setup();
+        let result = run_discovery(&db, machine_id, "RENDER-01", &[], None, None);
+        assert!(matches!(result, Err(UecmError::InvalidInput(_))));
+    }
+
+    #[test]
+    fn to_discovered_preserves_identity_fields() {
+        let items = vec![DiscoveryResult {
+            project_id: 1,
+            location_id: 2,
+            uproject_filename: "Demo.uproject".into(),
+            abs_path: "D:\\Demo".into(),
+        }];
+        let out = to_discovered(7, &items);
+        assert_eq!(out[0].machine_id, 7);
+        assert_eq!(out[0].uproject_path, "D:\\Demo\\Demo.uproject");
+    }
+}
