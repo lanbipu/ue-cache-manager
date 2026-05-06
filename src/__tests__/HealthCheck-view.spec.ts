@@ -1,25 +1,22 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPinia, setActivePinia } from "pinia";
 import { mount } from "@vue/test-utils";
-import { setActivePinia, createPinia } from "pinia";
+import HealthCheck from "@/views/HealthCheck.vue";
 
-const { mockApi } = vi.hoisted(() => ({
-  mockApi: {
+vi.mock("@/services/tauri", () => ({
+  tauriApi: {
     listMachines: vi.fn(async () => []),
-    listCredentials: vi.fn(async () => []),
-    listHealthResultsForRun: vi.fn(async () => []),
+    getGpuConsistencyMatrix: vi.fn(async () => ({ signatures: [], baseline: null, cells: [] })),
   },
 }));
 
-vi.mock("@/services/tauri", () => ({
-  tauriApi: mockApi,
-}));
-
-import HealthCheck from "@/views/HealthCheck.vue";
-
 describe("HealthCheck view", () => {
-  beforeEach(() => { setActivePinia(createPinia()); });
-  it("renders empty state with run button", () => {
-    const w = mount(HealthCheck);
-    expect(w.find("[data-open-health-wizard-btn]").exists()).toBe(true);
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  it("renders full check action", () => {
+    const wrapper = mount(HealthCheck);
+    expect(wrapper.find("[data-open-health-wizard-btn]").exists()).toBe(true);
   });
 });

@@ -187,6 +187,46 @@ const MIGRATIONS: &[(&str, &str)] = &[
         CREATE INDEX IF NOT EXISTS idx_project_locations_machine ON project_locations(machine_id);
         "#,
     ),
+    (
+        "011_pso_cache_files_table",
+        r#"
+        CREATE TABLE IF NOT EXISTS pso_cache_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            source_machine_id INTEGER NOT NULL,
+            file_path TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL DEFAULT 0,
+            gpu_signature TEXT NOT NULL,
+            ue_version TEXT,
+            collected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(project_id, source_machine_id, file_name),
+            FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+            FOREIGN KEY (source_machine_id) REFERENCES machines(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_pso_cache_files_project ON pso_cache_files(project_id);
+        CREATE INDEX IF NOT EXISTS idx_pso_cache_files_signature ON pso_cache_files(gpu_signature);
+        "#,
+    ),
+    (
+        "012_pso_distributions_table",
+        r#"
+        CREATE TABLE IF NOT EXISTS pso_distributions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pso_cache_file_id INTEGER NOT NULL,
+            target_machine_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            bytes_copied INTEGER NOT NULL DEFAULT 0,
+            distributed_at TEXT,
+            error_message TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(pso_cache_file_id, target_machine_id),
+            FOREIGN KEY (pso_cache_file_id) REFERENCES pso_cache_files(id) ON DELETE CASCADE,
+            FOREIGN KEY (target_machine_id) REFERENCES machines(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_pso_distributions_file ON pso_distributions(pso_cache_file_id);
+        "#,
+    ),
 ];
 
 pub fn migrate(conn: &mut Connection) -> UecmResult<()> {

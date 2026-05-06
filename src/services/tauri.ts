@@ -208,6 +208,73 @@ export interface PakDistributeProgressPayload {
   event: BatchEvent;
 }
 
+export interface PsoCacheFile {
+  id: number | null;
+  project_id: number;
+  source_machine_id: number;
+  file_path: string;
+  file_name: string;
+  size_bytes: number;
+  gpu_signature: string;
+  ue_version: string | null;
+  collected_at: string | null;
+}
+
+export interface PsoCollectJobResponse {
+  job_id: string;
+  source_machine_id: number;
+  project_id: number;
+}
+
+export interface PsoDistributePlanItem {
+  target_machine_id: number;
+  target_host: string;
+  source_unc: string;
+  target_local: string;
+  file_name: string;
+  credential_user: string | null;
+  source_smb_user: string | null;
+}
+
+export interface PsoDistributeJobResponse {
+  job_id: string;
+  plan: PsoDistributePlanItem[];
+}
+
+export interface PsoCollectFinalizedPayload {
+  job_id: string;
+  source_machine_id: number;
+  project_id: number;
+  files_collected: number | null;
+  error_message?: string | null;
+}
+
+export interface GpuSignature {
+  vendor: string;
+  model: string;
+  driver: string;
+}
+
+export type CellStatus = "match" | "deviation" | "unknown";
+
+export interface GpuSignatureCount {
+  signature: GpuSignature;
+  count: number;
+}
+
+export interface MachineGpuCell {
+  machine_id: number;
+  hostname: string;
+  signature: GpuSignature | null;
+  status: CellStatus;
+}
+
+export interface GpuMatrix {
+  signatures: GpuSignatureCount[];
+  baseline: GpuSignature | null;
+  cells: MachineGpuCell[];
+}
+
 export interface UecmError {
   code: string;
   message: string;
@@ -221,6 +288,7 @@ export function formatUecmError(e: unknown): string {
 
 export type Severity = "critical" | "warning" | "healthy" | "info";
 export type Category = "project" | "user" | "engine";
+export type FindingCategory = Category | "PSO";
 export type RecommendedAction = "set" | "remove" | "manual";
 
 export interface IniFinding {
@@ -229,7 +297,7 @@ export interface IniFinding {
   machine_id: number;
   rule_id: string;
   severity: Severity;
-  category: Category;
+  category: FindingCategory;
   file_path: string;
   section: string | null;
   key_name: string | null;
@@ -260,15 +328,44 @@ export interface ScanRunSummary {
   healthy: number;
 }
 
+export interface IniScanSummary {
+  scan_run_id: number;
+  critical: number;
+  warning: number;
+  healthy: number;
+  info: number;
+  total_files: number;
+}
+
+export interface ScanInisRequest {
+  machine_ids: number[];
+  credential_alias: string;
+  project_paths: string[];
+  user_profile_path: string | null;
+}
+
+export interface ScanInisResponse {
+  scan_run_id: number;
+  summary: IniScanSummary;
+  findings: IniFinding[];
+}
+
+export interface ApplyFindingResult {
+  backup_path: string | null;
+  message: string;
+}
+
 export type HealthStatus = "healthy" | "warning" | "critical" | "na" | "offline" | "unknown";
 
 export interface CheckOutcome {
   status: HealthStatus;
   message: string;
   sample: string;
+  remediation?: string;
 }
 
 export interface HealthCheckRow {
+  id?: number | null;
   scan_run_id: number;
   machine_id: number;
   machine_results: Record<string, CheckOutcome>;
@@ -281,6 +378,19 @@ export interface HealthRunSummary {
   critical: number;
   offline: number;
   total: number;
+}
+
+export type HealthCheckRun = HealthCheckRow;
+
+export interface RunHealthCheckRequest {
+  machine_ids: number[];
+  credential_alias: string;
+  project_paths: string[];
+}
+
+export interface RunHealthCheckResponse {
+  scan_run_id: number;
+  results: HealthCheckRun[];
 }
 
 export interface HealthProgressEvent {
@@ -593,43 +703,98 @@ export const tauriApi = {
   },
 
   // Diagnostics — INI scanner
-  async scanInis(
-    machineIds: number[],
-    projectPathsPerMachine: Record<number, string[]>,
-    userProfile: string,
-    credentialAlias: string,
-  ): Promise<ScanRunSummary> {
-    return invoke<ScanRunSummary>("scan_inis", {
-      machineIds, projectPathsPerMachine, userProfile, credentialAlias,
-    });
+  async scanInis(request: ScanInisRequest): Promise<ScanInisResponse> {
+    return invoke<ScanInisResponse>("scan_inis", { request });
   },
-  async listFindingsForRun(scanRunId: number): Promise<IniFinding[]> {
+  async listFindings(scanRunId: number): Promise<IniFinding[]> {
     return invoke<IniFinding[]>("list_findings_for_run", { scanRunId });
   },
-  async listRecentIniRuns(limit: number): Promise<ScanRun[]> {
+  async listFindingsForRun(scanRunId: number): Promise<IniFinding[]> {
+    return this.listFindings(scanRunId);
+  },
+  async listScanRuns(scanType: string, limit = 20): Promise<ScanRun[]> {
+    if (scanType === "health") {
+      return invoke<ScanRun[]>("list_recent_health_runs", { limit });
+    }
     return invoke<ScanRun[]>("list_recent_ini_runs", { limit });
   },
-  async applyFinding(findingId: number, credentialAlias: string): Promise<string> {
-    return invoke<string>("apply_finding", { findingId, credentialAlias });
+  async listRecentIniRuns(limit: number): Promise<ScanRun[]> {
+    return this.listScanRuns("ini", limit);
+  },
+  async applyFinding(findingId: number, credentialAlias: string): Promise<ApplyFindingResult> {
+    const backupPath = await invoke<string>("apply_finding", { findingId, credentialAlias });
+    return { backup_path: backupPath, message: "applied" };
   },
   async skipFinding(findingId: number): Promise<void> {
     return invoke<void>("skip_finding", { findingId });
   },
 
   // Diagnostics — Health check
-  async runHealthCheck(
-    machineIds: number[],
-    projectPathsPerMachine: Record<number, string[]>,
-    credentialAlias: string,
-  ): Promise<HealthRunSummary> {
-    return invoke<HealthRunSummary>("run_health_check", {
-      machineIds, projectPathsPerMachine, credentialAlias,
+  async runHealthCheck(request: RunHealthCheckRequest): Promise<RunHealthCheckResponse> {
+    const response = await invoke<RunHealthCheckResponse | HealthRunSummary>("run_health_check", {
+      request,
     });
+    if ("results" in response) {
+      return response;
+    }
+    return {
+      scan_run_id: response.scan_run_id,
+      results: await this.listHealthResultsForRun(response.scan_run_id),
+    };
   },
   async listRecentHealthRuns(limit: number): Promise<ScanRun[]> {
-    return invoke<ScanRun[]>("list_recent_health_runs", { limit });
+    return this.listScanRuns("health", limit);
   },
   async listHealthResultsForRun(scanRunId: number): Promise<HealthCheckRow[]> {
     return invoke<HealthCheckRow[]>("list_health_results_for_run", { scanRunId });
+  },
+  async startPsoCollection(args: {
+    sourceMachineId: number;
+    projectId: number;
+    ueVersion: string | null;
+    resolutionW: number;
+    resolutionH: number;
+    windowed: boolean;
+    maxMinutes: number;
+    operatorCredentialAlias: string | null;
+  }): Promise<PsoCollectJobResponse> {
+    return invoke<PsoCollectJobResponse>("start_pso_collection", {
+      sourceMachineId: args.sourceMachineId,
+      projectId: args.projectId,
+      ueVersion: args.ueVersion,
+      resolutionW: args.resolutionW,
+      resolutionH: args.resolutionH,
+      windowed: args.windowed,
+      maxMinutes: args.maxMinutes,
+      operatorCredentialAlias: args.operatorCredentialAlias,
+    });
+  },
+  async listPsoCacheFiles(projectId: number): Promise<PsoCacheFile[]> {
+    return invoke<PsoCacheFile[]>("list_pso_cache_files", { projectId });
+  },
+  async distributePsoCache(args: {
+    fileId: number;
+    targetMachineIds: number[];
+    namedShareUnc: string | null;
+    operatorCredentialAlias: string | null;
+    sourceSmbCredentialAlias: string | null;
+    forceGpuMismatch: boolean;
+  }): Promise<PsoDistributeJobResponse> {
+    return invoke<PsoDistributeJobResponse>("distribute_pso_cache", {
+      request: {
+        file_id: args.fileId,
+        target_machine_ids: args.targetMachineIds,
+        named_share_unc: args.namedShareUnc,
+        operator_credential_alias: args.operatorCredentialAlias,
+        source_smb_credential_alias: args.sourceSmbCredentialAlias,
+        force_gpu_mismatch: args.forceGpuMismatch,
+      },
+    });
+  },
+  async verifyPsoPrecaching(request: ScanInisRequest): Promise<ScanInisResponse> {
+    return invoke<ScanInisResponse>("verify_pso_precaching", { request });
+  },
+  async getGpuConsistencyMatrix(): Promise<GpuMatrix> {
+    return invoke<GpuMatrix>("get_gpu_consistency_matrix");
   },
 };

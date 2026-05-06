@@ -418,7 +418,9 @@ pub async fn distribute_ddc_pak(
         (op_user.clone(), op_pass.clone())
     };
 
+    let distribute_profile = pak_distribute::DistributeProfile::ddc_pak();
     let plan = pak_distribute::plan(
+        &distribute_profile,
         &db,
         source_machine_id,
         &source_machine.ip,
@@ -438,7 +440,7 @@ pub async fn distribute_ddc_pak(
     }
 
     for item in &plan {
-        pak_distribute::preflight_one(item).await.map_err(|e| {
+        pak_distribute::preflight_one_with_profile(&distribute_profile, item).await.map_err(|e| {
             UecmError::OperationFailed(format!(
                 "target {} cannot reach source UNC: {}",
                 item.target_machine_id, e
@@ -465,6 +467,7 @@ pub async fn distribute_ddc_pak(
             move |machine_id| {
                 let plan_lookup = plan_lookup.clone();
                 async move {
+                    let distribute_profile = pak_distribute::DistributeProfile::ddc_pak();
                     let item = plan_lookup
                         .iter()
                         .find(|item| item.target_machine_id == machine_id)
@@ -475,7 +478,11 @@ pub async fn distribute_ddc_pak(
                             ))
                         })?
                         .clone();
-                    let outcome = pak_distribute::run_one(item).await?;
+                    let outcome = pak_distribute::run_one_with_profile(
+                        &distribute_profile,
+                        item,
+                    )
+                    .await?;
                     if !outcome.ok {
                         return Err(UecmError::OperationFailed(format!(
                             "robocopy exit {}: {}",

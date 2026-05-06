@@ -10,7 +10,7 @@ use crate::data::{
     health_check_runs, Db,
 };
 use crate::error::{UecmError, UecmResult};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use tauri::{AppHandle, Emitter, State};
@@ -33,14 +33,25 @@ pub struct HealthRunSummary {
     pub total: i64,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct RunHealthCheckRequest {
+    pub machine_ids: Vec<i64>,
+    pub credential_alias: String,
+    pub project_paths: Vec<String>,
+}
+
 #[tauri::command]
 pub fn run_health_check(
     db: State<'_, Db>,
     app: AppHandle,
-    machine_ids: Vec<i64>,
-    project_paths_per_machine: HashMap<i64, Vec<String>>,
-    credential_alias: String,
+    request: RunHealthCheckRequest,
 ) -> UecmResult<HealthRunSummary> {
+    let machine_ids = request.machine_ids;
+    let credential_alias = request.credential_alias;
+    let project_paths_per_machine: HashMap<i64, Vec<String>> = machine_ids
+        .iter()
+        .map(|machine_id| (*machine_id, request.project_paths.clone()))
+        .collect();
     if machine_ids.is_empty() {
         return Err(UecmError::InvalidInput("machine_ids required".into()));
     }

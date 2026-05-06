@@ -1,34 +1,28 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { setActivePinia, createPinia } from "pinia";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPinia, setActivePinia } from "pinia";
 import { useHealthCheckStore } from "@/stores/healthCheck";
 
-vi.mock("@/services/tauri", () => ({
-  tauriApi: {
-    runHealthCheck: vi.fn(async () => ({ scan_run_id: 9, healthy: 70, warning: 4, critical: 2, offline: 0, total: 76 })),
-    listHealthResultsForRun: vi.fn(async () => ([
-      { scan_run_id: 9, machine_id: 11, machine_results: {
-          smb: { status: "healthy", message: "ok", sample: "Running" },
-          system_write: { status: "critical", message: "fail", sample: "" },
-      } },
-    ])),
-  },
+const { runHealthCheck, listHealthResultsForRun } = vi.hoisted(() => ({
+  runHealthCheck: vi.fn(),
+  listHealthResultsForRun: vi.fn(),
 }));
 
-describe("useHealthCheckStore", () => {
-  beforeEach(() => { setActivePinia(createPinia()); });
+vi.mock("@/services/tauri", () => ({
+  tauriApi: { runHealthCheck, listHealthResultsForRun },
+}));
 
-  it("runs and stores rows by machine", async () => {
-    const s = useHealthCheckStore();
-    await s.run([11], {}, "UECM:winrm:LANPC");
-    expect(s.scanRunId).toBe(9);
-    expect(s.rowsByMachine[11].smb.status).toBe("healthy");
-    expect(s.rowsByMachine[11].system_write.status).toBe("critical");
+describe("health check store", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
   });
 
-  it("computes per-check totals", async () => {
-    const s = useHealthCheckStore();
-    await s.run([11], {}, "UECM:winrm:LANPC");
-    expect(s.summary.critical).toBe(2);
-    expect(s.summary.healthy).toBe(70);
+  it("indexes results by machine", async () => {
+    runHealthCheck.mockResolvedValue({ scan_run_id: 7, results: [{ id: 1, scan_run_id: 7, machine_id: 2, machine_results: { smb: { status: "healthy", message: "ok", sample: "", remediation: "" } } }] });
+    const store = useHealthCheckStore();
+    await store.run({ machine_ids: [2], credential_alias: "cred", project_paths: [] });
+    expect(store.scanRunId).toBe(7);
+    expect(store.rowsByMachine[2].smb.status).toBe("healthy");
+    expect(store.summary.healthy).toBe(1);
   });
 });

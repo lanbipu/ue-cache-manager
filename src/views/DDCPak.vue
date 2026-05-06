@@ -7,6 +7,7 @@ import PakJobCard from "@/components/ddcpak/PakJobCard.vue";
 import UecmIcon from "@/components/primitives/UecmIcon.vue";
 import UecmPageHeader from "@/components/primitives/UecmPageHeader.vue";
 import UecmStat from "@/components/primitives/UecmStat.vue";
+import UecmStateBlock from "@/components/primitives/UecmStateBlock.vue";
 import { useCredentialsStore } from "@/stores/credentials";
 import { useDdcPakStore } from "@/stores/ddcPak";
 import { useMachinesStore } from "@/stores/machines";
@@ -54,8 +55,8 @@ const completedGenerates = computed(() =>
         <div class="border-b p-4">
           <h2 class="font-display text-sm font-extrabold">Generation jobs</h2>
         </div>
-        <div v-if="ddcPak.generateJobs.length === 0" data-ddc-pak-empty class="p-6 text-sm text-muted-foreground">
-          No DDC pak job queued.
+        <div v-if="ddcPak.generateJobs.length === 0" data-ddc-pak-empty class="p-4">
+          <UecmStateBlock variant="empty" title="No DDC pak job queued" message="Generate a DDC pak to populate this list." />
         </div>
         <div v-else class="space-y-3 p-4">
           <PakJobCard

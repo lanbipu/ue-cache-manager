@@ -1,78 +1,67 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { useI18n } from "vue-i18n";
 import BaseModal from "./BaseModal.vue";
 import Button from "@/components/ui/Button.vue";
-import { useMachinesStore } from "@/stores/machines";
 import { useCredentialsStore } from "@/stores/credentials";
 import { useHealthCheckStore } from "@/stores/healthCheck";
+import { useMachinesStore } from "@/stores/machines";
 
-const { t } = useI18n();
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ close: [] }>();
 
 const machines = useMachinesStore();
-const creds = useCredentialsStore();
-const hc = useHealthCheckStore();
+const credentials = useCredentialsStore();
+const health = useHealthCheckStore();
+const selectedIds = ref<number[]>([]);
+const credentialAlias = ref("");
+const projectPathsText = ref("");
 
-const selected = ref<Set<number>>(new Set());
-const credAlias = ref<string>("");
-const projectPathsRaw = ref<string>("");
-
-watch(() => props.open, async (val) => {
-  if (val) { await machines.loadMachines(); await creds.load(); }
+watch(() => props.open, (open) => {
+  if (open) {
+    machines.loadMachines();
+    credentials.load();
+    selectedIds.value = machines.machines.map((m) => m.id).filter((id): id is number => id != null);
+  }
 });
 
-const winrmCreds = computed(() => creds.credentials.filter(c => c.kind === "winrm"));
-const projectPaths = computed(() => projectPathsRaw.value
-  .split("\n").map(s => s.trim()).filter(Boolean));
+const canRun = computed(() => selectedIds.value.length > 0 && credentialAlias.value !== "" && !health.isRunning);
+const projectPaths = computed(() => projectPathsText.value.split(/\r?\n/).map((p) => p.trim()).filter(Boolean));
 
-async function onRun() {
-  const ids = Array.from(selected.value);
-  if (ids.length === 0 || !credAlias.value) return;
-  const perMachine: Record<number, string[]> = {};
-  for (const id of ids) perMachine[id] = projectPaths.value;
-  await hc.run(ids, perMachine, credAlias.value);
-  emit("close");
+function toggle(id: number, checked: boolean) {
+  selectedIds.value = checked ? [...new Set([...selectedIds.value, id])] : selectedIds.value.filter((x) => x !== id);
 }
 
-function toggle(id: number) {
-  const s = new Set(selected.value);
-  if (s.has(id)) s.delete(id); else s.add(id);
-  selected.value = s;
+async function run() {
+  await health.run({ machine_ids: selectedIds.value, credential_alias: credentialAlias.value, project_paths: projectPaths.value });
+  emit("close");
 }
 </script>
 
 <template>
-  <BaseModal :open="open" :title="t('modal.healthCheckWizard.title')" size="lg" @close="emit('close')">
-    <div class="space-y-4">
-      <div>
-        <p class="mb-2 font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{{ t("modal.healthCheckWizard.machinesLabel") }}</p>
-        <ul class="grid grid-cols-2 gap-1 text-sm">
-          <li v-for="m in machines.machines" :key="m.id ?? m.ip" class="flex items-center gap-2">
-            <input type="checkbox" :checked="m.id != null && selected.has(m.id)" @change="m.id != null && toggle(m.id)" />
-            <span>{{ m.hostname }} <span class="font-mono text-xs text-muted-foreground">{{ m.ip }}</span></span>
-          </li>
-        </ul>
-      </div>
-      <div>
-        <p class="mb-2 font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{{ t("modal.healthCheckWizard.credentialLabel") }}</p>
-        <select data-health-cred-select v-model="credAlias" class="w-full rounded-md border bg-background px-2 py-1 text-sm">
-          <option value="">{{ t("modal.healthCheckWizard.pickPlaceholder") }}</option>
-          <option v-for="c in winrmCreds" :key="c.alias" :value="c.alias">{{ c.alias }}</option>
+  <BaseModal :open="open" title="Run health check" size="lg" @close="emit('close')">
+    <div data-health-check-wizard class="space-y-4">
+      <section class="grid gap-2">
+        <label v-for="machine in machines.machines" :key="machine.id ?? machine.ip" class="flex items-center gap-2 rounded-md border bg-card p-2 text-sm">
+          <input type="checkbox" :checked="machine.id != null && selectedIds.includes(machine.id)" @change="machine.id != null && toggle(machine.id, ($event.target as HTMLInputElement).checked)" />
+          <span class="font-mono">{{ machine.hostname }}</span>
+          <span class="text-muted-foreground">{{ machine.ip }}</span>
+        </label>
+      </section>
+      <label class="block text-sm">
+        <span class="mb-1 block text-muted-foreground">Credential alias</span>
+        <select v-model="credentialAlias" data-health-cred class="h-9 w-full rounded-md border bg-background px-3 text-sm">
+          <option value="" disabled>Select credential</option>
+          <option v-for="cred in credentials.credentials" :key="cred.alias" :value="cred.alias">{{ cred.alias }}</option>
         </select>
-      </div>
-      <div>
-        <p class="mb-2 font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{{ t("modal.healthCheckWizard.projectPathsLabel") }}</p>
-        <textarea v-model="projectPathsRaw" rows="3" class="w-full rounded-md border bg-background px-2 py-1 font-mono text-xs"
-                  placeholder="E:\\Work\\EXLY"></textarea>
-      </div>
+      </label>
+      <label class="block text-sm">
+        <span class="mb-1 block text-muted-foreground">Project paths</span>
+        <textarea v-model="projectPathsText" class="min-h-24 w-full rounded-md border bg-background p-3 font-mono text-sm" placeholder="E:\Project"></textarea>
+      </label>
     </div>
     <template #footer>
-      <Button variant="outline" @click="emit('close')">{{ t("common.cancel") }}</Button>
-      <Button data-run-health-btn :disabled="!credAlias || selected.size === 0 || hc.isRunning" @click="onRun">
-        {{ hc.isRunning ? t("modal.healthCheckWizard.running") : t("modal.healthCheckWizard.runOn", { count: selected.size }) }}
-      </Button>
+      <Button data-run-health-check-btn :disabled="!canRun" @click="run">{{ health.isRunning ? "Running" : "Run full check" }}</Button>
+      <Button variant="outline" @click="emit('close')">Close</Button>
     </template>
   </BaseModal>
 </template>

@@ -1,46 +1,43 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { useI18n } from "vue-i18n";
+import { RouterLink } from "vue-router";
 import UecmPageHeader from "@/components/primitives/UecmPageHeader.vue";
+import UecmIcon from "@/components/primitives/UecmIcon.vue";
 import UecmKpiTile from "@/components/primitives/UecmKpiTile.vue";
+import UecmGpuMatrix from "@/components/primitives/UecmGpuMatrix.vue";
 import UecmScoreTile from "@/components/primitives/UecmScoreTile.vue";
 import UecmStatusBadge from "@/components/primitives/UecmStatusBadge.vue";
-import UecmIcon from "@/components/primitives/UecmIcon.vue";
 import Button from "@/components/ui/Button.vue";
 import HealthMatrix from "@/components/diagnostics/HealthMatrix.vue";
 import HealthCheckWizard from "@/components/modals/HealthCheckWizard.vue";
-import { HEALTH_CHECKS } from "@/lib/healthChecks";
-import { useMachinesStore } from "@/stores/machines";
+import { HEALTH_CHECKS, type HealthCheckDefinition } from "@/lib/healthChecks";
+import { useGpuConsistencyStore } from "@/stores/gpuConsistency";
 import { useHealthCheckStore } from "@/stores/healthCheck";
+import { useMachinesStore } from "@/stores/machines";
 
-const { t } = useI18n();
 const machines = useMachinesStore();
-const hc = useHealthCheckStore();
-
+const health = useHealthCheckStore();
+const gpuStore = useGpuConsistencyStore();
 const showWizard = ref(false);
 const selected = ref<{ machineId: number; checkId: string } | null>(null);
 
-onMounted(() => machines.loadMachines());
+onMounted(() => {
+  void Promise.all([machines.loadMachines(), gpuStore.load()]);
+});
 
 const score = computed(() => {
-  const total = hc.summary.total || 1;
-  return Math.max(0, Math.round(((hc.summary.healthy - hc.summary.critical * 0.75 - hc.summary.warning * 0.35) / total) * 100));
+  const total = health.summary.total || 1;
+  return Math.max(0, Math.round(((health.summary.healthy - health.summary.critical * 0.75 - health.summary.warning * 0.35) / total) * 100));
 });
-const tone = computed<"healthy" | "warning" | "critical" | "info">(() => {
-  if (hc.summary.critical > 0) return "critical";
-  if (hc.summary.warning > 0) return "warning";
-  if (hc.summary.healthy > 0) return "healthy";
-  return "info";
-});
-const verdict = computed(() => tone.value === "critical" ? t("healthCheck.verdictAttention")
-                            : tone.value === "warning" ? t("healthCheck.verdictDegraded")
-                            : tone.value === "healthy" ? t("healthCheck.verdictHealthy") : t("healthCheck.verdictIdle"));
-
+const tone = computed(() => health.summary.critical > 0 ? "critical" : health.summary.warning > 0 ? "warning" : health.summary.healthy > 0 ? "healthy" : "info");
+const verdict = computed(() => tone.value === "critical" ? "ATTENTION" : tone.value === "warning" ? "DEGRADED" : tone.value === "healthy" ? "HEALTHY" : "IDLE");
 const selectedDetail = computed(() => {
   if (!selected.value) return null;
-  const def = HEALTH_CHECKS.find(c => c.id === selected.value!.checkId);
-  const outcome = hc.rowsByMachine[selected.value.machineId]?.[selected.value.checkId];
-  const machine = machines.machines.find(m => m.id === selected.value!.machineId);
+  const def = HEALTH_CHECKS.find((check) => check.id === selected.value?.checkId) as
+    | HealthCheckDefinition
+    | undefined;
+  const outcome = health.rowsByMachine[selected.value.machineId]?.[selected.value.checkId];
+  const machine = machines.machines.find((m) => m.id === selected.value?.machineId);
   return { def, outcome, machine };
 });
 </script>
@@ -48,74 +45,78 @@ const selectedDetail = computed(() => {
 <template>
   <div class="flex h-full flex-col">
     <div class="space-y-4 p-6">
-      <UecmPageHeader :title="t('healthCheck.title')" :eyebrow="t('healthCheck.eyebrow')"
-        :description="t('healthCheck.description')">
+      <UecmPageHeader title="Health Check" eyebrow="Matrix" description="11 checks per machine with linked remediation detail.">
         <template #actions>
           <Button data-open-health-wizard-btn @click="showWizard = true">
-            <UecmIcon name="play" /> {{ t("healthCheck.runFullCheck") }}
+            <UecmIcon name="play" /> Run full check
           </Button>
         </template>
       </UecmPageHeader>
       <section class="grid grid-cols-5 gap-px overflow-hidden rounded-lg border bg-border">
-        <UecmScoreTile :label="t('healthCheck.kpiClusterScore')" :score="score" :tone="tone" :verdict="verdict" />
-        <UecmKpiTile :label="t('healthCheck.kpiHealthy')"  :value="hc.summary.healthy"  tone="healthy" />
-        <UecmKpiTile :label="t('healthCheck.kpiWarning')"  :value="hc.summary.warning"  tone="warning" />
-        <UecmKpiTile :label="t('healthCheck.kpiCritical')" :value="hc.summary.critical" tone="critical" />
-        <UecmKpiTile :label="t('healthCheck.kpiOffline')"  :value="hc.summary.offline"  tone="offline" />
+        <UecmScoreTile label="Cluster Score" :score="score" :tone="tone" :verdict="verdict" />
+        <UecmKpiTile label="Healthy" :value="health.summary.healthy" tone="healthy" />
+        <UecmKpiTile label="Warning" :value="health.summary.warning" tone="warning" />
+        <UecmKpiTile label="Critical" :value="health.summary.critical" tone="critical" />
+        <UecmKpiTile label="Offline" :value="health.summary.offline" tone="offline" />
       </section>
     </div>
 
     <section v-if="machines.machines.length === 0" class="grid flex-1 place-items-center text-center">
-      <p class="text-sm text-muted-foreground">{{ t("healthCheck.noMachines") }}</p>
+      <p class="text-sm text-muted-foreground">No machines registered. Use Machines &gt; Scan first.</p>
     </section>
-    <section v-else-if="hc.scanRunId === null" class="grid flex-1 place-items-center text-center">
+    <section v-else-if="health.scanRunId === null" class="grid flex-1 place-items-center text-center">
       <div>
         <UecmIcon name="heart-pulse" size="32" class="mx-auto text-muted-foreground" />
-        <p class="mt-2 font-display text-lg font-extrabold">{{ t("healthCheck.emptyTitle") }}</p>
-        <p class="mt-1 text-sm text-muted-foreground">{{ t("healthCheck.emptyHint") }}</p>
+        <h2 class="mt-4 font-display text-lg font-extrabold">Run a full health check</h2>
+        <p class="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">The matrix is populated after a scan completes.</p>
       </div>
     </section>
     <section v-else class="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[3fr_2fr]">
-      <HealthMatrix class="border-r"
-                    :machines="machines.machines"
-                    :rows-by-machine="hc.rowsByMachine"
-                    :selected-machine-id="selected?.machineId ?? null"
-                    :selected-check-id="selected?.checkId ?? null"
-                    @select="selected = $event" />
+      <HealthMatrix class="border-r" :machines="machines.machines" :rows-by-machine="health.rowsByMachine" :selected-machine-id="selected?.machineId ?? null" :selected-check-id="selected?.checkId ?? null" @select="selected = $event" />
       <aside data-health-detail class="overflow-y-auto p-6">
-        <div v-if="!selectedDetail">
-          <p class="text-sm text-muted-foreground">{{ t("healthCheck.selectCellHint") }}</p>
-        </div>
-        <div v-else>
+        <p v-if="!selectedDetail" class="text-sm text-muted-foreground">Select a cell to inspect it.</p>
+        <div v-else class="space-y-4">
           <header class="flex items-center gap-3">
-            <UecmStatusBadge :tone="(selectedDetail.outcome?.status as any) ?? 'unknown'"
-                             :label="selectedDetail.outcome?.status ?? 'unknown'" size="md" />
-            <h2 class="font-display text-lg font-extrabold">{{ selectedDetail.def?.label }}</h2>
+            <UecmStatusBadge :tone="selectedDetail.outcome?.status ?? 'unknown'" :label="selectedDetail.outcome?.status ?? 'unknown'" />
+            <div>
+              <h2 class="font-display text-lg font-extrabold">{{ selectedDetail.def?.label }}</h2>
+              <p v-if="selectedDetail.def?.subtitle" class="text-xs text-muted-foreground">{{ selectedDetail.def.subtitle }}</p>
+              <p class="font-mono text-xs text-muted-foreground">{{ selectedDetail.machine?.hostname }} · {{ selectedDetail.machine?.ip }}</p>
+            </div>
           </header>
-          <p class="mt-1 font-mono text-xs text-muted-foreground">
-            {{ selectedDetail.machine?.hostname }} · {{ selectedDetail.machine?.ip }}
-          </p>
-          <div class="mt-4 space-y-3">
-            <div class="rounded-md border bg-card p-3">
-              <p class="font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{{ t("healthCheck.detailWhatChecks") }}</p>
-              <p class="mt-1 text-sm">{{ selectedDetail.def?.description }}</p>
-            </div>
-            <div class="rounded-md border bg-card p-3">
-              <p class="font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{{ t("healthCheck.detailSymptom") }}</p>
-              <p class="mt-1 text-sm">{{ selectedDetail.def?.symptom }}</p>
-            </div>
-            <div class="rounded-md border bg-card p-3">
-              <p class="font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{{ t("healthCheck.detailHowToFix") }}</p>
-              <p class="mt-1 text-sm">{{ selectedDetail.def?.remediation }}</p>
-            </div>
-            <div class="rounded-md border bg-card p-3">
-              <p class="font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{{ t("healthCheck.detailLastProbe") }}</p>
-              <pre class="mt-1 font-mono text-xs text-muted-foreground whitespace-pre-wrap">{{ selectedDetail.outcome?.message }}</pre>
-              <p v-if="selectedDetail.outcome?.sample" class="mt-1 font-mono text-[11px] text-muted-foreground">{{ t("healthCheck.detailSamplePrefix", { value: selectedDetail.outcome.sample }) }}</p>
-            </div>
+          <div v-if="selectedDetail.def?.id === 'pso_precaching'" class="rounded-md border bg-card p-3">
+            <RouterLink class="text-sm font-bold text-primary hover:underline" to="/ini-scanner?finding=R008">
+              Open INI Scanner R008-R010
+            </RouterLink>
           </div>
+          <div v-else-if="selectedDetail.def?.id === 'gpu_consistency'" class="rounded-md border bg-card p-3">
+            <RouterLink class="text-sm font-bold text-primary hover:underline" to="/health-check?gpu=true">
+              Open GPU matrix
+            </RouterLink>
+          </div>
+          <div class="rounded-md border bg-card p-3">
+            <div class="font-mono text-[11px] font-bold uppercase text-muted-foreground">What</div>
+            <p class="mt-1 text-sm">{{ selectedDetail.def?.description }}</p>
+          </div>
+          <div class="rounded-md border bg-card p-3">
+            <div class="font-mono text-[11px] font-bold uppercase text-muted-foreground">Symptom</div>
+            <p class="mt-1 text-sm">{{ selectedDetail.def?.symptom }}</p>
+          </div>
+          <div class="rounded-md border bg-card p-3">
+            <div class="font-mono text-[11px] font-bold uppercase text-muted-foreground">How to fix</div>
+            <p class="mt-1 text-sm">{{ selectedDetail.outcome?.remediation ?? selectedDetail.def?.remediation }}</p>
+          </div>
+          <pre class="rounded-md border bg-card p-3 font-mono text-xs text-muted-foreground whitespace-pre-wrap">{{ selectedDetail.outcome?.message ?? "No probe output" }}</pre>
         </div>
       </aside>
+    </section>
+
+    <section data-health-gpu-section class="space-y-2 border-t p-6">
+      <h2 class="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">GPU / driver matrix</h2>
+      <p class="text-xs text-muted-foreground">
+        Baseline: {{ gpuStore.baselineLabel }} / {{ gpuStore.deviationCount }} machine(s) deviating
+      </p>
+      <UecmGpuMatrix :matrix="gpuStore.matrix" />
     </section>
 
     <HealthCheckWizard :open="showWizard" @close="showWizard = false" />

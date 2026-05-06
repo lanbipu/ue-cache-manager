@@ -1,21 +1,21 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { mount } from "@vue/test-utils";
 import HealthMatrix from "@/components/diagnostics/HealthMatrix.vue";
-import type { CheckOutcome, Machine } from "@/services/tauri";
 
-const machines: Machine[] = [{ id: 1, hostname: "RENDER-01", ip: "192.168.10.21", role: "render", status: "online", last_seen_at: null }];
-const rows: Record<number, Record<string, CheckOutcome>> = {
-  1: { smb: { status: "healthy", message: "ok", sample: "" } },
-};
+const machines = [{ id: 1, hostname: "RENDER-01", ip: "192.168.10.21", role: "render", status: "online", last_seen_at: null }];
 
 describe("HealthMatrix", () => {
-  it("renders a header row + 11 columns", () => {
-    const w = mount(HealthMatrix, { props: { machines, rowsByMachine: rows, selectedMachineId: null, selectedCheckId: null } });
-    expect(w.findAll("th").length).toBeGreaterThanOrEqual(12);
-  });
-  it("emits select on cell click", async () => {
-    const w = mount(HealthMatrix, { props: { machines, rowsByMachine: rows, selectedMachineId: null, selectedCheckId: null } });
-    await w.find("[data-matrix-cell]").trigger("click");
-    expect(w.emitted("select")?.[0]?.[0]).toMatchObject({ machineId: 1 });
+  it("renders 11 check columns and emits selection", async () => {
+    const wrapper = mount(HealthMatrix, {
+      props: {
+        machines,
+        rowsByMachine: { 1: { smb: { status: "healthy", message: "ok", sample: "", remediation: "" } } },
+        selectedMachineId: null,
+        selectedCheckId: null,
+      },
+    });
+    expect(wrapper.findAll("th").length).toBe(12);
+    await wrapper.find("[data-matrix-cell]").trigger("click");
+    expect(wrapper.emitted("select")?.[0]?.[0]).toMatchObject({ machineId: 1 });
   });
 });

@@ -1,45 +1,29 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { UecmTone } from "./types";
 
-const props = withDefaults(defineProps<{
-  code: string;
-  tone?: UecmTone;
+const props = defineProps<{
+  before?: string;
+  after?: string | null;
+  code?: string;
   startLine?: number;
   highlightLine?: number;
+  tone?: string;
   caption?: string;
-}>(), { tone: "info", startLine: 1 });
+}>();
 
-const lines = computed(() => props.code.split("\n").map((text, i) => ({
-  number: props.startLine + i,
-  text,
-  highlighted: props.highlightLine !== undefined && (props.startLine + i) === props.highlightLine,
-})));
-
-const toneCls = computed(() => {
-  const map: Record<UecmTone, string> = {
-    healthy: "border-status-healthy/30 bg-status-healthy/5",
-    warning: "border-status-warning/30 bg-status-warning/5",
-    critical: "border-status-critical/30 bg-status-critical/5",
-    info: "border-status-info/30 bg-status-info/5",
-    offline: "border-muted bg-muted/20",
-    unknown: "border-muted bg-muted/20",
-    progress: "border-status-info/30 bg-status-info/5",
-    na: "border-muted bg-muted/20",
-  };
-  return map[props.tone];
-});
+const content = computed(() => props.before ?? props.code ?? "");
+const lines = computed(() => content.value.split(/\r?\n/));
 </script>
 
 <template>
-  <div data-codeblock class="overflow-hidden rounded-md border" :class="toneCls">
-    <div v-if="caption" class="border-b bg-muted/30 px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-muted-foreground">
-      {{ caption }}
-    </div>
-    <pre class="overflow-x-auto p-3 font-mono text-xs leading-5"><code><div
-        v-for="line in lines" :key="line.number"
-        :class="line.highlighted ? 'bg-yellow-500/15' : ''"
-        class="flex"
-      ><span class="mr-3 inline-block min-w-[2rem] select-none text-right text-muted-foreground">{{ line.number }}</span><span class="whitespace-pre">{{ line.text }}</span></div></code></pre>
+  <div data-code-block class="overflow-hidden rounded-md border bg-card">
+    <div v-if="caption" class="border-b px-3 py-2 font-mono text-[11px] font-bold uppercase text-muted-foreground">{{ caption }}</div>
+    <pre class="overflow-auto p-3 font-mono text-xs leading-5 text-foreground"><code v-if="content"><span
+      v-for="(line, idx) in lines"
+      :key="idx"
+      class="block"
+      :class="highlightLine === (startLine ?? 1) + idx ? 'bg-yellow-500/15' : ''"
+    ><span class="mr-3 select-none text-muted-foreground">{{ (startLine ?? 1) + idx }}</span>{{ line }}</span></code><code v-else>(empty)</code></pre>
+    <pre v-if="after" class="border-t bg-status-healthy/10 p-3 font-mono text-xs leading-5 text-status-healthy"><code>{{ after }}</code></pre>
   </div>
 </template>

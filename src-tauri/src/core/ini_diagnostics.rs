@@ -118,6 +118,30 @@ pub fn run_rules(file: &ParsedFile, env: &EnvVarState) -> Vec<Finding> {
     out.extend(rule_r005(file));
     out.extend(rule_r006(file, env));
     out.extend(rule_r007(file, env));
+    out.extend(pso_cvar_rule(
+        file,
+        "R008",
+        "r.PSOPrecaching",
+        Severity::Critical,
+        "PSO precaching is disabled or not configured.",
+        "Runtime PSO precaching must be enabled before collecting and distributing useful PSO cache files.",
+    ));
+    out.extend(pso_cvar_rule(
+        file,
+        "R009",
+        "r.PSOPrecache.Compile",
+        Severity::Warning,
+        "PSO precache compilation is disabled or not configured.",
+        "UE versions and project configs can leave compile behavior disabled unless explicitly set.",
+    ));
+    out.extend(pso_cvar_rule(
+        file,
+        "R010",
+        "r.PSOPrecache.GlobalShaders",
+        Severity::Warning,
+        "Global shader PSO precaching is disabled or not configured.",
+        "Global shader precaching helps keep runtime PSO cache behavior consistent across the cluster.",
+    ));
     out
 }
 
@@ -290,6 +314,87 @@ fn rule_r007(file: &ParsedFile, env: &EnvVarState) -> Vec<Finding> {
     }]
 }
 
+fn pso_cvar_rule(
+    file: &ParsedFile,
+    rule_id: &str,
+    key_name: &str,
+    severity: Severity,
+    symptom: &str,
+    rationale: &str,
+) -> Vec<Finding> {
+    if !file
+        .path
+        .to_ascii_lowercase()
+        .ends_with("consolevariables.ini")
+    {
+        return vec![];
+    }
+
+    let Some(section) = file
+        .sections
+        .iter()
+        .find(|section| section.name.eq_ignore_ascii_case("ConsoleVariables"))
+    else {
+        return vec![pso_missing_finding(
+            file, rule_id, key_name, severity, symptom, rationale, None,
+        )];
+    };
+
+    match key(section, key_name) {
+        Some(entry) if entry.value.trim() == "1" => vec![],
+        Some(entry) => vec![Finding {
+            rule_id: rule_id.into(),
+            severity,
+            category: file.category,
+            file_path: file.path.clone(),
+            section: Some(section.name.clone()),
+            key_name: Some(entry.name.clone()),
+            line_number: Some(entry.line_number as i64),
+            snippet_before: format!("{}={}", entry.name, entry.value),
+            snippet_after: Some(format!("{}=1", key_name)),
+            recommended_action: RecommendedAction::Set,
+            recommended_value: Some("1".into()),
+            symptom: symptom.into(),
+            rationale: rationale.into(),
+        }],
+        None => vec![pso_missing_finding(
+            file,
+            rule_id,
+            key_name,
+            severity,
+            symptom,
+            rationale,
+            Some(section.name.clone()),
+        )],
+    }
+}
+
+fn pso_missing_finding(
+    file: &ParsedFile,
+    rule_id: &str,
+    key_name: &str,
+    severity: Severity,
+    symptom: &str,
+    rationale: &str,
+    section: Option<String>,
+) -> Finding {
+    Finding {
+        rule_id: rule_id.into(),
+        severity,
+        category: file.category,
+        file_path: file.path.clone(),
+        section: section.or_else(|| Some("ConsoleVariables".into())),
+        key_name: Some(key_name.into()),
+        line_number: None,
+        snippet_before: "(missing)".into(),
+        snippet_after: Some(format!("{}=1", key_name)),
+        recommended_action: RecommendedAction::Set,
+        recommended_value: Some("1".into()),
+        symptom: symptom.into(),
+        rationale: rationale.into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,5 +485,74 @@ mod tests {
         let env_state = EnvVarState::default();
         let findings = run_rules(&file, &env_state);
         assert!(findings.iter().any(|f| f.rule_id == "R006" && f.severity == Severity::Warning));
+    }
+
+    fn console_variables(keys: &[(&str, &str)]) -> ParsedFile {
+        ParsedFile {
+            path: "C:\\Project\\Config\\ConsoleVariables.ini".into(),
+            category: Category::Project,
+            sections: vec![ParsedSection {
+                name: "ConsoleVariables".into(),
+                keys: keys
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, (k, v))| ParsedKey {
+                        name: k.to_string(),
+                        value: v.to_string(),
+                        line_number: idx + 1,
+                    })
+                    .collect(),
+            }],
+        }
+    }
+
+    #[test]
+    fn r008_reports_critical_when_pso_precaching_is_missing() {
+        let file = console_variables(&[
+            ("r.PSOPrecache.Compile", "1"),
+            ("r.PSOPrecache.GlobalShaders", "1"),
+        ]);
+        let findings = run_rules(&file, &EnvVarState::default());
+        assert!(findings
+            .iter()
+            .any(|f| f.rule_id == "R008" && f.severity == Severity::Critical));
+    }
+
+    #[test]
+    fn r009_reports_warning_when_pso_compile_is_off() {
+        let file = console_variables(&[
+            ("r.PSOPrecaching", "1"),
+            ("r.PSOPrecache.Compile", "0"),
+            ("r.PSOPrecache.GlobalShaders", "1"),
+        ]);
+        let findings = run_rules(&file, &EnvVarState::default());
+        assert!(findings
+            .iter()
+            .any(|f| f.rule_id == "R009" && f.recommended_action == RecommendedAction::Set));
+    }
+
+    #[test]
+    fn r010_reports_warning_when_global_shader_pso_is_missing() {
+        let file = console_variables(&[
+            ("r.PSOPrecaching", "1"),
+            ("r.PSOPrecache.Compile", "1"),
+        ]);
+        let findings = run_rules(&file, &EnvVarState::default());
+        assert!(findings
+            .iter()
+            .any(|f| f.rule_id == "R010" && f.recommended_value.as_deref() == Some("1")));
+    }
+
+    #[test]
+    fn pso_rules_are_clean_when_all_required_cvars_are_enabled() {
+        let file = console_variables(&[
+            ("r.PSOPrecaching", "1"),
+            ("r.PSOPrecache.Compile", "1"),
+            ("r.PSOPrecache.GlobalShaders", "1"),
+        ]);
+        let findings = run_rules(&file, &EnvVarState::default());
+        assert!(!findings
+            .iter()
+            .any(|f| matches!(f.rule_id.as_str(), "R008" | "R009" | "R010")));
     }
 }

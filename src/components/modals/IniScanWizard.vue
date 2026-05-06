@@ -1,89 +1,77 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { useI18n } from "vue-i18n";
 import BaseModal from "./BaseModal.vue";
 import Button from "@/components/ui/Button.vue";
-import Input from "@/components/ui/Input.vue";
-import { useMachinesStore } from "@/stores/machines";
 import { useCredentialsStore } from "@/stores/credentials";
 import { useDiagnosticsStore } from "@/stores/diagnostics";
-import { formatUecmError } from "@/services/tauri";
+import { useMachinesStore } from "@/stores/machines";
 
-const { t } = useI18n();
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ close: [] }>();
 
 const machines = useMachinesStore();
-const creds = useCredentialsStore();
-const diag = useDiagnosticsStore();
+const credentials = useCredentialsStore();
+const diagnostics = useDiagnosticsStore();
+const selectedIds = ref<number[]>([]);
+const credentialAlias = ref("");
+const projectPathsText = ref("");
+const userProfilePath = ref("");
 
-const selected = ref<Set<number>>(new Set());
-const credAlias = ref<string>("");
-const userProfile = ref<string>("C:\\Users\\lanpc");
-const projectPathsRaw = ref<string>("");
-
-watch(() => props.open, async (val) => {
-  if (val) { await machines.loadMachines(); await creds.load(); }
+watch(() => props.open, (open) => {
+  if (open) {
+    machines.loadMachines();
+    credentials.load();
+    selectedIds.value = machines.machines.map((m) => m.id).filter((id): id is number => id != null);
+  }
 });
 
-const winrmCreds = computed(() => creds.credentials.filter(c => c.kind === "winrm"));
-const projectPaths = computed(() => projectPathsRaw.value
-  .split("\n").map(s => s.trim()).filter(Boolean));
+const canRun = computed(() => selectedIds.value.length > 0 && credentialAlias.value !== "" && !diagnostics.isRunning);
+const projectPaths = computed(() => projectPathsText.value.split(/\r?\n/).map((p) => p.trim()).filter(Boolean));
 
-async function onRun() {
-  const ids = Array.from(selected.value);
-  if (ids.length === 0 || !credAlias.value) return;
-  const perMachine: Record<number, string[]> = {};
-  for (const id of ids) perMachine[id] = projectPaths.value;
-  await diag.runScan(ids, perMachine, userProfile.value, credAlias.value);
-  if (diag.error) {
-    window.alert(t("iniScanner.scanFailed", { error: formatUecmError(diag.error) }));
-    return;
-  }
-  emit("close");
+function toggle(id: number, checked: boolean) {
+  selectedIds.value = checked ? [...new Set([...selectedIds.value, id])] : selectedIds.value.filter((x) => x !== id);
 }
 
-function toggle(id: number) {
-  const s = new Set(selected.value);
-  if (s.has(id)) s.delete(id); else s.add(id);
-  selected.value = s;
+async function run() {
+  await diagnostics.run({
+    machine_ids: selectedIds.value,
+    credential_alias: credentialAlias.value,
+    project_paths: projectPaths.value,
+    user_profile_path: userProfilePath.value.trim() || null,
+  });
+  emit("close");
 }
 </script>
 
 <template>
-  <BaseModal :open="open" :title="t('modal.iniScanWizard.title')" size="lg" @close="emit('close')">
-    <div class="space-y-4">
-      <div>
-        <p class="mb-2 font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{{ t("modal.iniScanWizard.machinesLabel") }}</p>
-        <ul class="grid grid-cols-2 gap-1 text-sm">
-          <li v-for="m in machines.machines" :key="m.id ?? m.ip" class="flex items-center gap-2">
-            <input type="checkbox" :checked="m.id != null && selected.has(m.id)" @change="m.id != null && toggle(m.id)" />
-            <span>{{ m.hostname }} <span class="font-mono text-xs text-muted-foreground">{{ m.ip }}</span></span>
-          </li>
-        </ul>
-      </div>
-      <div>
-        <p class="mb-2 font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{{ t("modal.iniScanWizard.credentialLabel") }}</p>
-        <select data-cred-select v-model="credAlias" class="w-full rounded-md border bg-background px-2 py-1 text-sm">
-          <option value="">{{ t("modal.iniScanWizard.pickPlaceholder") }}</option>
-          <option v-for="c in winrmCreds" :key="c.alias" :value="c.alias">{{ c.alias }}</option>
+  <BaseModal :open="open" title="Run INI scan" size="lg" @close="emit('close')">
+    <div data-ini-scan-wizard class="space-y-4">
+      <section class="grid gap-2">
+        <label v-for="machine in machines.machines" :key="machine.id ?? machine.ip" class="flex items-center gap-2 rounded-md border bg-card p-2 text-sm">
+          <input type="checkbox" :checked="machine.id != null && selectedIds.includes(machine.id)" @change="machine.id != null && toggle(machine.id, ($event.target as HTMLInputElement).checked)" />
+          <span class="font-mono">{{ machine.hostname }}</span>
+          <span class="text-muted-foreground">{{ machine.ip }}</span>
+        </label>
+      </section>
+      <label class="block text-sm">
+        <span class="mb-1 block text-muted-foreground">Credential alias</span>
+        <select v-model="credentialAlias" data-ini-scan-cred class="h-9 w-full rounded-md border bg-background px-3 text-sm">
+          <option value="" disabled>Select credential</option>
+          <option v-for="cred in credentials.credentials" :key="cred.alias" :value="cred.alias">{{ cred.alias }}</option>
         </select>
-      </div>
-      <div>
-        <p class="mb-2 font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{{ t("modal.iniScanWizard.userProfileLabel") }}</p>
-        <Input v-model="userProfile" placeholder="C:\\Users\\lanpc" />
-      </div>
-      <div>
-        <p class="mb-2 font-mono text-[11px] font-bold uppercase tracking-wide text-muted-foreground">{{ t("modal.iniScanWizard.projectPathsLabel") }}</p>
-        <textarea v-model="projectPathsRaw" rows="3" class="w-full rounded-md border bg-background px-2 py-1 font-mono text-xs"
-                  placeholder="E:\\Work\\EXLY"></textarea>
-      </div>
+      </label>
+      <label class="block text-sm">
+        <span class="mb-1 block text-muted-foreground">User profile path</span>
+        <input v-model="userProfilePath" class="h-9 w-full rounded-md border bg-background px-3 font-mono text-sm" placeholder="C:\Users\lanpc" />
+      </label>
+      <label class="block text-sm">
+        <span class="mb-1 block text-muted-foreground">Project paths</span>
+        <textarea v-model="projectPathsText" data-project-paths class="min-h-24 w-full rounded-md border bg-background p-3 font-mono text-sm" placeholder="E:\Project"></textarea>
+      </label>
     </div>
     <template #footer>
-      <Button variant="outline" @click="emit('close')">{{ t("common.cancel") }}</Button>
-      <Button data-run-scan-btn :disabled="!credAlias || selected.size === 0 || diag.isScanning" @click="onRun">
-        {{ diag.isScanning ? t("modal.iniScanWizard.scanning") : t("modal.iniScanWizard.runOn", { count: selected.size }) }}
-      </Button>
+      <Button data-run-ini-scan-btn :disabled="!canRun" @click="run">{{ diagnostics.isRunning ? "Running" : "Run scan" }}</Button>
+      <Button variant="outline" @click="emit('close')">Close</Button>
     </template>
   </BaseModal>
 </template>

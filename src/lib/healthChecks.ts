@@ -1,62 +1,26 @@
-export type StatusKind =
-  | "healthy" | "warning" | "critical"
-  | "na" | "offline" | "progress" | "unknown" | "info";
+export type StatusKind = "healthy" | "warning" | "critical" | "na" | "offline" | "progress" | "unknown";
 
-export interface HealthCheckDef {
+export interface HealthCheckDefinition {
   id: string;
-  label: string;
   shortLabel: string;
-  emphasized?: boolean;
+  label: string;
   description: string;
-  remediation: string;
   symptom: string;
+  remediation: string;
+  subtitle?: string;
+  emphasized?: boolean;
 }
 
-export const HEALTH_CHECKS: HealthCheckDef[] = [
-  { id: "smb", label: "SMB service running", shortLabel: "SMB",
-    description: "LanmanServer service running on the host.",
-    remediation: "Start-Service LanmanServer; Set-Service -StartupType Automatic.",
-    symptom: "Clients cannot mount any share." },
-  { id: "firewall_445", label: "Firewall 445 inbound allowed", shortLabel: "FW 445",
-    description: "Inbound TCP/445 SMB rule enabled.",
-    remediation: "Enable-NetFirewallRule -DisplayGroup 'File and Printer Sharing'.",
-    symptom: "Test-Path \\\\HOST\\Share fails despite share existing." },
-  { id: "share_reachable", label: "Shared drive reachable", shortLabel: "Share",
-    description: "Test-Path against the configured share UNC.",
-    remediation: "Verify host online + share present + ACL grants this user.",
-    symptom: "DDC fallback to local; cluster cache miss everywhere." },
-  { id: "ntfs_perm", label: "NTFS permission (Host only)", shortLabel: "NTFS",
-    description: "Host's local NTFS ACL grants the share account Full Control.",
-    remediation: "icacls D:\\DDC /grant ddc-svc:(OI)(CI)F.",
-    symptom: "Clients can mount but get Access Denied on read/write." },
-  { id: "cred_user", label: "User-level credential", shortLabel: "Cred U",
-    description: "cmdkey /list contains the SMB host entry for the current user.",
-    remediation: "Re-run Mode B inject step to repopulate user-level cmdkey.",
-    symptom: "Interactive UE editor cannot mount the share." },
-  { id: "cred_system", label: "SYSTEM-level credential", shortLabel: "Cred SYS",
-    emphasized: true,
-    description: "PsExec -s cmdkey /list shows the entry under LocalSystem.",
-    remediation: "Re-run inject-system-credential.ps1; verify PsExec64 staged.",
-    symptom: "RenderStream Service / SYSTEM tasks cannot read DDC. Hardest to debug." },
-  { id: "env_vars", label: "Environment variables", shortLabel: "Env",
-    description: "UE-SharedDataCachePath matches the expected UNC.",
-    remediation: "Use Machines > Env vars to push the correct value.",
-    symptom: "INI EnvPathOverride resolves to empty; DDC silently local-only." },
-  { id: "ini_consistency", label: "INI consistency", shortLabel: "INI",
-    description: "Latest INI scan shows no open critical findings on this machine.",
-    remediation: "Open INI Scanner, apply suggested fixes.",
-    symptom: "Misconfigured DDC paths overrule cluster settings." },
-  { id: "system_write", label: "SYSTEM write test", shortLabel: "SYS Write",
-    emphasized: true,
-    description: "PsExec -s writes a probe file to the share. Final ground-truth test.",
-    remediation: "Resolve cred_system + ntfs_perm. If both green and this is red, ACL on a parent dir likely.",
-    symptom: "Service-context shader compile output cannot be cached cluster-wide." },
-  { id: "pso_precaching", label: "PSO Precaching CVar", shortLabel: "PSO cvar",
-    description: "Project ConsoleVariables.ini sets r.PSOPrecaching=1.",
-    remediation: "Set the CVar via the project ConsoleVariables.ini.",
-    symptom: "Scene-load hitches that PSO Cache files cannot fully cover." },
-  { id: "gpu_consistency", label: "GPU / driver consistency", shortLabel: "GPU",
-    description: "All cluster machines share the same (gpu_model, driver_version).",
-    remediation: "Standardize driver version across the cluster.",
-    symptom: "PSO Cache file collected on machine A is invalid on machine B." },
-];
+export const HEALTH_CHECKS = [
+  { id: "smb", shortLabel: "SMB", label: "SMB service", description: "Windows Server service is running.", symptom: "DDC shares are unreachable.", remediation: "Start LanmanServer." },
+  { id: "firewall_445", shortLabel: "445", label: "Firewall 445", description: "Inbound SMB firewall rules allow TCP 445.", symptom: "Share path times out from peer machines.", remediation: "Enable File and Printer Sharing inbound rules." },
+  { id: "share_reachable", shortLabel: "SHR", label: "Share reachable", description: "A non-admin SMB share exists and can be enumerated.", symptom: "Cache root cannot be mounted.", remediation: "Create or repair the DDC share." },
+  { id: "ntfs", shortLabel: "ACL", label: "NTFS access", description: "Filesystem and ACL prerequisites are available.", symptom: "Writes fail after network access succeeds.", remediation: "Fix NTFS permissions on the cache root." },
+  { id: "cred_user", shortLabel: "USR", label: "User credential", description: "Current user Credential Manager entries can be read.", symptom: "User-context SMB access prompts or fails.", remediation: "Store credentials through UECM." },
+  { id: "cred_system", shortLabel: "SYS", label: "SYSTEM credential", description: "SYSTEM credential check prerequisites are staged.", symptom: "Editor works but service/SYSTEM jobs fail.", remediation: "Inject SYSTEM credentials with PsExec64 staged.", emphasized: true },
+  { id: "system_write", shortLabel: "WRT", label: "SYSTEM write", description: "SYSTEM-context write prerequisites are staged and testable.", symptom: "Render services cannot write to shared cache.", remediation: "Stage PsExec64 and validate SYSTEM write access to the DDC share.", emphasized: true },
+  { id: "ini_consistency", shortLabel: "INI", label: "INI consistency", description: "Latest INI scan has no open critical findings.", symptom: "Machines silently use different cache paths.", remediation: "Resolve INI Scanner findings." },
+  { id: "env_vars", shortLabel: "ENV", label: "Environment variables", description: "Shared DDC env var is set at machine scope.", symptom: "EnvPathOverride points to an empty value.", remediation: "Set UE-SharedDataCachePath." },
+  { id: "pso_precaching", shortLabel: "PSO", label: "PSO Precaching CVar", subtitle: "Plan 6: derived from INI scanner R008-R010.", description: "Required PSO precaching CVars are enabled in ConsoleVariables.ini.", symptom: "PSO collection is incomplete or inconsistent.", remediation: "Apply R008-R010 recommendations in INI Scanner." },
+  { id: "gpu_consistency", shortLabel: "GPU", label: "GPU/driver consistency", subtitle: "Plan 6: derived from gpu_consistency module.", description: "GPU model and driver versions align across cluster.", symptom: "PSO cache is invalid across machines.", remediation: "Align GPU model and driver version before PSO work." },
+] as const satisfies readonly HealthCheckDefinition[];

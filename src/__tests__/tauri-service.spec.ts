@@ -54,67 +54,89 @@ describe("tauri service", () => {
     expect(result).toEqual(fake);
   });
 
-  // Diagnostics — INI scanner
-  it("scanInis passes all required args", async () => {
-    const fake = { scan_run_id: 3, critical: 1, warning: 2, healthy: 4 };
-    mockInvoke.mockResolvedValue(fake);
-    const result = await tauriApi.scanInis([11], { 11: ["C:\\proj"] }, "C:\\Users\\X", "UECM:winrm:PC");
+  it("scanInis wraps request", async () => {
+    mockInvoke.mockResolvedValue({ scan_run_id: 9, summary: {}, findings: [] });
+    await tauriApi.scanInis({ machine_ids: [1], credential_alias: "cred", project_paths: [], user_profile_path: null });
     expect(mockInvoke).toHaveBeenCalledWith("scan_inis", {
-      machineIds: [11],
-      projectPathsPerMachine: { 11: ["C:\\proj"] },
-      userProfile: "C:\\Users\\X",
-      credentialAlias: "UECM:winrm:PC",
+      request: { machine_ids: [1], credential_alias: "cred", project_paths: [], user_profile_path: null },
     });
-    expect(result).toEqual(fake);
   });
 
-  it("listFindingsForRun passes scanRunId", async () => {
-    mockInvoke.mockResolvedValue([]);
-    await tauriApi.listFindingsForRun(3);
-    expect(mockInvoke).toHaveBeenCalledWith("list_findings_for_run", { scanRunId: 3 });
-  });
-
-  it("listRecentIniRuns passes limit", async () => {
-    mockInvoke.mockResolvedValue([]);
-    await tauriApi.listRecentIniRuns(10);
-    expect(mockInvoke).toHaveBeenCalledWith("list_recent_ini_runs", { limit: 10 });
-  });
-
-  it("applyFinding passes findingId and credentialAlias", async () => {
-    mockInvoke.mockResolvedValue("C:\\f.ini.bak");
-    const result = await tauriApi.applyFinding(42, "UECM:winrm:PC");
-    expect(mockInvoke).toHaveBeenCalledWith("apply_finding", { findingId: 42, credentialAlias: "UECM:winrm:PC" });
-    expect(result).toBe("C:\\f.ini.bak");
-  });
-
-  it("skipFinding passes findingId", async () => {
-    mockInvoke.mockResolvedValue(undefined);
-    await tauriApi.skipFinding(42);
-    expect(mockInvoke).toHaveBeenCalledWith("skip_finding", { findingId: 42 });
-  });
-
-  // Diagnostics — Health check
-  it("runHealthCheck passes all required args", async () => {
-    const fake = { scan_run_id: 9, healthy: 70, warning: 4, critical: 2, offline: 0, total: 76 };
-    mockInvoke.mockResolvedValue(fake);
-    const result = await tauriApi.runHealthCheck([11], { 11: ["C:\\proj"] }, "UECM:winrm:PC");
+  it("runHealthCheck wraps request", async () => {
+    mockInvoke.mockResolvedValue({ scan_run_id: 10, results: [] });
+    await tauriApi.runHealthCheck({ machine_ids: [1], credential_alias: "cred", project_paths: ["E:\\Proj"] });
     expect(mockInvoke).toHaveBeenCalledWith("run_health_check", {
-      machineIds: [11],
-      projectPathsPerMachine: { 11: ["C:\\proj"] },
-      credentialAlias: "UECM:winrm:PC",
+      request: { machine_ids: [1], credential_alias: "cred", project_paths: ["E:\\Proj"] },
     });
-    expect(result).toEqual(fake);
   });
 
-  it("listRecentHealthRuns passes limit", async () => {
-    mockInvoke.mockResolvedValue([]);
-    await tauriApi.listRecentHealthRuns(5);
-    expect(mockInvoke).toHaveBeenCalledWith("list_recent_health_runs", { limit: 5 });
+  it("startPsoCollection passes collection args", async () => {
+    mockInvoke.mockResolvedValue({ job_id: "job-1", source_machine_id: 1, project_id: 7 });
+    await tauriApi.startPsoCollection({
+      sourceMachineId: 1,
+      projectId: 7,
+      ueVersion: "5.4",
+      resolutionW: 1280,
+      resolutionH: 720,
+      windowed: true,
+      maxMinutes: 10,
+      operatorCredentialAlias: "winrm",
+    });
+    expect(mockInvoke).toHaveBeenCalledWith("start_pso_collection", {
+      sourceMachineId: 1,
+      projectId: 7,
+      ueVersion: "5.4",
+      resolutionW: 1280,
+      resolutionH: 720,
+      windowed: true,
+      maxMinutes: 10,
+      operatorCredentialAlias: "winrm",
+    });
   });
 
-  it("listHealthResultsForRun passes scanRunId", async () => {
-    mockInvoke.mockResolvedValue([]);
-    await tauriApi.listHealthResultsForRun(9);
-    expect(mockInvoke).toHaveBeenCalledWith("list_health_results_for_run", { scanRunId: 9 });
+  it("distributePsoCache wraps backend request shape", async () => {
+    mockInvoke.mockResolvedValue({ job_id: "dist-1", plan: [] });
+    await tauriApi.distributePsoCache({
+      fileId: 5,
+      targetMachineIds: [2, 3],
+      namedShareUnc: "\\\\SOURCE\\PSO",
+      operatorCredentialAlias: "winrm",
+      sourceSmbCredentialAlias: "share",
+      forceGpuMismatch: false,
+    });
+    expect(mockInvoke).toHaveBeenCalledWith("distribute_pso_cache", {
+      request: {
+        file_id: 5,
+        target_machine_ids: [2, 3],
+        named_share_unc: "\\\\SOURCE\\PSO",
+        operator_credential_alias: "winrm",
+        source_smb_credential_alias: "share",
+        force_gpu_mismatch: false,
+      },
+    });
+  });
+
+  it("verifyPsoPrecaching wraps scanner request", async () => {
+    mockInvoke.mockResolvedValue({ scan_run_id: 11, summary: {}, findings: [] });
+    await tauriApi.verifyPsoPrecaching({
+      machine_ids: [4],
+      credential_alias: "cred",
+      project_paths: ["E:\\Proj"],
+      user_profile_path: null,
+    });
+    expect(mockInvoke).toHaveBeenCalledWith("verify_pso_precaching", {
+      request: {
+        machine_ids: [4],
+        credential_alias: "cred",
+        project_paths: ["E:\\Proj"],
+        user_profile_path: null,
+      },
+    });
+  });
+
+  it("getGpuConsistencyMatrix invokes matrix command", async () => {
+    mockInvoke.mockResolvedValue({ signatures: [], baseline: null, cells: [] });
+    await tauriApi.getGpuConsistencyMatrix();
+    expect(mockInvoke).toHaveBeenCalledWith("get_gpu_consistency_matrix");
   });
 });

@@ -13,3 +13,6 @@ export { default as UecmFilterChip } from "./UecmFilterChip.vue";
 export { default as UecmProgressBar } from "./UecmProgressBar.vue";
 export { default as UecmTaskCard } from "./UecmTaskCard.vue";
 export { default as UecmPathInput } from "./UecmPathInput.vue";
+export { default as UecmGpuMatrix } from "./UecmGpuMatrix.vue";
+export { default as UecmHorizontalSplit } from "./UecmHorizontalSplit.vue";
+export { default as UecmStateBlock } from "./UecmStateBlock.vue";

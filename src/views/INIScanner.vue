@@ -1,94 +1,85 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
-import { useI18n } from "vue-i18n";
+import { computed, onMounted, ref, watch } from "vue";
 import UecmPageHeader from "@/components/primitives/UecmPageHeader.vue";
-import UecmKpiTile from "@/components/primitives/UecmKpiTile.vue";
 import UecmIcon from "@/components/primitives/UecmIcon.vue";
+import UecmKpiTile from "@/components/primitives/UecmKpiTile.vue";
 import Button from "@/components/ui/Button.vue";
 import FindingHierarchy from "@/components/diagnostics/FindingHierarchy.vue";
 import FindingDetail from "@/components/diagnostics/FindingDetail.vue";
 import IniScanWizard from "@/components/modals/IniScanWizard.vue";
+import { useCredentialsStore } from "@/stores/credentials";
 import { useDiagnosticsStore } from "@/stores/diagnostics";
 import { useMachinesStore } from "@/stores/machines";
-import { useCredentialsStore } from "@/stores/credentials";
-import { formatUecmError, type IniFinding } from "@/services/tauri";
+import type { IniFinding } from "@/services/tauri";
 
-const { t } = useI18n();
-const diag = useDiagnosticsStore();
+const diagnostics = useDiagnosticsStore();
 const machines = useMachinesStore();
-const creds = useCredentialsStore();
-
+const credentials = useCredentialsStore();
 const showWizard = ref(false);
 const selectedFinding = ref<IniFinding | null>(null);
-const grouping = ref<"machine" | "category">("machine");
-const applying = ref(false);
+const applyCredentialAlias = ref("");
 
 const hostnameById = computed<Record<number, string>>(() => {
   const out: Record<number, string> = {};
-  for (const m of machines.machines) if (m.id != null) out[m.id] = m.hostname;
+  for (const machine of machines.machines) if (machine.id != null) out[machine.id] = machine.hostname;
   return out;
 });
 
+watch(() => diagnostics.findings, (findings) => {
+  if (!selectedFinding.value && findings.length > 0) selectedFinding.value = findings[0];
+}, { deep: true });
+
 onMounted(async () => {
   await machines.loadMachines();
-  await creds.load();
+  await credentials.load();
 });
 
-function pickWinrmCred() {
-  return creds.credentials.find((c) => c.kind === "winrm");
+async function apply(finding: IniFinding) {
+  if (!applyCredentialAlias.value || finding.id == null) return;
+  await diagnostics.applyFinding(finding.id, applyCredentialAlias.value);
 }
 
-async function onApply(f: IniFinding) {
-  const cred = pickWinrmCred();
-  if (!cred) {
-    window.alert(t("iniScanner.noWinrmCredAlert"));
-    return;
-  }
-  applying.value = true;
-  await diag.applyFinding(f.id!, cred.alias);
-  applying.value = false;
-  if (diag.error) window.alert(t("iniScanner.applyFailed", { error: formatUecmError(diag.error) }));
-}
-
-async function onSkip(f: IniFinding) {
-  await diag.skipFinding(f.id!);
-  if (diag.error) window.alert(t("iniScanner.skipFailed", { error: formatUecmError(diag.error) }));
+async function skip(finding: IniFinding) {
+  if (finding.id != null) await diagnostics.skipFinding(finding.id);
 }
 </script>
 
 <template>
   <div class="flex h-full flex-col">
     <div class="space-y-4 p-6">
-      <UecmPageHeader :title="t('iniScanner.title')" :eyebrow="t('iniScanner.eyebrow')"
-        :description="t('iniScanner.description')">
+      <UecmPageHeader title="INI Scanner" eyebrow="Config drift" description="Scan project, user, and engine INI files for DDC and cache drift.">
         <template #actions>
           <Button data-open-ini-scan-btn @click="showWizard = true">
-            <UecmIcon name="play" /> {{ t("iniScanner.runScan") }}
+            <UecmIcon name="play" /> Run scan
           </Button>
         </template>
       </UecmPageHeader>
       <section class="grid grid-cols-4 gap-px overflow-hidden rounded-lg border bg-border">
-        <UecmKpiTile :label="t('iniScanner.kpiCritical')" :value="diag.summary.critical" tone="critical" />
-        <UecmKpiTile :label="t('iniScanner.kpiWarning')"  :value="diag.summary.warning"  tone="warning" />
-        <UecmKpiTile :label="t('iniScanner.kpiHealthy')"  :value="diag.summary.healthy"  tone="healthy" />
-        <UecmKpiTile :label="t('iniScanner.kpiOpen')"     :value="diag.open.length"      tone="info" />
+        <UecmKpiTile label="Critical" :value="diagnostics.summary.critical" tone="critical" />
+        <UecmKpiTile label="Warning" :value="diagnostics.summary.warning" tone="warning" />
+        <UecmKpiTile label="Healthy" :value="diagnostics.summary.healthy" tone="healthy" />
+        <UecmKpiTile label="Files" :value="diagnostics.summary.total_files" tone="info" />
       </section>
+      <label v-if="diagnostics.findings.length > 0" class="block max-w-sm text-sm">
+        <span class="mb-1 block text-muted-foreground">Apply credential</span>
+        <select v-model="applyCredentialAlias" data-apply-credential class="h-9 w-full rounded-md border bg-background px-3 text-sm">
+          <option value="" disabled>Select credential for apply</option>
+          <option v-for="cred in credentials.credentials" :key="cred.alias" :value="cred.alias">{{ cred.alias }}</option>
+        </select>
+      </label>
     </div>
 
-    <section v-if="diag.findings.length === 0" class="grid flex-1 place-items-center text-center">
+    <section v-if="diagnostics.findings.length === 0" class="grid flex-1 place-items-center text-center">
       <div>
         <UecmIcon name="file-search" size="32" class="mx-auto text-muted-foreground" />
-        <p class="mt-2 font-display text-lg font-extrabold">{{ t("iniScanner.emptyTitle") }}</p>
-        <p class="mt-1 text-sm text-muted-foreground">{{ t("iniScanner.emptyHint") }}</p>
+        <h2 class="mt-4 font-display text-lg font-extrabold">Run an INI scan</h2>
+        <p class="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">No diagnostics have been collected in this session.</p>
       </div>
     </section>
 
     <section v-else class="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[2fr_3fr]">
-      <FindingHierarchy class="border-r" :findings="diag.findings" :selected-id="selectedFinding?.id ?? null"
-                        :hostname-by-id="hostnameById" :group-by="grouping"
-                        @select="selectedFinding = $event" />
-      <FindingDetail :finding="selectedFinding" :busy="applying"
-                     @apply="onApply" @skip="onSkip" />
+      <FindingHierarchy class="border-r" :findings="diagnostics.findings" :selected-id="selectedFinding?.id ?? null" :hostname-by-id="hostnameById" @select="selectedFinding = $event" />
+      <FindingDetail :finding="selectedFinding" :busy="diagnostics.isApplying" :can-apply="applyCredentialAlias !== ''" @apply="apply" @skip="skip" />
     </section>
 
     <IniScanWizard :open="showWizard" @close="showWizard = false" />

@@ -1,11 +1,8 @@
 <script setup lang="ts">
-import { useI18n } from "vue-i18n";
 import UecmMatrixCell from "@/components/primitives/UecmMatrixCell.vue";
-import UecmStatusDot from "@/components/primitives/UecmStatusDot.vue";
 import { HEALTH_CHECKS, type StatusKind } from "@/lib/healthChecks";
-import type { Machine, CheckOutcome } from "@/services/tauri";
+import type { CheckOutcome, Machine } from "@/services/tauri";
 
-const { t } = useI18n();
 const props = defineProps<{
   machines: Machine[];
   rowsByMachine: Record<number, Record<string, CheckOutcome>>;
@@ -21,33 +18,24 @@ function cellStatus(machineId: number, checkId: string): StatusKind {
 
 <template>
   <div class="overflow-auto">
-    <table data-health-matrix class="min-w-[920px] border-collapse text-xs">
+    <table data-health-matrix class="min-w-[980px] border-collapse text-xs">
       <thead class="sticky top-0 bg-card">
         <tr>
-          <th class="sticky left-0 z-10 min-w-[180px] border-b bg-card px-3 py-2 text-left">{{ t("healthCheck.headerMachine") }}</th>
-          <th
-            v-for="c in HEALTH_CHECKS" :key="c.id"
-            class="border-b px-2 py-2 text-center align-bottom"
-            :class="c.emphasized ? 'border-b-2 border-primary' : ''"
-          >
-            <span class="font-mono uppercase">{{ c.shortLabel }}</span>
+          <th class="sticky left-0 z-10 min-w-[180px] border-b bg-card px-3 py-2 text-left">Machine</th>
+          <th v-for="check in HEALTH_CHECKS" :key="check.id" class="border-b px-2 py-2 text-center" :class="'emphasized' in check && check.emphasized ? 'border-b-2 border-primary' : ''">
+            <span class="font-mono uppercase">{{ check.shortLabel }}</span>
           </th>
         </tr>
       </thead>
       <tbody>
-        <tr v-for="m in machines" :key="m.id ?? m.ip">
+        <tr v-for="machine in machines" :key="machine.id ?? machine.ip">
           <td class="sticky left-0 z-10 min-w-[180px] border-b bg-card px-3 py-2">
-            <div class="flex items-center gap-2">
-              <UecmStatusDot :tone="(m.status as StatusKind)" />
-              <div>
-                <div class="font-mono text-[12px] font-medium">{{ m.hostname }}</div>
-                <div class="font-mono text-[10px] text-muted-foreground">{{ m.ip }}</div>
-              </div>
-            </div>
+            <div class="font-mono text-[12px] font-bold">{{ machine.hostname }}</div>
+            <div class="font-mono text-[10px] text-muted-foreground">{{ machine.ip }}</div>
           </td>
-          <td v-for="c in HEALTH_CHECKS" :key="c.id" class="border-b px-1 py-1 text-center">
-            <button data-matrix-cell @click="m.id != null && emit('select', { machineId: m.id, checkId: c.id })">
-              <UecmMatrixCell :tone="cellStatus(m.id ?? -1, c.id)" />
+          <td v-for="check in HEALTH_CHECKS" :key="check.id" class="border-b px-1 py-1 text-center">
+            <button data-matrix-cell @click="machine.id != null && emit('select', { machineId: machine.id, checkId: check.id })">
+              <UecmMatrixCell :tone="cellStatus(machine.id ?? -1, check.id)" />
             </button>
           </td>
         </tr>

@@ -11,7 +11,7 @@ use crate::data::{
     machines as data_machines, scan_runs, Db, IniFinding,
 };
 use crate::error::{UecmError, UecmResult};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::State;
 
@@ -23,9 +23,60 @@ pub struct ScanRunSummary {
     pub healthy: i64,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScanInisRequest {
+    pub machine_ids: Vec<i64>,
+    pub credential_alias: String,
+    pub project_paths: Vec<String>,
+    pub user_profile_path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IniScanSummary {
+    pub scan_run_id: i64,
+    pub critical: i64,
+    pub warning: i64,
+    pub healthy: i64,
+    pub info: i64,
+    pub total_files: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ScanInisResponse {
+    pub scan_run_id: i64,
+    pub summary: IniScanSummary,
+    pub findings: Vec<IniFinding>,
+}
+
 #[tauri::command]
 pub fn scan_inis(
     db: State<'_, Db>,
+    request: ScanInisRequest,
+) -> UecmResult<ScanInisResponse> {
+    let summary = scan_inis_summary(
+        &db,
+        request.machine_ids.clone(),
+        paths_for_machines(&request.machine_ids, &request.project_paths),
+        request.user_profile_path.unwrap_or_default(),
+        request.credential_alias,
+    )?;
+    let findings = ini_findings::list_for_run(&db, summary.scan_run_id)?;
+    Ok(ScanInisResponse {
+        scan_run_id: summary.scan_run_id,
+        summary: IniScanSummary {
+            scan_run_id: summary.scan_run_id,
+            critical: summary.critical,
+            warning: summary.warning,
+            healthy: summary.healthy,
+            info: 0,
+            total_files: 0,
+        },
+        findings,
+    })
+}
+
+fn scan_inis_summary(
+    db: &Db,
     machine_ids: Vec<i64>,
     project_paths_per_machine: std::collections::HashMap<i64, Vec<String>>,
     user_profile: String,
@@ -158,14 +209,43 @@ pub fn scan_inis(
     })
 }
 
+fn paths_for_machines(
+    machine_ids: &[i64],
+    project_paths: &[String],
+) -> std::collections::HashMap<i64, Vec<String>> {
+    machine_ids
+        .iter()
+        .map(|machine_id| (*machine_id, project_paths.to_vec()))
+        .collect()
+}
+
 #[tauri::command]
 pub fn list_findings_for_run(db: State<'_, Db>, scan_run_id: i64) -> UecmResult<Vec<IniFinding>> {
     ini_findings::list_for_run(&db, scan_run_id)
 }
 
 #[tauri::command]
+pub fn list_findings(db: State<'_, Db>, scan_run_id: i64) -> UecmResult<Vec<IniFinding>> {
+    ini_findings::list_for_run(&db, scan_run_id)
+}
+
+#[tauri::command]
 pub fn list_recent_ini_runs(db: State<'_, Db>, limit: i64) -> UecmResult<Vec<scan_runs::ScanRun>> {
     scan_runs::list_recent(&db, "ini", limit)
+}
+
+#[tauri::command]
+pub fn list_scan_runs(
+    db: State<'_, Db>,
+    scan_type: String,
+    limit: i64,
+) -> UecmResult<Vec<scan_runs::ScanRun>> {
+    scan_runs::list_recent(&db, &scan_type, limit)
+}
+
+#[tauri::command]
+pub fn get_finding(db: State<'_, Db>, finding_id: i64) -> UecmResult<Option<IniFinding>> {
+    ini_findings::find_by_id(&db, finding_id)
 }
 
 #[tauri::command]
@@ -190,4 +270,17 @@ pub fn apply_finding(
 #[tauri::command]
 pub fn skip_finding(db: State<'_, Db>, finding_id: i64) -> UecmResult<()> {
     ini_findings::mark_skipped(&db, finding_id)
+}
+
+#[tauri::command]
+pub fn verify_pso_precaching(
+    db: State<'_, Db>,
+    request: ScanInisRequest,
+) -> UecmResult<ScanInisResponse> {
+    if request.project_paths.is_empty() {
+        return Err(UecmError::InvalidInput(
+            "project_paths cannot be empty for PSO precaching verification".into(),
+        ));
+    }
+    scan_inis(db, request)
 }
