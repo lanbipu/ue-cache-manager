@@ -9,6 +9,8 @@
 #   3. Win32_VideoController.AdapterRAM (last-resort, unsigned 32-bit so
 #      capped at 4 GB; only used when registry lookup yields nothing)
 
+[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
+
 $ErrorActionPreference = 'SilentlyContinue'
 
 function Get-GpuVramMb {

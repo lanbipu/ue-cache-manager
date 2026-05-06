@@ -13,15 +13,20 @@ param(
     [string]$SvcUsername = "",
     [string]$ExpectedSharedDataCachePath = "",
     [string]$Username,
-    [string]$Password
+    [string]$Password,
+    [switch]$Local
 )
+
+[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
 
 $ErrorActionPreference = 'Stop'
 
 function Build-CredentialOrNull {
     param([string]$User, [string]$Pass)
     if ([string]::IsNullOrEmpty($User) -or [string]::IsNullOrEmpty($Pass)) { return $null }
-    if ($User -notmatch '[\\@]') { $User = ".\$User" }
+    $User = $User.Trim()
+    if ([string]::IsNullOrEmpty($User)) { return $null }
+    if ($User.StartsWith(".\") -or $User.StartsWith("./")) { $User = $User.Substring(2) }
     $secure = ConvertTo-SecureString -String $Pass -AsPlainText -Force
     return New-Object System.Management.Automation.PSCredential($User, $secure)
 }
@@ -135,15 +140,20 @@ try {
         }
         return $results
     }
-    $cred = Build-CredentialOrNull -User $Username -Pass $Password
-    $invokeArgs = @{
-        ComputerName = $HostName
-        ScriptBlock  = $script
-        ArgumentList = @($ShareUnc, $SvcUsername, $ExpectedSharedDataCachePath)
-        ErrorAction  = 'Stop'
+    if ($Local) {
+        $r = & $script $ShareUnc $SvcUsername $ExpectedSharedDataCachePath
+    } else {
+        $cred = Build-CredentialOrNull -User $Username -Pass $Password
+        $invokeArgs = @{
+            ComputerName = $HostName
+            ScriptBlock  = $script
+            ArgumentList = @($ShareUnc, $SvcUsername, $ExpectedSharedDataCachePath)
+            ErrorAction  = 'Stop'
+            Authentication = 'Negotiate'
+        }
+        if ($cred) { $invokeArgs['Credential'] = $cred }
+        $r = Invoke-Command @invokeArgs
     }
-    if ($cred) { $invokeArgs['Credential'] = $cred }
-    $r = Invoke-Command @invokeArgs
 
     @{ ok = $true; results = $r; message = '' } | ConvertTo-Json -Compress -Depth 6
 }

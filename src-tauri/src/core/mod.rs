@@ -8,6 +8,7 @@ pub mod ini_apply;
 pub mod ini_diagnostics;
 pub mod ini_editor;
 pub mod ini_scanner;
+pub mod loopback;
 pub mod network;
 pub mod powershell;
 pub mod psexec;

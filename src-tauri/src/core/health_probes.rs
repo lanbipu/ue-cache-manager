@@ -1,6 +1,6 @@
 //! WinRM dispatch for `health-probes.ps1`.
 
-use crate::core::powershell;
+use crate::core::{loopback, powershell};
 use crate::error::{UecmError, UecmResult};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -28,7 +28,10 @@ pub fn run(
         "-SvcUsername".into(), svc_username.into(),
         "-ExpectedSharedDataCachePath".into(), expected_shared_path.into(),
     ];
-    if let Some((u, p)) = cred {
+    if loopback::is_loopback_target(host) {
+        let _ = cred;
+        args.push("-Local".into());
+    } else if let Some((u, p)) = cred {
         args.push("-Username".into()); args.push(u.into());
         args.push("-Password".into()); args.push(p.into());
     }

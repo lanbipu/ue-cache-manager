@@ -1,8 +1,9 @@
 //! Single-machine INI section read + key write via PowerShell sidecar.
 
-use crate::core::powershell;
+use crate::core::{loopback, powershell};
 use crate::error::{UecmError, UecmResult};
 use serde::{Deserialize, Serialize};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct IniKey {
@@ -25,6 +26,10 @@ pub struct WriteResult {
 }
 
 pub fn read_section(host: &str, file_path: &str, section: &str) -> UecmResult<Vec<IniKey>> {
+    if loopback::is_loopback_target(host) {
+        return read_section_local(file_path, section);
+    }
+
     let result: ReadResult = powershell::run_json(
         &powershell::script_path("read-ini-section.ps1"),
         &[
@@ -49,6 +54,10 @@ pub fn set_key(
     name: &str,
     value: &str,
 ) -> UecmResult<String> {
+    if loopback::is_loopback_target(host) {
+        return write_key_local(file_path, section, name, Some(value));
+    }
+
     let result: WriteResult = powershell::run_json(
         &powershell::script_path("write-ini-key.ps1"),
         &[
@@ -77,6 +86,11 @@ pub fn read_section_with_credential(
     username: &str,
     password: &str,
 ) -> UecmResult<Vec<IniKey>> {
+    if loopback::is_loopback_target(host) {
+        let _ = (username, password);
+        return read_section_local(file_path, section);
+    }
+
     let result: ReadResult = powershell::run_json(
         &powershell::script_path("read-ini-section.ps1"),
         &[
@@ -107,6 +121,11 @@ pub fn set_key_with_credential(
     username: &str,
     password: &str,
 ) -> UecmResult<String> {
+    if loopback::is_loopback_target(host) {
+        let _ = (username, password);
+        return write_key_local(file_path, section, name, Some(value));
+    }
+
     let result: WriteResult = powershell::run_json(
         &powershell::script_path("write-ini-key.ps1"),
         &[
@@ -139,6 +158,11 @@ pub fn remove_key_with_credential(
     username: &str,
     password: &str,
 ) -> UecmResult<String> {
+    if loopback::is_loopback_target(host) {
+        let _ = (username, password);
+        return write_key_local(file_path, section, name, None);
+    }
+
     let result: WriteResult = powershell::run_json(
         &powershell::script_path("write-ini-key.ps1"),
         &[
@@ -154,6 +178,121 @@ pub fn remove_key_with_credential(
         )));
     }
     Ok(result.backup_path)
+}
+
+fn read_section_local(file_path: &str, section: &str) -> UecmResult<Vec<IniKey>> {
+    let contents = std::fs::read_to_string(file_path)?;
+    let mut keys = Vec::new();
+    let mut in_section = false;
+    let section_marker = format!("[{}]", section);
+
+    for line in contents.lines() {
+        let trim = line.trim();
+        if trim == section_marker {
+            in_section = true;
+            continue;
+        }
+        if in_section && trim.starts_with('[') && trim.ends_with(']') {
+            break;
+        }
+        if in_section
+            && !trim.is_empty()
+            && !trim.starts_with(';')
+            && !trim.starts_with('#')
+        {
+            if let Some(eq) = trim.find('=') {
+                if eq > 0 {
+                    keys.push(IniKey {
+                        name: trim[..eq].trim().to_string(),
+                        value: trim[eq + 1..].trim().to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(keys)
+}
+
+fn write_key_local(
+    file_path: &str,
+    section: &str,
+    name: &str,
+    value: Option<&str>,
+) -> UecmResult<String> {
+    let contents = std::fs::read_to_string(file_path)?;
+    let backup = local_backup_path(file_path);
+    std::fs::copy(file_path, &backup)?;
+
+    let remove = value.is_none();
+    let mut out = Vec::new();
+    let mut in_section = false;
+    let mut section_seen = false;
+    let mut written = false;
+    let section_marker = format!("[{}]", section);
+
+    for line in contents.lines() {
+        let trim = line.trim();
+        if trim == section_marker {
+            in_section = true;
+            section_seen = true;
+            out.push(line.to_string());
+            continue;
+        }
+        if in_section && trim.starts_with('[') && trim.ends_with(']') {
+            if !remove && !written {
+                out.push(format!("{}={}", name, value.unwrap_or_default()));
+                written = true;
+            }
+            in_section = false;
+            out.push(line.to_string());
+            continue;
+        }
+        if in_section && key_matches(trim, name) {
+            if remove {
+                continue;
+            }
+            out.push(format!("{}={}", name, value.unwrap_or_default()));
+            written = true;
+            continue;
+        }
+        out.push(line.to_string());
+    }
+
+    if !remove && !written && in_section {
+        out.push(format!("{}={}", name, value.unwrap_or_default()));
+    }
+
+    if !remove && !section_seen {
+        if out.last().is_some_and(|line| !line.trim().is_empty()) {
+            out.push(String::new());
+        }
+        out.push(section_marker);
+        out.push(format!("{}={}", name, value.unwrap_or_default()));
+    }
+
+    let mut updated = out.join("\n");
+    if contents.ends_with('\n') || !updated.is_empty() {
+        updated.push('\n');
+    }
+    std::fs::write(file_path, updated)?;
+
+    Ok(backup)
+}
+
+fn key_matches(trimmed_line: &str, name: &str) -> bool {
+    trimmed_line
+        .find('=')
+        .map(|eq| trimmed_line[..eq].trim() == name)
+        .unwrap_or(false)
+}
+
+fn local_backup_path(file_path: &str) -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    format!("{}.bak.{}", file_path, millis)
 }
 
 #[cfg(test)]
@@ -220,5 +359,48 @@ mod tests {
             "p",
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn set_key_with_credential_writes_directly_for_loopback_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("DefaultEngine.ini");
+        std::fs::write(&path, "[DDC]\nPath=Old\n").unwrap();
+
+        let backup = set_key_with_credential(
+            "localhost",
+            &path.to_string_lossy(),
+            "DDC",
+            "Path",
+            "New",
+            "ignored",
+            "ignored",
+        )
+        .unwrap();
+
+        let updated = std::fs::read_to_string(&path).unwrap();
+        assert!(updated.contains("Path=New"));
+        assert!(std::path::Path::new(&backup).exists());
+    }
+
+    #[test]
+    fn remove_key_with_credential_writes_directly_for_loopback_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("DefaultEngine.ini");
+        std::fs::write(&path, "[DDC]\nPath=Old\nKeep=1\n").unwrap();
+
+        remove_key_with_credential(
+            "localhost",
+            &path.to_string_lossy(),
+            "DDC",
+            "Path",
+            "ignored",
+            "ignored",
+        )
+        .unwrap();
+
+        let updated = std::fs::read_to_string(&path).unwrap();
+        assert!(!updated.contains("Path=Old"));
+        assert!(updated.contains("Keep=1"));
     }
 }

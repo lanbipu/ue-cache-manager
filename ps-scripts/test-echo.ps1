@@ -5,6 +5,8 @@ param(
     [string]$Message = "hello"
 )
 
+[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
+
 $result = @{
     received = $Message
     timestamp = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")

@@ -4,9 +4,10 @@
 use crate::core::ini_diagnostics::{
     self, Category, EnvVarState, Finding, ParsedFile, ParsedKey, ParsedSection,
 };
-use crate::core::powershell;
+use crate::core::{loopback, powershell};
 use crate::error::{UecmError, UecmResult};
 use serde::Deserialize;
+use std::io::ErrorKind;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TargetFile {
@@ -72,6 +73,11 @@ pub fn read_file(
     target: &TargetFile,
     cred: Option<(&str, &str)>,
 ) -> UecmResult<Option<ParsedFile>> {
+    if loopback::is_loopback_target(host) {
+        let _ = cred;
+        return read_local_file(target);
+    }
+
     let mut args: Vec<String> = vec![
         "-HostName".into(), host.into(),
         "-FilePath".into(), target.path.clone(),
@@ -106,6 +112,70 @@ pub fn read_file(
             }).collect(),
         }).collect(),
     }))
+}
+
+fn read_local_file(target: &TargetFile) -> UecmResult<Option<ParsedFile>> {
+    let contents = match std::fs::read_to_string(&target.path) {
+        Ok(contents) => contents,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(UecmError::OperationFailed(format!(
+                "read local INI failed: {}",
+                e
+            )));
+        }
+    };
+    Ok(Some(parse_ini_contents(target, &contents)))
+}
+
+fn parse_ini_contents(target: &TargetFile, contents: &str) -> ParsedFile {
+    let mut sections = Vec::new();
+    let mut current: Option<ParsedSection> = None;
+
+    for (idx, line) in contents.lines().enumerate() {
+        let line_number = idx + 1;
+        let trim = line.trim();
+        if trim.starts_with('[') && trim.ends_with(']') && trim.len() > 2 {
+            if let Some(section) = current.take() {
+                sections.push(section);
+            }
+            current = Some(ParsedSection {
+                name: trim[1..trim.len() - 1].to_string(),
+                keys: Vec::new(),
+            });
+            continue;
+        }
+
+        let Some(section) = current.as_mut() else {
+            continue;
+        };
+        if trim.is_empty()
+            || trim.starts_with(';')
+            || trim.starts_with('#')
+            || trim.starts_with("//")
+        {
+            continue;
+        }
+        if let Some(eq) = trim.find('=') {
+            if eq > 0 {
+                section.keys.push(ParsedKey {
+                    name: trim[..eq].trim().to_string(),
+                    value: trim[eq + 1..].trim().to_string(),
+                    line_number,
+                });
+            }
+        }
+    }
+
+    if let Some(section) = current {
+        sections.push(section);
+    }
+
+    ParsedFile {
+        path: target.path.clone(),
+        category: target.category,
+        sections,
+    }
 }
 
 pub struct ScanInputs<'a> {
@@ -184,5 +254,28 @@ mod tests {
         assert!(paths.iter().any(|p| p.path.ends_with("DefaultEngine.ini")));
         assert!(paths.iter().any(|p| p.path.ends_with("ConsoleVariables.ini")));
         assert!(paths.iter().any(|p| p.path.ends_with("WindowsEngine.ini")));
+    }
+
+    #[test]
+    fn read_file_uses_local_filesystem_for_loopback_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("DefaultEngine.ini");
+        std::fs::write(
+            &path,
+            "[/Script/Engine.RendererSettings]\nr.PSOPrecaching=1\n",
+        )
+        .unwrap();
+
+        let target = TargetFile {
+            path: path.to_string_lossy().to_string(),
+            category: Category::Project,
+        };
+        let parsed = read_file("localhost", &target, Some(("ignored", "ignored")))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(parsed.sections[0].name, "/Script/Engine.RendererSettings");
+        assert_eq!(parsed.sections[0].keys[0].name, "r.PSOPrecaching");
+        assert_eq!(parsed.sections[0].keys[0].value, "1");
     }
 }

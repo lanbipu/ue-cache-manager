@@ -4,6 +4,8 @@
 # Output: JSON array of { version, install_path }, e.g.
 #   [{"version":"5.4","install_path":"C:\\Program Files\\Epic Games\\UE_5.4"}]
 
+[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
+
 $ErrorActionPreference = 'SilentlyContinue'
 
 $results = @()

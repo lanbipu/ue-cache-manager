@@ -2,7 +2,7 @@
 //! All operations are Windows-only at runtime; non-Windows returns
 //! `UecmError::PowerShell("WinRM is Windows-only")` so the codebase still builds + tests on dev machines.
 
-use crate::core::powershell;
+use crate::core::{loopback, powershell};
 use crate::error::{UecmError, UecmResult};
 use serde::Deserialize;
 
@@ -15,6 +15,13 @@ pub struct ProbeResult {
 
 /// Probe a single host's WinRM availability.
 pub fn probe(host: &str) -> UecmResult<ProbeResult> {
+    if loopback::is_loopback_target(host) {
+        return Ok(ProbeResult {
+            ok: true,
+            message: "loopback target; WinRM bypassed".to_string(),
+            latency_ms: 0,
+        });
+    }
     let script = powershell::script_path("test-winrm.ps1");
     powershell::run_json::<ProbeResult>(&script, &["-HostName", host])
 }
@@ -25,6 +32,10 @@ pub fn probe(host: &str) -> UecmResult<ProbeResult> {
 pub fn invoke(host: &str, script_body: &str) -> UecmResult<String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
+
+    if loopback::is_loopback_target(host) {
+        return invoke_local(script_body);
+    }
 
     let wrapper = powershell::script_path("invoke-remote.ps1");
 
@@ -90,6 +101,11 @@ pub fn invoke_with_credential(
     use std::io::Write;
     use std::process::{Command, Stdio};
 
+    if loopback::is_loopback_target(host) {
+        let _ = (username, password);
+        return invoke_local(script_body);
+    }
+
     let wrapper = powershell::script_path("invoke-remote.ps1");
 
     let mut child = Command::new("powershell.exe")
@@ -147,6 +163,50 @@ pub fn invoke_with_credential(
     Err(UecmError::PowerShell(
         "WinRM is Windows-only".to_string(),
     ))
+}
+
+#[cfg(windows)]
+fn invoke_local(script_body: &str) -> UecmResult<String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("powershell.exe")
+        .arg("-NoProfile")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-Command")
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| UecmError::PowerShell(format!("failed to spawn powershell.exe: {}", e)))?;
+
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| UecmError::PowerShell("failed to open stdin".to_string()))?;
+        stdin
+            .write_all(b"[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null\n")
+            .and_then(|_| stdin.write_all(script_body.as_bytes()))
+            .map_err(|e| UecmError::PowerShell(format!("failed to write stdin: {}", e)))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| UecmError::PowerShell(format!("wait failed: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(UecmError::PowerShell(format!(
+            "local invoke failed (exit {}): {}",
+            output.status.code().unwrap_or(-1),
+            stderr
+        )));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 /// Invoke a remote script and parse stdout as JSON of type T.

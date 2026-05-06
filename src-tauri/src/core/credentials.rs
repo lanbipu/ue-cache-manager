@@ -31,6 +31,15 @@ pub struct CmdKeyAlias {
     pub alias: String,
 }
 
+pub fn normalize_username_for_storage(username: &str) -> String {
+    let trimmed = username.trim();
+    trimmed
+        .strip_prefix(".\\")
+        .or_else(|| trimmed.strip_prefix("./"))
+        .unwrap_or(trimmed)
+        .to_string()
+}
+
 pub fn store(alias: &str, username: &str, password: &str) -> UecmResult<()> {
     let result: CmdKeyResult = powershell::run_json(
         &powershell::script_path("cred-set.ps1"),
@@ -274,5 +283,17 @@ mod tests {
     fn delete_password_is_noop_on_non_windows() {
         let result = delete_password("UECM:winrm:HOST");
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn normalize_username_for_storage_strips_dot_slash_prefix() {
+        assert_eq!(normalize_username_for_storage(".\\uecm-test"), "uecm-test");
+        assert_eq!(normalize_username_for_storage("./uecm-test"), "uecm-test");
+    }
+
+    #[test]
+    fn normalize_username_for_storage_preserves_domain_and_upn() {
+        assert_eq!(normalize_username_for_storage("LANPC\\uecm-test"), "LANPC\\uecm-test");
+        assert_eq!(normalize_username_for_storage("uecm-test@example.local"), "uecm-test@example.local");
     }
 }

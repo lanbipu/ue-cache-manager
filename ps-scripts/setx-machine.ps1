@@ -11,17 +11,16 @@ param(
     [string]$Password
 )
 
+[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
+
 $ErrorActionPreference = 'Stop'
 
 function Build-CredentialOrNull {
     param([string]$User, [string]$Pass)
     if ([string]::IsNullOrEmpty($User) -or [string]::IsNullOrEmpty($Pass)) { return $null }
-    # Bare usernames default to MicrosoftAccount domain on MS-account-logged-in
-    # hosts, breaking NTLM (status 0xC000006A). Force the local SAM domain for
-    # unqualified names; existing DOMAIN\user or user@upn pass through.
-    if ($User -notmatch '[\\@]') {
-        $User = ".\$User"
-    }
+    $User = $User.Trim()
+    if ([string]::IsNullOrEmpty($User)) { return $null }
+    if ($User.StartsWith(".\") -or $User.StartsWith("./")) { $User = $User.Substring(2) }
     $secure = ConvertTo-SecureString -String $Pass -AsPlainText -Force
     return New-Object System.Management.Automation.PSCredential($User, $secure)
 }
@@ -40,6 +39,7 @@ try {
         ScriptBlock  = $script
         ArgumentList = @($Name, $Value)
         ErrorAction  = 'Stop'
+        Authentication = 'Negotiate'
     }
     if ($cred) { $invokeArgs['Credential'] = $cred }
     Invoke-Command @invokeArgs | Out-Null

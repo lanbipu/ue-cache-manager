@@ -6,6 +6,8 @@ param(
     [Parameter(Mandatory=$true)] [string]$Alias
 )
 
+[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
+
 $ErrorActionPreference = 'Stop'
 
 try {

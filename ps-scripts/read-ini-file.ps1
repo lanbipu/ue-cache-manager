@@ -10,12 +10,17 @@ param(
     [string]$Password
 )
 
+[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
+
 $ErrorActionPreference = 'Stop'
 
 function Build-CredentialOrNull {
     param([string]$User, [string]$Pass)
     if ([string]::IsNullOrEmpty($User) -or [string]::IsNullOrEmpty($Pass)) { return $null }
-    if ($User -notmatch '[\\@]') { $User = ".\$User" }
+    $User = $User.Trim()
+    if ([string]::IsNullOrEmpty($User)) { return $null }
+    if ($User.StartsWith("./")) { $User = ".\" + $User.Substring(2) }
+    elseif ($User -notmatch '[\\@]') { $User = ".\$User" }
     $secure = ConvertTo-SecureString -String $Pass -AsPlainText -Force
     return New-Object System.Management.Automation.PSCredential($User, $secure)
 }
@@ -64,6 +69,7 @@ try {
         ScriptBlock  = $script
         ArgumentList = @($FilePath)
         ErrorAction  = 'Stop'
+        Authentication = 'Negotiate'
     }
     if ($cred) { $invokeArgs['Credential'] = $cred }
     $result = Invoke-Command @invokeArgs
