@@ -115,7 +115,7 @@ pub fn read_file(
 }
 
 fn read_local_file(target: &TargetFile) -> UecmResult<Option<ParsedFile>> {
-    let contents = match std::fs::read_to_string(&target.path) {
+    let raw = match std::fs::read_to_string(&target.path) {
         Ok(contents) => contents,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
         Err(e) => {
@@ -125,7 +125,12 @@ fn read_local_file(target: &TargetFile) -> UecmResult<Option<ParsedFile>> {
             )));
         }
     };
-    Ok(Some(parse_ini_contents(target, &contents)))
+    // UE editors save user INI files as UTF-8 with a BOM. read_to_string keeps
+    // the BOM as U+FEFF, which makes the first line not start with '[' and the
+    // parser drops the entire file. The remote PowerShell path strips the BOM
+    // via `Get-Content -Encoding UTF8`, so do the same here for parity.
+    let contents = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
+    Ok(Some(parse_ini_contents(target, contents)))
 }
 
 fn parse_ini_contents(target: &TargetFile, contents: &str) -> ParsedFile {
@@ -189,13 +194,16 @@ pub struct ScanInputs<'a> {
 
 /// Per-file outcome of one scan pass for a single machine.
 ///
-/// `errors` keeps human-readable failure reasons (with file path attached) so the
-/// caller can show "scan completed with N errors" instead of silently reporting 0
-/// findings when the credential / WinRM is broken.
+/// `errors` carries hard read failures (WinRM down, permission denied, etc.).
+/// `not_found` carries paths the scanner attempted but the file did not exist —
+/// kept separate so the wizard can show "X files missing" without misclassifying
+/// them as errors, and so a fully-empty scan never looks "healthy" by default.
 #[derive(Debug, Default)]
 pub struct ScanOutcome {
     pub findings: Vec<Finding>,
     pub errors: Vec<String>,
+    pub not_found: Vec<String>,
+    pub read_count: usize,
 }
 
 pub fn scan_machine(inputs: &ScanInputs) -> UecmResult<ScanOutcome> {
@@ -207,8 +215,11 @@ pub fn scan_machine(inputs: &ScanInputs) -> UecmResult<ScanOutcome> {
     let mut outcome = ScanOutcome::default();
     for tf in &targets {
         match read_file(inputs.host, tf, inputs.credential) {
-            Ok(Some(pf)) => outcome.findings.extend(ini_diagnostics::run_rules(&pf, &inputs.env_state)),
-            Ok(None) => {}
+            Ok(Some(pf)) => {
+                outcome.read_count += 1;
+                outcome.findings.extend(ini_diagnostics::run_rules(&pf, &inputs.env_state));
+            }
+            Ok(None) => outcome.not_found.push(tf.path.clone()),
             Err(e) => {
                 let msg = format!("{}: {}", tf.path, e);
                 eprintln!("[ini_scanner] {}", msg);

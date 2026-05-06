@@ -42,7 +42,9 @@ pub fn scan_inis(
     let mut total_critical = 0i64;
     let mut total_warning = 0i64;
     let mut total_healthy = 0i64;
+    let mut total_read: usize = 0;
     let mut all_errors: Vec<String> = Vec::new();
+    let mut all_not_found: Vec<String> = Vec::new();
 
     for &mid in &machine_ids {
         let machine = data_machines::find_by_id(&db, mid)?
@@ -70,8 +72,12 @@ pub fn scan_inis(
         };
 
         let outcome = ini_scanner::scan_machine(&inputs)?;
+        total_read += outcome.read_count;
         for err in &outcome.errors {
             all_errors.push(format!("{}: {}", machine.hostname, err));
+        }
+        for nf in &outcome.not_found {
+            all_not_found.push(format!("{}: {}", machine.hostname, nf));
         }
         for f in outcome.findings {
             let row = IniFinding {
@@ -115,17 +121,33 @@ pub fn scan_inis(
         summary["errors_count"] = json!(all_errors.len());
         summary["errors"] = json!(preview);
     }
+    if !all_not_found.is_empty() {
+        let preview: Vec<String> = all_not_found.iter().take(20).cloned().collect();
+        summary["not_found_count"] = json!(all_not_found.len());
+        summary["not_found"] = json!(preview);
+    }
+    summary["read_count"] = json!(total_read);
     scan_runs::finish(&db, scan_id, &summary)?;
 
-    // If every read failed (zero findings + at least one error), surface the
-    // failure to the caller so the wizard alerts instead of showing an empty
-    // "healthy" summary.
-    if total_findings == 0 && !all_errors.is_empty() {
-        return Err(UecmError::OperationFailed(format!(
-            "INI scan produced no findings; {} read errors. First: {}",
-            all_errors.len(),
-            all_errors.first().cloned().unwrap_or_default()
-        )));
+    // Only surface failure when *no* file was actually read. A scan that read at
+    // least one INI but happens to find nothing actionable, with optional files
+    // missing on the side, is a legitimate "all clean" outcome — don't promote
+    // that into a wizard error.
+    if total_read == 0 {
+        if !all_errors.is_empty() {
+            return Err(UecmError::OperationFailed(format!(
+                "INI scan read no files; {} read error(s). First: {}",
+                all_errors.len(),
+                all_errors.first().cloned().unwrap_or_default()
+            )));
+        }
+        if !all_not_found.is_empty() {
+            return Err(UecmError::OperationFailed(format!(
+                "INI scan read no files: all {} target(s) missing. First: {}",
+                all_not_found.len(),
+                all_not_found.first().cloned().unwrap_or_default()
+            )));
+        }
     }
 
     Ok(ScanRunSummary {
