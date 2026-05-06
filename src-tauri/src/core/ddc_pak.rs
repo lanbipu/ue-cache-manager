@@ -145,18 +145,16 @@ pub fn launch_generation(
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
 mod tests {
     use super::*;
 
-    #[cfg(not(windows))]
     #[test]
     fn preflight_returns_powershell_error_on_non_windows() {
         let result = preflight("h", "C:\\UE", "C:\\X.uproject", Some("u"), Some("p"));
         assert!(matches!(result, Err(UecmError::PowerShell(_))));
     }
 
-    #[cfg(not(windows))]
     #[test]
     fn verify_returns_powershell_error_on_non_windows() {
         let result = verify_output("h", "C:\\X", Some("u"), Some("p"));

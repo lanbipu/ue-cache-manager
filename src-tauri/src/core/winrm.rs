@@ -230,11 +230,10 @@ pub fn invoke_json_with_credential<T: serde::de::DeserializeOwned>(
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
 mod tests {
     use super::*;
 
-    #[cfg(not(windows))]
     #[test]
     fn invoke_returns_error_on_non_windows() {
         let result = invoke("RENDER-01", "Get-Date");
@@ -242,7 +241,6 @@ mod tests {
         assert!(matches!(result.unwrap_err(), UecmError::PowerShell(_)));
     }
 
-    #[cfg(not(windows))]
     #[test]
     fn probe_returns_error_on_non_windows() {
         // probe goes through powershell::run_script which also fails on non-Windows
@@ -250,7 +248,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[cfg(not(windows))]
     #[test]
     fn invoke_with_credential_returns_error_on_non_windows() {
         let result = invoke_with_credential("RENDER-01", "Get-Date", "admin", "p@ss");

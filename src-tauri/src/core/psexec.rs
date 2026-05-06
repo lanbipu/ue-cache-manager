@@ -49,11 +49,10 @@ pub fn inject_system_credential(
     Ok(result.message)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
 mod tests {
     use super::*;
 
-    #[cfg(not(windows))]
     #[test]
     fn inject_returns_powershell_error_on_non_windows() {
         let result = inject_system_credential("CLIENT", "HOST", "ddc-svc", "p", None, None);
