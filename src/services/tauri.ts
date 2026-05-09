@@ -52,6 +52,15 @@ export interface RefreshResult {
   error: string | null;
 }
 
+export interface WinrmBootstrapResult {
+  ok: boolean;
+  method: string;
+  message: string;
+  winrm_ok: boolean;
+  changed: string[];
+  manual_script: string | null;
+}
+
 export type CredentialKind = "winrm" | "share";
 
 export interface CredentialRecord {
@@ -427,6 +436,20 @@ export const tauriApi = {
   },
   async refreshMachine(machineId: number): Promise<RefreshResult> {
     return invoke<RefreshResult>("refresh_machine", { machineId });
+  },
+  async bootstrapWinrm(
+    machineId: number,
+    credentialAlias: string,
+    enableLocalAccountRemoteAdmin = false,
+  ): Promise<WinrmBootstrapResult> {
+    return invoke<WinrmBootstrapResult>("bootstrap_winrm", {
+      machineId,
+      credentialAlias,
+      enableLocalAccountRemoteAdmin,
+    });
+  },
+  async getWinrmBootstrapScript(): Promise<string> {
+    return invoke<string>("get_winrm_bootstrap_script");
   },
 
   // Credentials

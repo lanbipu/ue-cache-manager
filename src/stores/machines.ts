@@ -5,6 +5,7 @@ import {
   type Machine,
   type MachineDetail,
   type UecmError,
+  type WinrmBootstrapResult,
 } from "@/services/tauri";
 
 export const useMachinesStore = defineStore("machines", () => {
@@ -17,6 +18,17 @@ export const useMachinesStore = defineStore("machines", () => {
 
   const refreshError = ref<string | null>(null);
   const isRefreshing = ref(false);
+  const bootstrapResult = ref<WinrmBootstrapResult | null>(null);
+  const bootstrapError = ref<string | null>(null);
+  const isBootstrapping = ref(false);
+  const bootstrapScript = ref<string | null>(null);
+  const isLoadingBootstrapScript = ref(false);
+
+  function clearBootstrapState() {
+    bootstrapResult.value = null;
+    bootstrapError.value = null;
+    bootstrapScript.value = null;
+  }
 
   async function loadMachines() {
     isLoading.value = true;
@@ -46,6 +58,7 @@ export const useMachinesStore = defineStore("machines", () => {
       await tauriApi.deleteMachine(id);
       if (selectedDetail.value?.machine.id === id) {
         selectedDetail.value = null;
+        clearBootstrapState();
       }
       await loadMachines();
     } catch (e) {
@@ -69,11 +82,15 @@ export const useMachinesStore = defineStore("machines", () => {
   async function selectMachine(id: number) {
     isDetailLoading.value = true;
     error.value = null;
+    if (selectedDetail.value?.machine.id !== id) {
+      clearBootstrapState();
+    }
     try {
       selectedDetail.value = await tauriApi.getMachineDetail(id);
     } catch (e) {
       error.value = e as UecmError;
       selectedDetail.value = null;
+      clearBootstrapState();
     } finally {
       isDetailLoading.value = false;
     }
@@ -81,6 +98,7 @@ export const useMachinesStore = defineStore("machines", () => {
 
   function clearSelection() {
     selectedDetail.value = null;
+    clearBootstrapState();
   }
 
   async function refreshSelected() {
@@ -101,6 +119,43 @@ export const useMachinesStore = defineStore("machines", () => {
     }
   }
 
+  async function bootstrapSelected(credentialAlias: string, enableLocalAccountRemoteAdmin = false) {
+    if (!selectedDetail.value?.machine.id) return;
+    const id = selectedDetail.value.machine.id;
+    isBootstrapping.value = true;
+    error.value = null;
+    bootstrapError.value = null;
+    bootstrapResult.value = null;
+    try {
+      const result = await tauriApi.bootstrapWinrm(id, credentialAlias, enableLocalAccountRemoteAdmin);
+      bootstrapResult.value = result;
+      if (!result.ok) {
+        bootstrapError.value = result.message;
+        if (result.manual_script) {
+          bootstrapScript.value = result.manual_script;
+        }
+      }
+      await selectMachine(id);
+    } catch (e) {
+      error.value = e as UecmError;
+      bootstrapError.value = (e as UecmError).message;
+    } finally {
+      isBootstrapping.value = false;
+    }
+  }
+
+  async function loadBootstrapScript() {
+    isLoadingBootstrapScript.value = true;
+    error.value = null;
+    try {
+      bootstrapScript.value = await tauriApi.getWinrmBootstrapScript();
+    } catch (e) {
+      error.value = e as UecmError;
+    } finally {
+      isLoadingBootstrapScript.value = false;
+    }
+  }
+
   return {
     machines,
     isLoading,
@@ -109,6 +164,11 @@ export const useMachinesStore = defineStore("machines", () => {
     isDetailLoading,
     refreshError,
     isRefreshing,
+    bootstrapResult,
+    bootstrapError,
+    isBootstrapping,
+    bootstrapScript,
+    isLoadingBootstrapScript,
     loadMachines,
     addMachine,
     deleteMachine,
@@ -116,5 +176,7 @@ export const useMachinesStore = defineStore("machines", () => {
     selectMachine,
     clearSelection,
     refreshSelected,
+    bootstrapSelected,
+    loadBootstrapScript,
   };
 });

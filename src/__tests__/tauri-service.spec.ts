@@ -46,6 +46,30 @@ describe("tauri service", () => {
     expect(mockInvoke).toHaveBeenCalledWith("delete_machine", { id: 7 });
   });
 
+  it("bootstrapWinrm passes machine and credential alias", async () => {
+    mockInvoke.mockResolvedValue({
+      ok: true,
+      method: "psexec",
+      message: "WinRM enabled",
+      winrm_ok: true,
+      manual_script: null,
+    });
+    const result = await tauriApi.bootstrapWinrm(7, "UECM:winrm:RENDER-01");
+    expect(mockInvoke).toHaveBeenCalledWith("bootstrap_winrm", {
+      machineId: 7,
+      credentialAlias: "UECM:winrm:RENDER-01",
+      enableLocalAccountRemoteAdmin: false,
+    });
+    expect(result.winrm_ok).toBe(true);
+  });
+
+  it("getWinrmBootstrapScript invokes the export command", async () => {
+    mockInvoke.mockResolvedValue("Enable-PSRemoting -Force");
+    const result = await tauriApi.getWinrmBootstrapScript();
+    expect(mockInvoke).toHaveBeenCalledWith("get_winrm_bootstrap_script");
+    expect(result).toContain("Enable-PSRemoting");
+  });
+
   it("testPowerShellBridge passes message", async () => {
     const fake = { received: "hi", timestamp: "2026-01-01", machine: "PC" };
     mockInvoke.mockResolvedValue(fake);
