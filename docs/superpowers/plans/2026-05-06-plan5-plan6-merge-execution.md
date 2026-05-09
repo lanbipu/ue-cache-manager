@@ -1466,9 +1466,21 @@ pnpm tauri build --no-bundle
 > 注意（来自 memory `deploy_tar_appledouble.md`）：`COPYFILE_DISABLE=1` 必须设，否则 `._*` 文件污染 Tauri capabilities loader。
 
 ```bash
-COPYFILE_DISABLE=1 tar -czf /tmp/uecm-build.tar.gz -C src-tauri/target/release uecm.exe
+COPYFILE_DISABLE=1 tar -czf /tmp/uecm-build.tar.gz \
+  -C src-tauri/target/release uecm.exe \
+  -C /Users/bip.lan/AIWorkspace/vp/ue-cache-manager ps-scripts vendor
 scp /tmp/uecm-build.tar.gz lanpc@192.168.10.20:C:/Tools/UECM/
 ```
+
+在 lanPC 上解压后，`C:\Tools\UECM` 必须同时包含：
+
+```text
+uecm.exe
+ps-scripts\
+vendor\
+```
+
+只复制 `uecm.exe` 会导致 WinRM probe、UE registry scan、GPU WMI scan、PsExec credential injection 等 sidecar 功能失败。
 
 (具体路径以你 lanPC 部署路径为准)
 
