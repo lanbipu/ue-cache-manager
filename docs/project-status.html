@@ -1,0 +1,1539 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UECM · Operations Manual · v1.0</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Manrope:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* ===== UECM design tokens (mirrors src/styles/tokens.css) ===== */
+  :root{
+    --background: oklch(0.985 0.002 240);
+    --foreground: oklch(0.22 0.01 240);
+    --card: oklch(1 0 0);
+    --popover: oklch(1 0 0);
+    --primary: oklch(0.58 0.13 210);
+    --primary-foreground: oklch(0.99 0 0);
+    --muted: oklch(0.955 0.005 240);
+    --muted-foreground: oklch(0.5 0.01 240);
+    --accent: oklch(0.93 0.008 220);
+    --border: oklch(0.9 0.005 240);
+    --input: oklch(0.9 0.005 240);
+    --ring: oklch(0.58 0.13 210);
+    --status-healthy: oklch(0.55 0.15 152);
+    --status-warning: oklch(0.65 0.16 75);
+    --status-critical: oklch(0.55 0.22 25);
+    --status-info: oklch(0.58 0.13 210);
+    --radius: 0.5rem;
+    --font-sans: "Inter", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --font-display: "Manrope", "Inter", "Helvetica Neue", Helvetica, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+  .dark{
+    --background: oklch(0.16 0.005 240);
+    --foreground: oklch(0.96 0 0);
+    --card: oklch(0.195 0.005 240);
+    --popover: oklch(0.205 0.005 240);
+    --primary: oklch(0.78 0.13 200);
+    --primary-foreground: oklch(0.16 0.005 240);
+    --muted: oklch(0.235 0.005 240);
+    --muted-foreground: oklch(0.68 0.01 240);
+    --accent: oklch(0.27 0.005 240);
+    --border: oklch(0.27 0.005 240);
+    --input: oklch(0.27 0.005 240);
+    --ring: oklch(0.78 0.13 200);
+    --status-healthy: oklch(0.72 0.16 152);
+    --status-warning: oklch(0.78 0.16 75);
+    --status-critical: oklch(0.65 0.22 25);
+    --status-info: oklch(0.78 0.13 200);
+  }
+
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--background);color:var(--foreground);
+    font-family:var(--font-sans);font-feature-settings:"cv11","ss01","ss03";
+    font-size:14px;line-height:1.65;
+    -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
+    min-height:100vh;
+  }
+  ::selection{background:color-mix(in oklch,var(--primary) 30%,transparent);color:var(--foreground)}
+  a{color:inherit}
+
+  /* ===== Top nav (document, not app shell) ===== */
+  .topnav{
+    position:sticky;top:0;z-index:100;
+    background:color-mix(in oklch,var(--background) 92%,transparent);
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    border-bottom:1px solid var(--border);
+    padding:14px 32px;
+    display:flex;align-items:center;justify-content:space-between;gap:24px;
+  }
+  .topnav__left{display:flex;align-items:center;gap:12px}
+  .topnav__mark{
+    width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(135deg,var(--primary),color-mix(in oklch,var(--primary) 60%,var(--accent)));
+    color:var(--primary-foreground);font-family:var(--font-display);font-weight:800;font-size:14px;
+  }
+  .topnav__brand{font-family:var(--font-display);font-weight:800;font-size:14px;letter-spacing:-0.01em}
+  .topnav__sub{font-size:11px;color:var(--muted-foreground);margin-top:1px}
+  .topnav__right{display:flex;align-items:center;gap:6px}
+  .topnav__link{
+    font-family:var(--font-mono);font-size:11.5px;font-weight:500;letter-spacing:0.02em;
+    color:var(--muted-foreground);text-decoration:none;padding:6px 10px;border-radius:6px;
+    transition:color .15s ease,background .15s ease;
+  }
+  .topnav__link:hover{color:var(--foreground);background:var(--accent)}
+  .topnav__divider{width:1px;height:18px;background:var(--border);margin:0 6px}
+
+  .themetoggle{
+    display:flex;background:var(--muted);border:1px solid var(--border);
+    border-radius:9999px;padding:2px;
+  }
+  .themetoggle button{
+    width:28px;height:28px;border:none;border-radius:9999px;background:transparent;
+    color:var(--muted-foreground);cursor:pointer;display:flex;align-items:center;
+    justify-content:center;transition:all .18s ease;
+  }
+  .themetoggle button[aria-pressed="true"]{
+    background:var(--card);color:var(--foreground);
+    box-shadow:0 1px 2px color-mix(in oklch,var(--foreground) 8%,transparent);
+  }
+  .themetoggle button:hover{color:var(--foreground)}
+  .themetoggle svg{width:14px;height:14px;stroke-width:2}
+
+  /* ===== Container ===== */
+  .container{max-width:1240px;margin:0 auto;padding:48px 32px 80px}
+  @media(max-width:760px){.container{padding:32px 18px 60px}}
+
+  /* ===== Hero ===== */
+  .hero{margin-bottom:32px}
+  .eyebrow{font-family:var(--font-mono);font-size:11px;font-weight:600;text-transform:uppercase;
+    letter-spacing:0.14em;color:var(--primary);margin-bottom:14px;
+    display:flex;align-items:center;gap:10px;}
+  .eyebrow::before{content:'';width:24px;height:1px;background:var(--primary)}
+  .hero__title{
+    font-family:var(--font-display);font-weight:800;font-size:clamp(36px,4.5vw,56px);
+    line-height:1.15;color:var(--foreground);margin-bottom:14px;
+  }
+  .hero__title em{font-style:normal;color:var(--primary)}
+  .hero__sub{font-size:16px;color:var(--muted-foreground);max-width:780px;line-height:1.6}
+
+  /* ===== Stat row ===== */
+  .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:32px}
+  @media(max-width:980px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  .stat{
+    background:var(--card);border:1px solid var(--border);border-radius:8px;padding:14px 16px;
+    box-shadow:0 1px 2px color-mix(in oklch,var(--foreground) 4%,transparent);
+  }
+  .stat__label{font-family:var(--font-mono);font-size:10.5px;font-weight:600;text-transform:uppercase;
+    letter-spacing:0.08em;color:var(--muted-foreground)}
+  .stat__value{font-family:var(--font-display);font-weight:800;font-size:28px;line-height:1;
+    margin-top:8px;letter-spacing:-0.02em;color:var(--foreground)}
+  .stat__detail{font-size:11.5px;color:var(--muted-foreground);margin-top:4px;line-height:1.6}
+
+  /* ===== Quick Start path (KEY) ===== */
+  .quickpath{
+    margin-top:48px;padding:24px 24px 28px;
+    background:linear-gradient(135deg,
+      color-mix(in oklch,var(--primary) 8%,var(--card)),
+      var(--card));
+    border:1px solid color-mix(in oklch,var(--primary) 25%,var(--border));
+    border-radius:12px;
+    box-shadow:0 4px 16px color-mix(in oklch,var(--primary) 8%,transparent);
+  }
+  .quickpath__head{
+    display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:14px;
+    margin-bottom:24px;
+  }
+  .quickpath__title{
+    font-family:var(--font-display);font-weight:800;font-size:22px;line-height:1.3;
+    color:var(--foreground);
+  }
+  .quickpath__sub{font-size:13px;color:var(--muted-foreground);margin-top:4px}
+  .quickpath__legend{
+    font-size:12px;color:var(--muted-foreground);letter-spacing:0.02em;
+    display:flex;align-items:center;gap:8px;
+  }
+  .quickpath__legend::before{content:'';width:24px;height:2px;background:var(--primary);border-radius:2px}
+
+  .quickpath__steps{
+    display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:0;
+    list-style:none;position:relative;
+  }
+  @media(max-width:980px){.quickpath__steps{grid-template-columns:repeat(1,1fr);gap:14px}}
+
+  .quickstep{
+    position:relative;padding:0 14px;
+    display:flex;flex-direction:column;gap:10px;
+  }
+  /* connector line between steps */
+  .quickstep:not(:last-child)::after{
+    content:'';position:absolute;
+    top:18px;left:calc(50% + 18px);right:calc(-50% + 18px);
+    height:2px;background:repeating-linear-gradient(90deg,
+      color-mix(in oklch,var(--primary) 60%,transparent) 0 6px,
+      transparent 6px 10px);
+    z-index:0;
+  }
+  @media(max-width:980px){.quickstep:not(:last-child)::after{display:none}}
+
+  .quickstep__num{
+    width:36px;height:36px;border-radius:50%;
+    background:var(--primary);color:var(--primary-foreground);
+    display:flex;align-items:center;justify-content:center;
+    font-family:var(--font-display);font-weight:800;font-size:15px;
+    box-shadow:0 0 0 4px color-mix(in oklch,var(--primary) 18%,transparent);
+    position:relative;z-index:1;
+  }
+  .quickstep__title{
+    font-family:var(--font-display);font-weight:800;font-size:15px;line-height:1.3;
+    color:var(--foreground);
+  }
+  .quickstep__cn{font-size:13px;color:var(--muted-foreground);line-height:1.65}
+  .quickstep__link{
+    margin-top:auto;font-size:12px;font-weight:500;
+    color:var(--primary);text-decoration:none;display:inline-flex;align-items:center;gap:4px;
+  }
+  .quickstep__link:hover{text-decoration:underline}
+
+  /* ===== Section ===== */
+  .section{margin-top:56px;scroll-margin-top:80px}
+  .sectionhead{
+    display:flex;justify-content:space-between;align-items:flex-end;gap:24px;flex-wrap:wrap;
+    padding-bottom:16px;margin-bottom:24px;border-bottom:1px solid var(--border);
+  }
+  .sectionhead__title{
+    display:flex;align-items:baseline;gap:14px;
+    font-family:var(--font-display);font-weight:800;font-size:24px;
+    color:var(--foreground);
+  }
+  .sectionhead__num{
+    font-family:var(--font-mono);font-size:11.5px;font-weight:600;letter-spacing:0.06em;
+    color:var(--primary);background:color-mix(in oklch,var(--primary) 12%,transparent);
+    padding:3px 9px;border-radius:4px;
+  }
+  .sectionhead__sub{font-size:13.5px;color:var(--muted-foreground);margin-top:6px;max-width:680px}
+  .sectionhead__meta{display:flex;font-size:11px;color:var(--muted-foreground);
+    text-transform:uppercase;letter-spacing:0.06em;font-weight:500;font-family:var(--font-mono)}
+  .sectionhead__meta span{padding:0 12px;border-right:1px solid var(--border)}
+  .sectionhead__meta span:first-child{padding-left:0}
+  .sectionhead__meta span:last-child{border-right:none;padding-right:0}
+
+  /* ===== §01 surfaces (8 view tour) ===== */
+  .surfaces{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+  @media(max-width:840px){.surfaces{grid-template-columns:1fr}}
+  .surface{
+    background:var(--card);border:1px solid var(--border);border-radius:8px;padding:20px 22px;
+    box-shadow:0 1px 2px color-mix(in oklch,var(--foreground) 4%,transparent);
+    display:flex;flex-direction:column;gap:14px;
+    transition:border-color .2s ease,box-shadow .2s ease;
+  }
+  .surface:hover{
+    border-color:color-mix(in oklch,var(--primary) 30%,var(--border));
+    box-shadow:0 4px 14px color-mix(in oklch,var(--foreground) 6%,transparent);
+  }
+  .surface__head{display:flex;align-items:flex-start;gap:14px}
+  .surface__icon{
+    width:44px;height:44px;border-radius:9px;flex-shrink:0;
+    background:color-mix(in oklch,var(--primary) 12%,transparent);color:var(--primary);
+    display:flex;align-items:center;justify-content:center;
+  }
+  .surface__icon svg{width:22px;height:22px;stroke-width:2}
+  .surface__nav{
+    font-family:var(--font-mono);font-size:10.5px;font-weight:600;
+    color:var(--muted-foreground);letter-spacing:0.06em;text-transform:uppercase;
+  }
+  .surface__name{font-family:var(--font-display);font-weight:800;font-size:18px;
+    letter-spacing:-0.012em;color:var(--foreground);margin-top:2px;line-height:1.2}
+  .surface__cn{font-size:13px;color:var(--muted-foreground);margin-top:3px}
+  .surface__lead{font-size:13.5px;line-height:1.75;
+    color:color-mix(in oklch,var(--foreground) 82%,var(--muted-foreground))}
+  .surface__lead strong{color:var(--foreground);font-weight:700}
+  .surface__lead code{font-family:var(--font-mono);font-size:11.5px;
+    background:var(--muted);color:var(--foreground);
+    padding:1px 5px;border-radius:3px;border:1px solid var(--border)}
+
+  .surface__block{padding-top:14px;border-top:1px dashed var(--border)}
+  .surface__blockhead{font-size:11px;font-weight:700;
+    letter-spacing:0.04em;color:var(--primary);margin-bottom:8px;
+    display:flex;align-items:center;gap:6px}
+  .surface__blockhead svg{width:11px;height:11px;stroke-width:2.2}
+  .surface__list{list-style:none;display:flex;flex-direction:column;gap:6px}
+  .surface__list li{position:relative;padding-left:14px;font-size:12.5px;
+    line-height:1.7;color:color-mix(in oklch,var(--foreground) 80%,var(--muted-foreground))}
+  .surface__list li::before{content:'·';position:absolute;left:4px;top:-1px;color:var(--primary);
+    font-size:18px;font-weight:700;line-height:1}
+  .surface__list li code{font-family:var(--font-mono);font-size:11px;
+    background:var(--muted);padding:1px 4px;border-radius:3px;border:1px solid var(--border);
+    color:var(--foreground)}
+  .surface__list li b{color:var(--foreground);font-weight:700}
+
+  .surface__related{display:flex;flex-wrap:wrap;gap:5px;padding-top:12px;border-top:1px dashed var(--border)}
+  .relchip{
+    font-size:11.5px;font-weight:600;letter-spacing:0.02em;
+    color:var(--primary);background:color-mix(in oklch,var(--primary) 10%,transparent);
+    border:1px solid color-mix(in oklch,var(--primary) 25%,transparent);
+    padding:2px 8px;border-radius:9999px;text-decoration:none;
+    display:inline-flex;align-items:center;gap:4px;
+    transition:background .15s ease;
+  }
+  .relchip:hover{background:color-mix(in oklch,var(--primary) 18%,transparent)}
+
+  /* ===== §02 features (compact 4-col grid) ===== */
+  .features{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+  @media(max-width:1180px){.features{grid-template-columns:repeat(3,minmax(0,1fr))}}
+  @media(max-width:840px){.features{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(max-width:560px){.features{grid-template-columns:1fr}}
+  .feature{
+    background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;
+    box-shadow:0 1px 2px color-mix(in oklch,var(--foreground) 4%,transparent);
+    display:flex;flex-direction:column;gap:10px;
+    transition:border-color .2s ease,transform .2s ease,box-shadow .2s ease;
+  }
+  .feature:hover{
+    border-color:color-mix(in oklch,var(--primary) 30%,var(--border));
+    box-shadow:0 4px 12px color-mix(in oklch,var(--foreground) 6%,transparent);
+  }
+  .feature__head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .feature__id{font-family:var(--font-mono);font-size:10.5px;font-weight:600;letter-spacing:0.06em;
+    color:var(--muted-foreground);text-transform:uppercase}
+  .feature__icon{
+    width:32px;height:32px;border-radius:6px;display:flex;align-items:center;justify-content:center;
+    background:color-mix(in oklch,var(--primary) 12%,transparent);color:var(--primary);
+  }
+  .feature__icon svg{width:16px;height:16px;stroke-width:2}
+  .feature__title{font-family:var(--font-display);font-weight:800;font-size:15px;line-height:1.2;
+    letter-spacing:-0.01em;color:var(--foreground);margin-top:2px}
+  .feature__cn{font-size:12.5px;color:var(--muted-foreground);margin-top:2px;line-height:1.4}
+  .feature__body{font-size:12.5px;line-height:1.7;
+    color:color-mix(in oklch,var(--foreground) 78%,var(--muted-foreground))}
+  .feature__body strong{color:var(--foreground);font-weight:700}
+  .feature__body code{font-family:var(--font-mono);font-size:11px;
+    background:var(--muted);color:var(--foreground);
+    padding:1px 5px;border-radius:3px;border:1px solid var(--border);white-space:nowrap}
+
+  .badge{
+    display:inline-flex;align-items:center;gap:5px;
+    height:20px;padding:0 7px;border-radius:9999px;
+    font-family:var(--font-display);font-weight:700;font-size:10px;
+    text-transform:uppercase;letter-spacing:0.04em;border:1px solid;
+    flex-shrink:0;
+  }
+  .badge svg{width:10px;height:10px;stroke-width:2.2}
+  .badge--healthy{border-color:color-mix(in oklch,var(--status-healthy) 30%,transparent);
+    background:color-mix(in oklch,var(--status-healthy) 10%,transparent);color:var(--status-healthy)}
+  .badge--info{border-color:color-mix(in oklch,var(--status-info) 30%,transparent);
+    background:color-mix(in oklch,var(--status-info) 10%,transparent);color:var(--status-info)}
+  .badge--warning{border-color:color-mix(in oklch,var(--status-warning) 30%,transparent);
+    background:color-mix(in oklch,var(--status-warning) 10%,transparent);color:var(--status-warning)}
+  .badge--muted{border-color:var(--border);background:var(--muted);color:var(--muted-foreground)}
+
+  .feature__tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:auto;padding-top:10px;
+    border-top:1px dashed var(--border)}
+  .tag{font-family:var(--font-mono);font-size:10px;color:var(--muted-foreground);
+    background:var(--muted);border:1px solid var(--border);padding:1px 6px;border-radius:3px}
+
+  /* ===== §02 scenarios (KEY redesign) ===== */
+  .scenarios{display:flex;flex-direction:column;gap:32px}
+  .scenario{
+    background:var(--card);border:1px solid var(--border);border-radius:12px;
+    box-shadow:0 1px 2px color-mix(in oklch,var(--foreground) 4%,transparent);
+    overflow:hidden;
+  }
+  .scenario__head{
+    padding:20px 24px;border-bottom:1px solid var(--border);
+    display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;
+    background:color-mix(in oklch,var(--primary) 4%,var(--card));
+  }
+  .scenario__title{
+    display:flex;align-items:baseline;gap:12px;
+    font-family:var(--font-display);font-weight:800;font-size:18px;
+    color:var(--foreground);
+  }
+  .scenario__letter{
+    width:30px;height:30px;border-radius:50%;
+    background:var(--primary);color:var(--primary-foreground);
+    display:flex;align-items:center;justify-content:center;
+    font-family:var(--font-display);font-weight:800;font-size:13px;
+    flex-shrink:0;
+  }
+  .scenario__cn{font-size:13px;color:var(--muted-foreground);font-weight:400;margin-left:4px}
+
+  /* horizontal flow chart inside scenario head */
+  .flow{
+    display:flex;align-items:center;gap:0;flex-wrap:wrap;
+    font-family:var(--font-mono);font-size:11.5px;
+  }
+  .flow__node{
+    display:inline-flex;align-items:center;gap:6px;
+    padding:4px 10px;border-radius:9999px;
+    background:var(--muted);border:1px solid var(--border);
+    color:var(--foreground);font-weight:600;letter-spacing:0.02em;
+    cursor:pointer;text-decoration:none;
+    transition:all .15s ease;
+  }
+  .flow__node:hover{
+    background:color-mix(in oklch,var(--primary) 15%,var(--muted));
+    border-color:var(--primary);color:var(--primary);
+  }
+  .flow__dot{width:6px;height:6px;border-radius:50%;background:var(--primary)}
+  .flow__arrow{
+    color:var(--muted-foreground);padding:0 6px;font-family:var(--font-mono);font-weight:700;
+  }
+
+  .scenario__body{padding:20px 24px;display:flex;flex-direction:column;gap:18px}
+
+  /* compact procedure card (vertical timeline inside) */
+  .proc{
+    background:var(--popover);border:1px solid var(--border);border-radius:8px;padding:18px 20px;
+    display:flex;flex-direction:column;gap:14px;scroll-margin-top:80px;
+  }
+  .proc__head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+  .proc__id{
+    font-family:var(--font-mono);font-size:10.5px;font-weight:600;letter-spacing:0.06em;
+    color:var(--primary);background:color-mix(in oklch,var(--primary) 12%,transparent);
+    padding:3px 8px;border-radius:4px;text-transform:uppercase;
+  }
+  .proc__title{font-family:var(--font-display);font-weight:800;font-size:17px;line-height:1.25;
+    letter-spacing:-0.012em;color:var(--foreground);margin-top:2px}
+  .proc__cn{font-size:13px;color:var(--muted-foreground);margin-top:2px}
+
+  /* vertical timeline of steps */
+  .steps{
+    list-style:none;display:flex;flex-direction:column;gap:0;
+    position:relative;padding-left:0;
+  }
+  .steps::before{
+    content:'';position:absolute;left:11px;top:14px;bottom:14px;width:2px;
+    background:linear-gradient(to bottom,
+      color-mix(in oklch,var(--primary) 55%,transparent),
+      color-mix(in oklch,var(--primary) 18%,transparent));
+    border-radius:2px;
+  }
+  .steps li{
+    position:relative;padding:6px 0 6px 36px;
+    font-size:13px;line-height:1.6;
+    color:color-mix(in oklch,var(--foreground) 82%,var(--muted-foreground));
+  }
+  .steps li::before{
+    content:counter(step,decimal-leading-zero);counter-increment:step;
+    position:absolute;left:0;top:6px;
+    width:24px;height:24px;border-radius:50%;
+    background:var(--card);border:2px solid var(--primary);color:var(--primary);
+    font-family:var(--font-mono);font-weight:700;font-size:9.5px;letter-spacing:0;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .steps{counter-reset:step}
+  .steps li code{font-family:var(--font-mono);font-size:11.5px;
+    background:var(--muted);color:var(--foreground);
+    padding:1px 5px;border-radius:3px;border:1px solid var(--border);
+    word-break:break-all;
+  }
+
+  /* prereq / expect / verify inline tips */
+  .tips{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;
+    padding-top:14px;margin-top:4px;border-top:1px dashed var(--border)}
+  @media(max-width:760px){.tips{grid-template-columns:1fr}}
+  .tip{
+    border-left:3px solid var(--border);padding:6px 0 6px 12px;
+  }
+  .tip--prereq{border-left-color:var(--status-warning)}
+  .tip--expect{border-left-color:var(--status-healthy)}
+  .tip--verify{border-left-color:var(--status-info)}
+  .tip__label{
+    font-family:var(--font-mono);font-size:10px;font-weight:700;letter-spacing:0.08em;
+    text-transform:uppercase;display:flex;align-items:center;gap:5px;
+  }
+  .tip--prereq .tip__label{color:var(--status-warning)}
+  .tip--expect .tip__label{color:var(--status-healthy)}
+  .tip--verify .tip__label{color:var(--status-info)}
+  .tip__label svg{width:11px;height:11px;stroke-width:2.2}
+  .tip__body{font-size:12px;color:color-mix(in oklch,var(--foreground) 78%,var(--muted-foreground));
+    line-height:1.65;margin-top:4px;}
+  .tip__body code{font-family:var(--font-mono);font-size:11px;
+    background:var(--muted);color:var(--foreground);
+    padding:1px 5px;border-radius:3px;border:1px solid var(--border)}
+
+  /* ===== §03 roadmap (compact) ===== */
+  .roadmap{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+  @media(max-width:1100px){.roadmap{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(max-width:680px){.roadmap{grid-template-columns:1fr}}
+  .future{
+    background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;
+    box-shadow:0 1px 2px color-mix(in oklch,var(--foreground) 4%,transparent);
+    display:flex;flex-direction:column;gap:8px;
+    transition:border-color .2s ease,box-shadow .2s ease;
+  }
+  .future:hover{border-color:color-mix(in oklch,var(--primary) 30%,var(--border));
+    box-shadow:0 4px 12px color-mix(in oklch,var(--foreground) 6%,transparent)}
+  .future__head{display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .future__id{font-family:var(--font-mono);font-size:10.5px;font-weight:600;
+    color:var(--muted-foreground);letter-spacing:0.06em}
+  .future__title{font-family:var(--font-display);font-weight:800;font-size:15px;line-height:1.2;
+    letter-spacing:-0.01em;color:var(--foreground)}
+  .future__cn{font-size:12.5px;color:var(--muted-foreground)}
+  .future__body{font-size:12.5px;line-height:1.7;
+    color:color-mix(in oklch,var(--foreground) 78%,var(--muted-foreground))}
+  .future__why{margin-top:auto;padding:9px 11px;
+    background:var(--muted);border-radius:6px;border:1px solid var(--border);
+    font-size:11.5px;color:var(--muted-foreground);line-height:1.65;display:flex;gap:6px;}
+  .future__why::before{content:'WHY';font-family:var(--font-mono);font-size:9.5px;
+    font-weight:700;letter-spacing:0.1em;color:var(--primary);flex-shrink:0;padding-top:1px}
+
+  /* ===== Footer ===== */
+  .colophon{margin-top:64px;padding:24px 0;text-align:center;border-top:1px solid var(--border)}
+  .colophon__mark{font-family:var(--font-display);font-weight:800;font-size:18px;
+    letter-spacing:-0.015em;color:var(--foreground)}
+  .colophon__line{font-size:12px;color:var(--muted-foreground);margin-top:6px}
+  .colophon__line code{font-family:var(--font-mono);font-size:11px;
+    background:var(--muted);padding:1px 6px;border-radius:3px;border:1px solid var(--border);
+    color:var(--primary)}
+
+  /* reveal */
+  .reveal{opacity:0;transform:translateY(8px);
+    animation:reveal .55s cubic-bezier(.2,.7,.2,1) forwards}
+  .reveal[data-d="1"]{animation-delay:.04s}
+  .reveal[data-d="2"]{animation-delay:.12s}
+  .reveal[data-d="3"]{animation-delay:.22s}
+  @keyframes reveal{to{opacity:1;transform:translateY(0)}}
+
+  @media(max-width:760px){
+    .topnav{padding:12px 18px}
+    .topnav__sub{display:none}
+    .topnav__link{display:none}
+    .topnav__divider{display:none}
+  }
+</style>
+</head>
+<body>
+
+<!-- ====== icon defs ====== -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <defs>
+    <symbol id="i-network" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-2 2 2 2"/><path d="m18 5-3 3"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z"/></symbol>
+    <symbol id="i-share" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9V5c0-1.1.9-2 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H20a2 2 0 0 1 2 2"/><path d="M2 13v5a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2H2"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m12.83 2.18-9.06 4.83a1 1 0 0 0 0 1.76l9.06 4.83a2 2 0 0 0 1.66 0l9.06-4.83a1 1 0 0 0 0-1.76L14.5 2.18a2 2 0 0 0-1.66 0Z"/><path d="M3.95 13.05 12 17l8.05-3.95"/><path d="M3.95 17.05 12 21l8.05-3.95"/></symbol>
+    <symbol id="i-file-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><circle cx="11.5" cy="14.5" r="2.5"/><path d="m13.3 16.3 1.2 1.2"/></symbol>
+    <symbol id="i-heart-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/><path d="M3.22 12H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27"/></symbol>
+    <symbol id="i-package" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></symbol>
+    <symbol id="i-database" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></symbol>
+    <symbol id="i-usb" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="7" r="1"/><circle cx="4" cy="20" r="1"/><path d="M4.7 19.3 19 5"/><path d="m21 3-3 1 2 2Z"/><path d="M9.26 7.68 5 12l2 5"/><path d="m10 14 5 2 3.5-3.5"/><path d="m18 12 1-1 1 1-1 1Z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></symbol>
+    <symbol id="i-zap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></symbol>
+    <symbol id="i-rocket" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/></symbol>
+    <symbol id="i-compass" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-pointer" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/><path d="m13 13 6 6"/></symbol>
+  </defs>
+</svg>
+
+<!-- ====== Top nav ====== -->
+<header class="topnav">
+  <div class="topnav__left">
+    <div class="topnav__mark">U</div>
+    <div>
+      <div class="topnav__brand">UE Cache Manager</div>
+      <div class="topnav__sub">Operations Manual · v1.0</div>
+    </div>
+  </div>
+  <div class="topnav__right">
+    <a class="topnav__link" href="#quickstart">Quick Start</a>
+    <a class="topnav__link" href="#surfaces">§ 01 Surfaces</a>
+    <a class="topnav__link" href="#manual">§ 02 Manual</a>
+    <a class="topnav__link" href="#procedures">§ 03 Flows</a>
+    <a class="topnav__link" href="#roadmap">§ 04 Roadmap</a>
+    <div class="topnav__divider"></div>
+    <div class="themetoggle" role="group" aria-label="Theme">
+      <button data-theme="light" aria-label="Light" aria-pressed="false"><svg><use href="#i-sun"/></svg></button>
+      <button data-theme="dark" aria-label="Dark" aria-pressed="true"><svg><use href="#i-moon"/></svg></button>
+      <button data-theme="system" aria-label="System" aria-pressed="false"><svg><use href="#i-monitor"/></svg></button>
+    </div>
+  </div>
+</header>
+
+<main class="container">
+
+  <!-- Hero -->
+  <section class="hero reveal" data-d="1">
+    <div class="eyebrow">UECM v1.0 · Issue 01 · 2026-05-13</div>
+    <h1 class="hero__title">让一个 UE 渲染集群<br><em>从零跑到稳。</em></h1>
+    <p class="hero__sub">
+      跨机器 Unreal 缓存治理工具。Plans 1–6 + WinRM Bootstrap 全部交付。这份手册三件事：现在能干嘛、按什么顺序干、之后打算加什么。
+    </p>
+  </section>
+
+  <!-- Stats -->
+  <section class="stats reveal" data-d="2">
+    <div class="stat"><div class="stat__label">Plans Shipped</div><div class="stat__value">6 / 6</div><div class="stat__detail">从 Foundation 到 PSO Cache，一个没落</div></div>
+    <div class="stat"><div class="stat__label">Surfaces</div><div class="stat__value">8</div><div class="stat__detail">Dashboard / Machines / Projects / DDC / PSO / Shares / INI / Health</div></div>
+    <div class="stat"><div class="stat__label">PowerShell Sidecars</div><div class="stat__value">30</div><div class="stat__detail">凭据 / GPU / UE / DDC / PSO / Health / Bootstrap 全覆盖</div></div>
+    <div class="stat"><div class="stat__label">Probes / Round-trip</div><div class="stat__value">8 + 3</div><div class="stat__detail">一次 WinRM 请求打包 8 项探测，另 3 项在主控本地算</div></div>
+  </section>
+
+  <!-- ============ QUICK START PATH (KEY) ============ -->
+  <section class="quickpath reveal" data-d="3" id="quickstart">
+    <div class="quickpath__head">
+      <div>
+        <div class="quickpath__title">Quick Start · 从零到稳跑</div>
+        <div class="quickpath__sub">5 步把集群从零跑通。每步各对应 §02 一个验证场景。</div>
+      </div>
+      <div class="quickpath__legend">主路径方向</div>
+    </div>
+    <ol class="quickpath__steps">
+      <li class="quickstep">
+        <div class="quickstep__num">1</div>
+        <div class="quickstep__title">上线纳管</div>
+        <div class="quickstep__cn">目标机没开 WinRM 先跑 USB Bootstrap；之后网络发现 → 刷新硬件信息 → 绑定凭据。</div>
+        <a class="quickstep__link" href="#sc-a">→ 场景 A</a>
+      </li>
+      <li class="quickstep">
+        <div class="quickstep__num">2</div>
+        <div class="quickstep__title">配置 &amp; 共享</div>
+        <div class="quickstep__cn">建 Mode B 共享盘；单台或整批机器下发 env var 和 INI 配置。</div>
+        <a class="quickstep__link" href="#sc-b">→ 场景 B</a>
+      </li>
+      <li class="quickstep">
+        <div class="quickstep__num">3</div>
+        <div class="quickstep__title">体检 &amp; 修复</div>
+        <div class="quickstep__cn">INI Scanner 扫出违规一键修；Cluster Health Check 给出 11×N 红绿矩阵。</div>
+        <a class="quickstep__link" href="#sc-c">→ 场景 C</a>
+      </li>
+      <li class="quickstep">
+        <div class="quickstep__num">4</div>
+        <div class="quickstep__title">DDC 缓存分发</div>
+        <div class="quickstep__cn">源机跑 commandlet 生成 .ddp pak，Robocopy 并发推到全集群。</div>
+        <a class="quickstep__link" href="#sc-d">→ 场景 D</a>
+      </li>
+      <li class="quickstep">
+        <div class="quickstep__num">5</div>
+        <div class="quickstep__title">PSO 管线</div>
+        <div class="quickstep__cn">跑一遍场景收 PSO → 推到 GPU 型号匹配的目标机 → 切场景不再卡顿。</div>
+        <a class="quickstep__link" href="#sc-e">→ 场景 E</a>
+      </li>
+    </ol>
+  </section>
+
+  <!-- ============ §01 SURFACES (View tour) ============ -->
+  <section class="section" id="surfaces">
+    <header class="sectionhead">
+      <div>
+        <div class="sectionhead__title"><span class="sectionhead__num">§ 01</span>Surfaces · 视图导览</div>
+        <p class="sectionhead__sub">UECM 总共 8 个屏。每张卡说一个屏：打开看到什么、能做什么、对应哪些功能和使用流程。</p>
+      </div>
+      <div class="sectionhead__meta"><span>8 views</span><span>1 sidebar</span><span>1 topbar</span></div>
+    </header>
+
+    <div class="surfaces">
+
+      <!-- Surface 1: Dashboard -->
+      <article class="surface">
+        <div class="surface__head">
+          <div class="surface__icon"><svg><use href="#i-grid"/></svg></div>
+          <div>
+            <div class="surface__nav">Sidebar · 1 / 8</div>
+            <div class="surface__name">Dashboard</div>
+            <div class="surface__cn">总览 · 集群概览</div>
+          </div>
+        </div>
+        <p class="surface__lead">进 app 第一眼就看到这个屏。机器健康、DDC 状态、凭据、INI 漂移这四件事有没有问题，一眼扫完。</p>
+        <div class="surface__block">
+          <div class="surface__blockhead"><svg><use href="#i-eye"/></svg>屏上能看到</div>
+          <ul class="surface__list">
+            <li><b>4 块数字</b>：机器总数 / 关键告警数 / 警告数 / DDC 路径</li>
+            <li><b>告警列表</b>：不在线的机器一行一条</li>
+            <li><b>Bridge Test</b>：确认 PowerShell sidecar 是否正常联通的小工具</li>
+          </ul>
+        </div>
+        <div class="surface__block">
+          <div class="surface__blockhead"><svg><use href="#i-pointer"/></svg>能干什么</div>
+          <ul class="surface__list">
+            <li>点一下跑 PowerShell bridge 自检，确认通路没问题</li>
+            <li>从 <code>+ 创建共享 DDC</code> 按钮直接打开 SMB 共享向导</li>
+          </ul>
+        </div>
+        <div class="surface__related">
+          <a class="relchip" href="#f-08">F-08 健康</a>
+          <a class="relchip" href="#p-09">P-09 体检</a>
+        </div>
+      </article>
+
+      <!-- Surface 2: Machines -->
+      <article class="surface">
+        <div class="surface__head">
+          <div class="surface__icon"><svg><use href="#i-server"/></svg></div>
+          <div>
+            <div class="surface__nav">Sidebar · 2 / 8</div>
+            <div class="surface__name">Machines</div>
+            <div class="surface__cn">机器列表 · 清单</div>
+          </div>
+        </div>
+        <p class="surface__lead">集群里所有 Windows 机器的清单。点一行看详情，勾多台做批量操作 — 日常打开频率最高的一个屏。</p>
+        <div class="surface__block">
+          <div class="surface__blockhead"><svg><use href="#i-eye"/></svg>屏上能看到</div>
+          <ul class="surface__list">
+            <li><b>左侧机器表</b>：hostname / IP / 状态徽标 / UE 版本 / GPU 摘要</li>
+            <li><b>右侧详情面板</b>：选中一台后显示完整硬件信息 + env vars + INI 文件入口</li>
+            <li><b>多选状态条</b>：勾几台机器后浮出来，批量操作都在这里触发</li>
+          </ul>
+        </div>
+        <div class="surface__block">
+          <div class="surface__blockhead"><svg><use href="#i-pointer"/></svg>能干什么</div>
+          <ul class="surface__list">
+            <li><b>Discover</b>：扫一段 CIDR，把能通的机器自动收进来</li>
+            <li><b>Add Machine / Refresh / Rename</b>：手动加机器、刷新硬件信息、改 hostname</li>
+            <li><b>Batch Env Var / Batch INI</b>：多选机器，一次下发配置</li>
+            <li>给单台机器或批量绑定凭据 alias</li>
+          </ul>
+        </div>
+        <div class="surface__related">
+          <a class="relchip" href="#f-01">F-01 发现</a>
+          <a class="relchip" href="#f-02">F-02 刷新</a>
+          <a class="relchip" href="#f-03">F-03 凭据</a>
+          <a class="relchip" href="#f-04">F-04 单机改</a>
+          <a class="relchip" href="#f-06">F-06 批量</a>
+          <a class="relchip" href="#sc-a">→ 场景 A</a>
+        </div>
+      </article>
+
+      <!-- Surface 3: Projects -->
+      <article class="surface">
+        <div class="surface__head">
+          <div class="surface__icon"><svg><use href="#i-folder"/></svg></div>
+          <div>
+            <div class="surface__nav">Sidebar · 3 / 8</div>
+            <div class="surface__name">Projects</div>
+            <div class="surface__cn">项目 · Unreal 项目</div>
+          </div>
+        </div>
+        <p class="surface__lead">把散在各台机器上的 <code>.uproject</code> 文件汇总成「一个项目一个条目」— 同一个项目放在 5 台机器 5 个路径，这里只显示一行。</p>
+        <div class="surface__block">
+          <div class="surface__blockhead"><svg><use href="#i-eye"/></svg>屏上能看到</div>
+          <ul class="surface__list">
+            <li><b>项目列表</b>：项目名 / 覆盖了几台机器 / UE 版本</li>
+            <li><b>展开看路径分布</b>：哪台机器上哪个绝对路径属于这个项目</li>
+          </ul>
+        </div>
+        <div class="surface__block">
+          <div class="surface__blockhead"><svg><use href="#i-pointer"/></svg>能干什么</div>
+          <ul class="surface__list">
+            <li><b>Discover Projects</b>：选源机，WinRM 远程 walk 拿回所有 <code>.uproject</code></li>
+            <li>看每个项目装在哪些机器上 — DDC / PSO 分发时的目标机器就从这里选</li>
+          </ul>
+        </div>
+        <div class="surface__related">
+          <a class="relchip" href="#f-09">F-09 DDC</a>
+          <a class="relchip" href="#p-10">P-10 项目发现</a>
+        </div>
+      </article>
+
+      <!-- Surface 4: DDC Pak -->
+      <article class="surface">
+        <div class="surface__head">
+          <div class="surface__icon"><svg><use href="#i-package"/></svg></div>
+          <div>
+            <div class="surface__nav">Sidebar · 4 / 8</div>
+            <div class="surface__name">DDC Pak</div>
+            <div class="surface__cn">DDC 打包 · 产物工作流</div>
+          </div>
+        </div>
+        <p class="surface__lead">把 Derived Data Cache 打成 <code>.ddp</code> 包，再 Robocopy 并发推到目标机。生成和分发是两个独立步骤，都在这个屏操作。</p>
+        <div class="surface__block">
+          <div class="surface__blockhead"><svg><use href="#i-eye"/></svg>屏上能看到</div>
+          <ul class="surface__list">
+            <li><b>pak 列表</b>：项目 / 文件大小 / sha256 / 生成时间</li>
+            <li><b>实时日志面板</b>：UE 进程 stdout / stderr 滚动回显</li>
+            <li><b>分发进度</b>：每台目标机当前字节数 + ✓ / ✗ / ↻ 状态标记</li>
+          </ul>
+        </div>
+        <div class="surface__block">
+          <div class="surface__blockhead"><svg><use href="#i-pointer"/></svg>能干什么</div>
+          <ul class="surface__list">
+            <li><b>New Generation</b>：选项目 + 源机 + 输出路径，启动生成</li>
+            <li><b>Distribute</b>：选一个已生成的 pak + 多台目标机，并发推送</li>
+          </ul>
+        </div>
+        <div class="surface__related">
+          <a class="relchip" href="#f-09">F-09 DDC</a>
+          <a class="relchip" href="#p-10">P-10 生成</a>
+          <a class="relchip" href="#p-11">P-11 分发</a>
+          <a class="relchip" href="#sc-d">→ 场景 D</a>
+        </div>
+      </article>
+
+      <!-- Surface 5: PSO Cache -->
+      <article class="surface">
+        <div class="surface__head">
+          <div class="surface__icon"><svg><use href="#i-database"/></svg></div>
+          <div>
+            <div class="surface__nav">Sidebar · 5 / 8</div>
+            <div class="surface__name">PSO Cache</div>
+            <div class="surface__cn">PSO 缓存 · Shader 流水线</div>
+          </div>
+        </div>
+        <p class="surface__lead">解决切换场景时的卡顿问题。先确认 CVar 开关没问题，再在源机录一次 PSO，然后推到 GPU 型号一致的目标机，最后看矩阵确认哪些机器可以用。</p>
+        <div class="surface__block">
+          <div class="surface__blockhead"><svg><use href="#i-eye"/></svg>屏上能看到</div>
+          <ul class="surface__list">
+            <li><b>CVar 状态条</b>：R008-R010 是否全绿（PSO 预缓存 CVar 是否已开）</li>
+            <li><b>PSO 文件清单</b>：哪些机器收过、文件大小、来自哪次 collect</li>
+            <li><b>GPU 一致性矩阵</b>：源机和目标机的 GPU 型号 / 驱动版本是否匹配</li>
+          </ul>
+        </div>
+        <div class="surface__block">
+          <div class="surface__blockhead"><svg><use href="#i-pointer"/></svg>能干什么</div>
+          <ul class="surface__list">
+            <li><b>Collect</b>：选源机 + 项目 + 测试关卡，跑 UE runner 录一次 PSO</li>
+            <li><b>Distribute</b>：把 PSO 文件推到 GPU 型号一致的目标机</li>
+            <li>查看 GPU Consistency Matrix，确认哪些目标机能接收</li>
+          </ul>
+        </div>
+        <div class="surface__related">
+          <a class="relchip" href="#f-10">F-10 PSO</a>
+          <a class="relchip" href="#p-12">P-12 全闭环</a>
+          <a class="relchip" href="#sc-e">→ 场景 E</a>
+        </div>
+      </article>
+
+      <!-- Surface 6: Shares -->
+      <article class="surface">
+        <div class="surface__head">
+          <div class="surface__icon"><svg><use href="#i-share"/></svg></div>
+          <div>
+            <div class="surface__nav">Sidebar · 6 / 8</div>
+            <div class="surface__name">Shares</div>
+            <div class="surface__cn">SMB 共享 · Shared DDC</div>
+          </div>
+        </div>
+        <p class="surface__lead">目标机上已建的 SMB 共享清单，加上新建向导。DDC / PSO 往目标机推文件之前，目标机得先有共享盘，就在这里建。</p>
+        <div class="surface__block">
+          <div class="surface__blockhead"><svg><use href="#i-eye"/></svg>屏上能看到</div>
+          <ul class="surface__list">
+            <li><b>共享列表</b>：host / 路径 / 是 Mode A 还是 Mode B / 授权账号</li>
+            <li>每行带一个状态：本机当前能不能挂载</li>
+          </ul>
+        </div>
+        <div class="surface__block">
+          <div class="surface__blockhead"><svg><use href="#i-pointer"/></svg>能干什么</div>
+          <ul class="surface__list">
+            <li><b>New Share · Mode A</b>：开 Guest + Everyone:Full，适合信任内网直接用</li>
+            <li><b>New Share · Mode B</b>：建 <code>ddc-svc</code> 专用账号，PsExec64 注入 SYSTEM 凭据，让系统服务也能挂载</li>
+          </ul>
+        </div>
+        <div class="surface__related">
+          <a class="relchip" href="#f-05">F-05 共享盘</a>
+          <a class="relchip" href="#p-05">P-05 Mode B</a>
+        </div>
+      </article>
+
+      <!-- Surface 7: INI Scanner -->
+      <article class="surface">
+        <div class="surface__head">
+          <div class="surface__icon"><svg><use href="#i-file-search"/></svg></div>
+          <div>
+            <div class="surface__nav">Sidebar · 7 / 8</div>
+            <div class="surface__name">INI Scanner</div>
+            <div class="surface__cn">INI 扫描 · 配置漂移</div>
+          </div>
+        </div>
+        <p class="surface__lead">跨机器批量扫 project / user / engine 三类 INI 文件，哪里配置不对列出来，一键改掉还自动备份，改坏了能还原。</p>
+        <div class="surface__block">
+          <div class="surface__blockhead"><svg><use href="#i-eye"/></svg>屏上能看到</div>
+          <ul class="surface__list">
+            <li><b>层级结果树</b>：机器 → INI 文件 → 触发了哪条规则</li>
+            <li><b>三栏诊断</b>：What 是什么问题 / Why 为什么是问题 / Symptom 不改会怎样</li>
+            <li><b>before/after diff</b>：修复前后对比，确认没改错再提交</li>
+          </ul>
+        </div>
+        <div class="surface__block">
+          <div class="surface__blockhead"><svg><use href="#i-pointer"/></svg>能干什么</div>
+          <ul class="surface__list">
+            <li><b>New Scan</b>：选机器范围 + INI 类型，跑一次扫描</li>
+            <li><b>Apply Fix</b>：一键改写 INI，自动生成 <code>.bak</code> 备份</li>
+            <li><b>Restore from backup</b>：从 <code>.bak</code> 回滚到改之前的状态</li>
+          </ul>
+        </div>
+        <div class="surface__related">
+          <a class="relchip" href="#f-07">F-07 扫描</a>
+          <a class="relchip" href="#p-08">P-08 一键修</a>
+          <a class="relchip" href="#sc-c">→ 场景 C</a>
+        </div>
+      </article>
+
+      <!-- Surface 8: Health Check -->
+      <article class="surface">
+        <div class="surface__head">
+          <div class="surface__icon"><svg><use href="#i-heart-pulse"/></svg></div>
+          <div>
+            <div class="surface__nav">Sidebar · 8 / 8</div>
+            <div class="surface__name">Health Check</div>
+            <div class="surface__cn">健康检查 · 矩阵</div>
+          </div>
+        </div>
+        <p class="surface__lead">全集群健康状态一张红绿矩阵看完，11 行 × N 台机器。每台机只发一次 WinRM，远端跑 8 项主动探测，另外 3 项在本地推算出来。</p>
+        <div class="surface__block">
+          <div class="surface__blockhead"><svg><use href="#i-eye"/></svg>屏上能看到</div>
+          <ul class="surface__list">
+            <li><b>11×N 矩阵</b>：每格绿 / 黄 / 红一个，一眼看出哪台机器出了问题</li>
+            <li><b>11 项检查</b>：smb / firewall_445 / share_reachable / ntfs_perm / cred_user / cred_system / env_vars / system_write + ini_consistency / pso_precaching / gpu_consistency</li>
+            <li><b>探针详情</b>：点任意格子看 Symptom + How-to-fix + 探针原始输出</li>
+          </ul>
+        </div>
+        <div class="surface__block">
+          <div class="surface__blockhead"><svg><use href="#i-pointer"/></svg>能干什么</div>
+          <ul class="surface__list">
+            <li><b>Run Health Check</b>：选机器范围，跑一次全量探测</li>
+            <li>查历史 run 记录，对比哪些红格这段时间变化了</li>
+          </ul>
+        </div>
+        <div class="surface__related">
+          <a class="relchip" href="#f-08">F-08 健康</a>
+          <a class="relchip" href="#p-09">P-09 体检</a>
+          <a class="relchip" href="#sc-c">→ 场景 C</a>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ============ §02 MANUAL ============ -->
+  <section class="section" id="manual">
+    <header class="sectionhead">
+      <div>
+        <div class="sectionhead__title"><span class="sectionhead__num">§ 02</span>Functional Manual</div>
+        <p class="sectionhead__sub">11 个独立功能。每张卡说清一件事能干什么，附对应的 Rust 模块和 PowerShell sidecar。</p>
+      </div>
+      <div class="sectionhead__meta"><span>11 capabilities</span><span>4 backend layers</span><span>30 ps-scripts</span></div>
+    </header>
+
+    <div class="features">
+
+      <article class="feature" id="f-01">
+        <div class="feature__head"><span class="feature__id">F · 01</span><span class="badge badge--healthy"><svg><use href="#i-check"/></svg>Plan 1</span></div>
+        <div class="feature__icon"><svg><use href="#i-network"/></svg></div>
+        <div>
+          <div class="feature__title">Network Discovery</div>
+          <div class="feature__cn">扫一段 IP，谁开着就收谁</div>
+        </div>
+        <p class="feature__body">给一段 IP 段，秒级并发扫 <strong>5985 / 445</strong>，能通的主机自动写入 SQLite，后续所有操作都从这里选目标。</p>
+        <div class="feature__tags"><span class="tag">core::discovery</span><span class="tag">test-winrm.ps1</span></div>
+      </article>
+
+      <article class="feature" id="f-02">
+        <div class="feature__head"><span class="feature__id">F · 02</span><span class="badge badge--healthy"><svg><use href="#i-check"/></svg>Plan 1/2</span></div>
+        <div class="feature__icon"><svg><use href="#i-refresh"/></svg></div>
+        <div>
+          <div class="feature__title">Per-machine Refresh</div>
+          <div class="feature__cn">拉回每台机的真实配置</div>
+        </div>
+        <p class="feature__body">WinRM 远程跑脚本，把 UE 版本、GPU 型号、驱动版本、VRAM 都取回来。VRAM 用 <code>qwMemorySize</code> 字段，绕开 4 GB 上限的老问题。</p>
+        <div class="feature__tags"><span class="tag">query-ue-versions.ps1</span><span class="tag">query-gpu-driver.ps1</span></div>
+      </article>
+
+      <article class="feature" id="f-03">
+        <div class="feature__head"><span class="feature__id">F · 03</span><span class="badge badge--healthy"><svg><use href="#i-check"/></svg>Plan 2/3</span></div>
+        <div class="feature__icon"><svg><use href="#i-key"/></svg></div>
+        <div>
+          <div class="feature__title">Credential Vault</div>
+          <div class="feature__cn">密码存一次，哪里要哪里用</div>
+        </div>
+        <p class="feature__body">用别名管理账号，DPAPI 加密落盘，通过 cmdkey 注入 SYSTEM 凭据。每次发 WinRM 请求时现取现用，UECM 自身不需要管理员权限。</p>
+        <div class="feature__tags"><span class="tag">dpapi.ps1</span><span class="tag">PsExec64</span></div>
+      </article>
+
+      <article class="feature" id="f-04">
+        <div class="feature__head"><span class="feature__id">F · 04</span><span class="badge badge--healthy"><svg><use href="#i-check"/></svg>Plan 2</span></div>
+        <div class="feature__icon"><svg><use href="#i-edit"/></svg></div>
+        <div>
+          <div class="feature__title">Single-host Editor</div>
+          <div class="feature__cn">单台机器改配置，写坏了能回滚</div>
+        </div>
+        <p class="feature__body">远程读写系统级 env var 和 INI 配置项，原子写入避免写到一半断掉，自动生成 <code>.bak</code> 备份随时恢复。</p>
+        <div class="feature__tags"><span class="tag">setx-machine.ps1</span><span class="tag">write-ini-key.ps1</span></div>
+      </article>
+
+      <article class="feature" id="f-05">
+        <div class="feature__head"><span class="feature__id">F · 05</span><span class="badge badge--healthy"><svg><use href="#i-check"/></svg>Plan 3</span></div>
+        <div class="feature__icon"><svg><use href="#i-share"/></svg></div>
+        <div>
+          <div class="feature__title">SMB Share Wizard</div>
+          <div class="feature__cn">建共享盘，两种安全级别可选</div>
+        </div>
+        <p class="feature__body"><strong>Mode A</strong> 走 Guest 直接开放，适合信任内网；<strong>Mode B</strong> 建专用 <code>ddc-svc</code> 账号并把凭据注入 SYSTEM，权限更窄更安全。</p>
+        <div class="feature__tags"><span class="tag">setup-share-mode-a.ps1</span><span class="tag">setup-share-mode-b.ps1</span></div>
+      </article>
+
+      <article class="feature" id="f-06">
+        <div class="feature__head"><span class="feature__id">F · 06</span><span class="badge badge--healthy"><svg><use href="#i-check"/></svg>Plan 2</span></div>
+        <div class="feature__icon"><svg><use href="#i-layers"/></svg></div>
+        <div>
+          <div class="feature__title">Cluster Batch Ops</div>
+          <div class="feature__cn">多台机器一次性下发配置</div>
+        </div>
+        <p class="feature__body">多选机器批量推 env / INI，最多 8 台并发跑。用 mpsc fan-out + Tauri <code>batch-progress</code> 事件，每台独立上报 ✓ / ✗ 状态，不互相等。</p>
+        <div class="feature__tags"><span class="tag">core::batch</span><span class="tag">tauri events</span></div>
+      </article>
+
+      <article class="feature" id="f-07">
+        <div class="feature__head"><span class="feature__id">F · 07</span><span class="badge badge--healthy"><svg><use href="#i-check"/></svg>Plan 4 + 6</span></div>
+        <div class="feature__icon"><svg><use href="#i-file-search"/></svg></div>
+        <div>
+          <div class="feature__title">INI Scanner</div>
+          <div class="feature__cn">扫 INI 配置，违规一键修</div>
+        </div>
+        <p class="feature__body">内置 <strong>R001–R010</strong> 共 10 条规则，每条都列清 What / Why / Symptom 三列。发现问题点 Apply Fix，看 before/after diff 确认再提交。</p>
+        <div class="feature__tags"><span class="tag">core::ini_diagnostics</span><span class="tag">UecmCodeBlock.vue</span></div>
+      </article>
+
+      <article class="feature" id="f-08">
+        <div class="feature__head"><span class="feature__id">F · 08</span><span class="badge badge--healthy"><svg><use href="#i-check"/></svg>Plan 4 + 6</span></div>
+        <div class="feature__icon"><svg><use href="#i-heart-pulse"/></svg></div>
+        <div>
+          <div class="feature__title">Cluster Health Check</div>
+          <div class="feature__cn">全集群健康一张表看完</div>
+        </div>
+        <p class="feature__body">结果是 11 行 × N 列的红绿矩阵。每台机只发一次 WinRM 请求，远端一次性跑 <strong>8 项主动探测</strong>；另 <strong>3 项</strong>在主控本地计算。</p>
+        <div class="feature__tags"><span class="tag">health-probes.ps1</span><span class="tag">core::health_check</span></div>
+      </article>
+
+      <article class="feature" id="f-09">
+        <div class="feature__head"><span class="feature__id">F · 09</span><span class="badge badge--info"><svg><use href="#i-check"/></svg>Plan 5</span></div>
+        <div class="feature__icon"><svg><use href="#i-package"/></svg></div>
+        <div>
+          <div class="feature__title">DDC Pak Workflow</div>
+          <div class="feature__cn">把 DDC 缓存打包推到全集群</div>
+        </div>
+        <p class="feature__body">自动扫 .uproject → 后台起 UE 进程生成 <code>.ddp</code> 文件 → Robocopy 并发推到多台目标机，每台独立进度。</p>
+        <div class="feature__tags"><span class="tag">generate-ddc-pak.ps1</span><span class="tag">core::ue_runner</span></div>
+      </article>
+
+      <article class="feature" id="f-10">
+        <div class="feature__head"><span class="feature__id">F · 10</span><span class="badge badge--info"><svg><use href="#i-check"/></svg>Plan 6</span></div>
+        <div class="feature__icon"><svg><use href="#i-database"/></svg></div>
+        <div>
+          <div class="feature__title">PSO Cache Pipeline</div>
+          <div class="feature__cn">PSO 缓存从收集到分发全走通</div>
+        </div>
+        <p class="feature__body">四步闭环：F1 验 CVar 开关 → F2 跑场景收 PSO → F3 推到目标机 → F4 GPU 一致性矩阵确认型号匹配。切场景不再卡顿。</p>
+        <div class="feature__tags"><span class="tag">distribute-pso-cache.ps1</span><span class="tag">UecmGpuMatrix.vue</span></div>
+      </article>
+
+      <article class="feature" id="f-11">
+        <div class="feature__head"><span class="feature__id">F · 11</span><span class="badge badge--warning"><svg><use href="#i-info"/></svg>Onboarding</span></div>
+        <div class="feature__icon"><svg><use href="#i-usb"/></svg></div>
+        <div>
+          <div class="feature__title">WinRM Bootstrap</div>
+          <div class="feature__cn">目标机没开远程？先走这一步</div>
+        </div>
+        <p class="feature__body">主控机打包一个自包含目录，U 盘或共享盘拷过去，目标机以管理员跑一次 <code>bootstrap-winrm-remote.ps1</code> 即可。v1.0 里唯一需要人工跑腿的步骤。</p>
+        <div class="feature__tags"><span class="tag">package-winrm-bootstrap.ps1</span><span class="tag">enable-winrm.ps1</span></div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ============ §02 SCENARIOS ============ -->
+  <section class="section" id="procedures">
+    <header class="sectionhead">
+      <div>
+        <div class="sectionhead__title"><span class="sectionhead__num">§ 03</span>Validation Flows</div>
+        <p class="sectionhead__sub">按真实使用场景分成 5 组。每组顶部有流程图，点节点直接跳到具体步骤。</p>
+      </div>
+      <div class="sectionhead__meta"><span>5 scenarios</span><span>12 procedures</span><span>read-only safe</span></div>
+    </header>
+
+    <div class="scenarios">
+
+      <!-- =========================================== -->
+      <!-- Scenario A · Onboard a host -->
+      <!-- =========================================== -->
+      <article class="scenario" id="sc-a">
+        <header class="scenario__head">
+          <div>
+            <div class="scenario__title">
+              <span class="scenario__letter">A</span>
+              上线纳管
+              <span class="scenario__cn">从裸机到可远程操控</span>
+            </div>
+          </div>
+          <div class="flow">
+            <a class="flow__node" href="#p-01"><span class="flow__dot"></span>P-01</a>
+            <span class="flow__arrow">→</span>
+            <a class="flow__node" href="#p-02"><span class="flow__dot"></span>P-02</a>
+            <span class="flow__arrow">→</span>
+            <a class="flow__node" href="#p-03"><span class="flow__dot"></span>P-03</a>
+            <span class="flow__arrow">→</span>
+            <a class="flow__node" href="#p-04"><span class="flow__dot"></span>P-04</a>
+          </div>
+        </header>
+        <div class="scenario__body">
+
+          <article class="proc" id="p-01">
+            <div class="proc__head">
+              <span class="proc__id">P · 01</span>
+              <span class="badge badge--warning">Onboarding</span>
+            </div>
+            <div>
+              <div class="proc__title">Onboard a brand-new host</div>
+              <div class="proc__cn">目标机还没开 WinRM，用 Bootstrap 包走通第一次</div>
+            </div>
+            <ol class="steps">
+              <li>主控机跑 <code>powershell -File .\ps-scripts\package-winrm-bootstrap.ps1 -OutputDirectory E:\UECM-Bootstrap</code> 打包</li>
+              <li>把生成目录拷到 U 盘或共享盘，搬到目标机任意路径</li>
+              <li>目标机以管理员身份运行 <code>bootstrap-winrm-remote.ps1</code></li>
+              <li>主控机打开 UECM Machines 视图 → Add Machine → 填目标 IP，点 Probe</li>
+              <li>出现绿色 ONLINE 徽标，纳管完成</li>
+            </ol>
+            <div class="tips">
+              <div class="tip tip--prereq"><div class="tip__label"><svg><use href="#i-alert"/></svg>Prereq</div><div class="tip__body">目标机有管理员账号能跑 PowerShell；和主控机同网段或可路由</div></div>
+              <div class="tip tip--expect"><div class="tip__label"><svg><use href="#i-check"/></svg>Expect</div><div class="tip__body">5985 端口监听；Machines 列表出现新行，<code>status = online</code></div></div>
+              <div class="tip tip--verify"><div class="tip__label"><svg><use href="#i-zap"/></svg>Verify</div><div class="tip__body"><code>Test-NetConnection &lt;ip&gt; -Port 5985</code></div></div>
+            </div>
+          </article>
+
+          <article class="proc" id="p-02">
+            <div class="proc__head">
+              <span class="proc__id">P · 02</span>
+              <span class="badge badge--info">Discovery</span>
+            </div>
+            <div>
+              <div class="proc__title">Network discovery via CIDR scan</div>
+              <div class="proc__cn">给一段 IP 范围，自动把能连的机器都找出来</div>
+            </div>
+            <ol class="steps">
+              <li>Machines View → Discover → 填 CIDR，如 <code>192.168.10.0/24</code></li>
+              <li>UECM 并发扫 5985 / 445 端口</li>
+              <li>有回应的 IP 自动写入数据库，UI 立刻出现新行</li>
+              <li>对每台新机点 Refresh，拉回 UE 版本和 GPU 信息</li>
+            </ol>
+            <div class="tips">
+              <div class="tip tip--prereq"><div class="tip__label"><svg><use href="#i-alert"/></svg>Prereq</div><div class="tip__body">主控机能访问目标网段；目标机 WinRM 已开启</div></div>
+              <div class="tip tip--expect"><div class="tip__label"><svg><use href="#i-check"/></svg>Expect</div><div class="tip__body">秒级返回所有能通的主机；不通的不写库</div></div>
+              <div class="tip tip--verify"><div class="tip__label"><svg><use href="#i-zap"/></svg>Verify</div><div class="tip__body">入库数量与 <code>nmap -p 5985 &lt;cidr&gt;</code> 结果一致</div></div>
+            </div>
+          </article>
+
+          <article class="proc" id="p-03">
+            <div class="proc__head">
+              <span class="proc__id">P · 03</span>
+              <span class="badge badge--info">Inventory</span>
+            </div>
+            <div>
+              <div class="proc__title">Refresh a machine's UE / GPU inventory</div>
+              <div class="proc__cn">更新目标机当前的 UE 版本、GPU、驱动、显存数据</div>
+            </div>
+            <ol class="steps">
+              <li>Machines View → 选目标机器行 → 点 Refresh</li>
+              <li>UECM 经 WinRM 远程跑 <code>query-ue-versions.ps1</code> + <code>query-gpu-driver.ps1</code></li>
+              <li>右侧 detail panel 实时更新</li>
+            </ol>
+            <div class="tips">
+              <div class="tip tip--prereq"><div class="tip__label"><svg><use href="#i-alert"/></svg>Prereq</div><div class="tip__body">目标机装了至少一个 UE 版本；GPU 驱动安装正常</div></div>
+              <div class="tip tip--expect"><div class="tip__label"><svg><use href="#i-check"/></svg>Expect</div><div class="tip__body">UE 版本列表有内容；GPU 行显示型号 + 驱动版本 + VRAM</div></div>
+              <div class="tip tip--verify"><div class="tip__label"><svg><use href="#i-zap"/></svg>Verify</div><div class="tip__body"><code>last_seen_at</code> 时间刷新；RTX 3080 显示 10240 MB</div></div>
+            </div>
+          </article>
+
+          <article class="proc" id="p-04">
+            <div class="proc__head">
+              <span class="proc__id">P · 04</span>
+              <span class="badge badge--healthy">Credentials</span>
+            </div>
+            <div>
+              <div class="proc__title">Store and verify a credential alias</div>
+              <div class="proc__cn">建一条凭据别名，验证 WinRM 调用能取到</div>
+            </div>
+            <ol class="steps">
+              <li>Settings → Credentials → New Credential</li>
+              <li>填别名、用户名、密码 → 保存（DPAPI 加密 + cmdkey 注册）</li>
+              <li>Machines 选目标机 → Refresh with credential <code>alias</code></li>
+              <li>跑一次 Health Check，<code>cred_user</code> 行应为绿色</li>
+            </ol>
+            <div class="tips">
+              <div class="tip tip--prereq"><div class="tip__label"><svg><use href="#i-alert"/></svg>Prereq</div><div class="tip__body">目标机存在该账号并有所需权限</div></div>
+              <div class="tip tip--expect"><div class="tip__label"><svg><use href="#i-check"/></svg>Expect</div><div class="tip__body"><code>creds.bin</code> 生成；<code>cmdkey /list</code> 能看到对应条目</div></div>
+              <div class="tip tip--verify"><div class="tip__label"><svg><use href="#i-zap"/></svg>Verify</div><div class="tip__body">Health Check <code>cred_user</code> = OK</div></div>
+            </div>
+          </article>
+
+        </div>
+      </article>
+
+      <!-- =========================================== -->
+      <!-- Scenario B · Configure & share -->
+      <!-- =========================================== -->
+      <article class="scenario" id="sc-b">
+        <header class="scenario__head">
+          <div>
+            <div class="scenario__title">
+              <span class="scenario__letter">B</span>
+              配置 &amp; 共享盘
+              <span class="scenario__cn">建共享盘，把配置推到目标机</span>
+            </div>
+          </div>
+          <div class="flow">
+            <a class="flow__node" href="#p-05"><span class="flow__dot"></span>P-05</a>
+            <span class="flow__arrow">→</span>
+            <a class="flow__node" href="#p-06"><span class="flow__dot"></span>P-06</a>
+            <span class="flow__arrow">→</span>
+            <a class="flow__node" href="#p-07"><span class="flow__dot"></span>P-07</a>
+          </div>
+        </header>
+        <div class="scenario__body">
+
+          <article class="proc" id="p-05">
+            <div class="proc__head"><span class="proc__id">P · 05</span><span class="badge badge--info">Shares</span></div>
+            <div>
+              <div class="proc__title">Create a Mode B share + verify SYSTEM mount</div>
+              <div class="proc__cn">建专用账号共享盘，确认 LocalSystem 服务能挂上去</div>
+            </div>
+            <ol class="steps">
+              <li>Shares View → New Share → 选 Mode B</li>
+              <li>填本地账号名（默认 <code>ddc-svc</code>）、共享路径、共享名称</li>
+              <li>UECM 自动在目标机建账号 → 配权限 → 开共享 → 把凭据注入 SYSTEM</li>
+              <li>Health Check 跑一下，<code>cred_system</code> + <code>system_write</code> 应为绿色</li>
+            </ol>
+            <div class="tips">
+              <div class="tip tip--prereq"><div class="tip__label"><svg><use href="#i-alert"/></svg>Prereq</div><div class="tip__body">目标机管理员凭据已录入 UECM；<code>PsExec64.exe</code> 已下发到目标机</div></div>
+              <div class="tip tip--expect"><div class="tip__label"><svg><use href="#i-check"/></svg>Expect</div><div class="tip__body">LocalSystem 身份下 UNC 路径可访问，服务可写</div></div>
+              <div class="tip tip--verify"><div class="tip__label"><svg><use href="#i-zap"/></svg>Verify</div><div class="tip__body"><code>psexec -s -i cmd /c "dir \\&lt;host&gt;\&lt;share&gt;"</code></div></div>
+            </div>
+          </article>
+
+          <article class="proc" id="p-06">
+            <div class="proc__head"><span class="proc__id">P · 06</span><span class="badge badge--healthy">Config · Env</span></div>
+            <div>
+              <div class="proc__title">Edit a system env var (single + batch)</div>
+              <div class="proc__cn">单台或全集群同时写系统环境变量</div>
+            </div>
+            <ol class="steps">
+              <li>单台：Machine detail → Env Vars → New / Edit → Apply</li>
+              <li>批量：Machines View 多选机器 → Batch → Set Env Var</li>
+              <li>实时看每台机的 ✓ / ✗ / ↻ 进度状态</li>
+            </ol>
+            <div class="tips">
+              <div class="tip tip--prereq"><div class="tip__label"><svg><use href="#i-alert"/></svg>Prereq</div><div class="tip__body">目标机 WinRM 在线；绑定的凭据有写注册表权限</div></div>
+              <div class="tip tip--expect"><div class="tip__label"><svg><use href="#i-check"/></svg>Expect</div><div class="tip__body">目标机注册表 <code>HKLM\SYSTEM\…\Environment</code> 写入新键</div></div>
+              <div class="tip tip--verify"><div class="tip__label"><svg><use href="#i-zap"/></svg>Verify</div><div class="tip__body">目标机重新登录后 <code>echo %&lt;KEY&gt;%</code> 输出预期值</div></div>
+            </div>
+          </article>
+
+          <article class="proc" id="p-07">
+            <div class="proc__head"><span class="proc__id">P · 07</span><span class="badge badge--healthy">Config · INI</span></div>
+            <div>
+              <div class="proc__title">Edit an INI key with backup recovery</div>
+              <div class="proc__cn">远程改 INI 配置，验证写坏了能从备份还原</div>
+            </div>
+            <ol class="steps">
+              <li>Machine detail → INI Files → 选目标 INI → 定位 section/key</li>
+              <li>改值 → Apply → UECM 自动生成 <code>.bak</code></li>
+              <li>到目标机确认原文件和 <code>.bak</code> 都存在</li>
+              <li>故意写个错值 → Restore from backup → 验证还原成功</li>
+            </ol>
+            <div class="tips">
+              <div class="tip tip--prereq"><div class="tip__label"><svg><use href="#i-alert"/></svg>Prereq</div><div class="tip__body">目标 INI 文件存在且有写入权限</div></div>
+              <div class="tip tip--expect"><div class="tip__label"><svg><use href="#i-check"/></svg>Expect</div><div class="tip__body">值已替换；同目录有 <code>&lt;file&gt;.bak</code>；UTF-8 BOM 自动处理</div></div>
+              <div class="tip tip--verify"><div class="tip__label"><svg><use href="#i-zap"/></svg>Verify</div><div class="tip__body">还原后 <code>diff &lt;file&gt; &lt;file&gt;.bak</code> 输出为空</div></div>
+            </div>
+          </article>
+
+        </div>
+      </article>
+
+      <!-- =========================================== -->
+      <!-- Scenario C · Diagnose & fix -->
+      <!-- =========================================== -->
+      <article class="scenario" id="sc-c">
+        <header class="scenario__head">
+          <div>
+            <div class="scenario__title">
+              <span class="scenario__letter">C</span>
+              体检 &amp; 修复
+              <span class="scenario__cn">INI 违规一键修，健康矩阵一眼看清</span>
+            </div>
+          </div>
+          <div class="flow">
+            <a class="flow__node" href="#p-08"><span class="flow__dot"></span>P-08</a>
+            <span class="flow__arrow">→</span>
+            <a class="flow__node" href="#p-09"><span class="flow__dot"></span>P-09</a>
+          </div>
+        </header>
+        <div class="scenario__body">
+
+          <article class="proc" id="p-08">
+            <div class="proc__head"><span class="proc__id">P · 08</span><span class="badge badge--info">Diagnostics</span></div>
+            <div>
+              <div class="proc__title">Run INI Scanner + apply one-click fix</div>
+              <div class="proc__cn">扫全集群 INI 配置，选一条违规修掉</div>
+            </div>
+            <ol class="steps">
+              <li>INI Scanner View → New Scan → 选机器范围 + INI 文件范围</li>
+              <li>等扫完，结果按 R001-R010 分组列出</li>
+              <li>挑一条展开，看 What / Why / Symptom 三列</li>
+              <li>点 Apply Fix → 对照 before/after diff → Confirm</li>
+              <li>再跑一次 Scan，确认这条不再出现</li>
+            </ol>
+            <div class="tips">
+              <div class="tip tip--prereq"><div class="tip__label"><svg><use href="#i-alert"/></svg>Prereq</div><div class="tip__body">目标机已加入 UECM；INI 文件存在于目标路径</div></div>
+              <div class="tip tip--expect"><div class="tip__label"><svg><use href="#i-check"/></svg>Expect</div><div class="tip__body">违规列表刷新；diff 视图显示正确；<code>.bak</code> 已写到目标机</div></div>
+              <div class="tip tip--verify"><div class="tip__label"><svg><use href="#i-zap"/></svg>Verify</div><div class="tip__body">第二次 Scan 该条不再出现</div></div>
+            </div>
+          </article>
+
+          <article class="proc" id="p-09">
+            <div class="proc__head"><span class="proc__id">P · 09</span><span class="badge badge--healthy">Health</span></div>
+            <div>
+              <div class="proc__title">Run cluster Health Check</div>
+              <div class="proc__cn">跑一次，全集群 11 行 × N 列结果一次出</div>
+            </div>
+            <ol class="steps">
+              <li>Health Check View → 选机器范围 → Run</li>
+              <li>每台机器只发一次 WinRM 请求，打包跑 8 项主动探测</li>
+              <li>另 3 项在主控本地计算完成</li>
+              <li>点任一红格 → 右侧看 Symptom + How-to-fix + 探针原始输出</li>
+            </ol>
+            <div class="tips">
+              <div class="tip tip--prereq"><div class="tip__label"><svg><use href="#i-alert"/></svg>Prereq</div><div class="tip__body">目标机 WinRM 在线；最好先跑过一次 INI Scan</div></div>
+              <div class="tip tip--expect"><div class="tip__label"><svg><use href="#i-check"/></svg>Expect</div><div class="tip__body">11 行全部有结果，没有 Pending 停在那</div></div>
+              <div class="tip tip--verify"><div class="tip__label"><svg><use href="#i-zap"/></svg>Verify</div><div class="tip__body"><code>list_recent_health_runs</code> 返回新记录；得分 = 通过数 / 总项 × 100</div></div>
+            </div>
+          </article>
+
+        </div>
+      </article>
+
+      <!-- =========================================== -->
+      <!-- Scenario D · DDC pipeline -->
+      <!-- =========================================== -->
+      <article class="scenario" id="sc-d">
+        <header class="scenario__head">
+          <div>
+            <div class="scenario__title">
+              <span class="scenario__letter">D</span>
+              DDC 缓存分发
+              <span class="scenario__cn">从源机打包 DDC 缓存，推到整个集群</span>
+            </div>
+          </div>
+          <div class="flow">
+            <a class="flow__node" href="#p-10"><span class="flow__dot"></span>P-10</a>
+            <span class="flow__arrow">→</span>
+            <a class="flow__node" href="#p-11"><span class="flow__dot"></span>P-11</a>
+          </div>
+        </header>
+        <div class="scenario__body">
+
+          <article class="proc" id="p-10">
+            <div class="proc__head"><span class="proc__id">P · 10</span><span class="badge badge--info">DDC</span></div>
+            <div>
+              <div class="proc__title">Discover projects + generate DDC pak</div>
+              <div class="proc__cn">自动扫项目，让 UE 跑 commandlet 生成 .ddp 包</div>
+            </div>
+            <ol class="steps">
+              <li>Projects View → Discover Projects → 选源机 → WinRM 扫 <code>.uproject</code> 文件</li>
+              <li>UECM 自动按项目身份匹配为「逻辑项目」</li>
+              <li>DDC Pak View → New Generation → 选项目 + 源机 + 目标 .ddp 输出路径</li>
+              <li>后台拉起 UE commandlet，实时推 stdout/stderr 到 UI</li>
+              <li>结束后检查 pak 文件大小和 sha256</li>
+            </ol>
+            <div class="tips">
+              <div class="tip tip--prereq"><div class="tip__label"><svg><use href="#i-alert"/></svg>Prereq</div><div class="tip__body">源机装了项目对应的 UE 版本；DDC 缓存至少预热过一次</div></div>
+              <div class="tip tip--expect"><div class="tip__label"><svg><use href="#i-check"/></svg>Expect</div><div class="tip__body"><code>.ddp</code> 文件已生成；UECM 记录文件大小 + checksum</div></div>
+              <div class="tip tip--verify"><div class="tip__label"><svg><use href="#i-zap"/></svg>Verify</div><div class="tip__body"><code>verify-pak-output.ps1</code> 退出码 = 0</div></div>
+            </div>
+          </article>
+
+          <article class="proc" id="p-11">
+            <div class="proc__head"><span class="proc__id">P · 11</span><span class="badge badge--info">DDC · Distribute</span></div>
+            <div>
+              <div class="proc__title">Distribute DDC pak to N hosts</div>
+              <div class="proc__cn">Robocopy 并发把 .ddp 推到多台目标机</div>
+            </div>
+            <ol class="steps">
+              <li>DDC Pak View → 选已生成的 pak → Distribute</li>
+              <li>多选目标机器（需映射到同一逻辑项目）→ Confirm</li>
+              <li>每台机器并发跑 Robocopy，独立上报进度</li>
+              <li>某台失败不影响其余 N-1 台继续跑</li>
+            </ol>
+            <div class="tips">
+              <div class="tip tip--prereq"><div class="tip__label"><svg><use href="#i-alert"/></svg>Prereq</div><div class="tip__body">目标机上 DDC 共享盘已建好（见 P-05）</div></div>
+              <div class="tip tip--expect"><div class="tip__label"><svg><use href="#i-check"/></svg>Expect</div><div class="tip__body">每台机器有 ✓ 或 ✗ 终态，附已传字节数</div></div>
+              <div class="tip tip--verify"><div class="tip__label"><svg><use href="#i-zap"/></svg>Verify</div><div class="tip__body">目标 UNC 路径出现 .ddp，大小与源文件一致</div></div>
+            </div>
+          </article>
+
+        </div>
+      </article>
+
+      <!-- =========================================== -->
+      <!-- Scenario E · PSO pipeline -->
+      <!-- =========================================== -->
+      <article class="scenario" id="sc-e">
+        <header class="scenario__head">
+          <div>
+            <div class="scenario__title">
+              <span class="scenario__letter">E</span>
+              PSO 缓存管线
+              <span class="scenario__cn">跑场景收 PSO，推到 GPU 型号匹配的机器</span>
+            </div>
+          </div>
+          <div class="flow">
+            <a class="flow__node" href="#p-12"><span class="flow__dot"></span>P-12</a>
+          </div>
+        </header>
+        <div class="scenario__body">
+
+          <article class="proc" id="p-12">
+            <div class="proc__head"><span class="proc__id">P · 12</span><span class="badge badge--info">PSO</span></div>
+            <div>
+              <div class="proc__title">Collect PSO + distribute + verify GPU consistency</div>
+              <div class="proc__cn">PSO 四步闭环从头到尾走一遍</div>
+            </div>
+            <ol class="steps">
+              <li>先跑 INI Scanner，确认 R008-R010 全绿（PSO CVar 已开）</li>
+              <li>PSO Cache View → Collect → 选源机 + 项目 + 测试关卡</li>
+              <li>UE runner 跑一遍场景，UECM 自动抓取生成的 PSO 文件</li>
+              <li>Distribute → 选 GPU 型号相同的目标机集合</li>
+              <li>看 GPU Consistency Matrix（F4），确认目标机 GPU 和源机匹配</li>
+            </ol>
+            <div class="tips">
+              <div class="tip tip--prereq"><div class="tip__label"><svg><use href="#i-alert"/></svg>Prereq</div><div class="tip__body">源机装了实体 GPU 并接了显示器；项目里至少有一个能渲染的 map</div></div>
+              <div class="tip tip--expect"><div class="tip__label"><svg><use href="#i-check"/></svg>Expect</div><div class="tip__body">PSO 文件落到源机；目标机收到副本；GPU matrix 同型号同驱动全绿</div></div>
+              <div class="tip tip--verify"><div class="tip__label"><svg><use href="#i-zap"/></svg>Verify</div><div class="tip__body">切场景不再卡顿；Health Check <code>pso_precaching</code> = OK</div></div>
+            </div>
+          </article>
+
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ============ §03 ROADMAP ============ -->
+  <section class="section" id="roadmap">
+    <header class="sectionhead">
+      <div>
+        <div class="sectionhead__title"><span class="sectionhead__num">§ 04</span>Roadmap after v1.0</div>
+        <p class="sectionhead__sub">不是排期，是方向上的押注。每条都标了投入量级。</p>
+      </div>
+      <div class="sectionhead__meta"><span>9 ideas</span><span>not committed</span><span>open for debate</span></div>
+    </header>
+
+    <div class="roadmap">
+
+      <article class="future">
+        <div class="future__head"><span class="future__id">R · 01</span><span class="badge badge--healthy"><svg><use href="#i-zap"/></svg>Quick Win</span></div>
+        <div><div class="future__title">Headless API mode</div><div class="future__cn">不用开界面，外部脚本直接调</div></div>
+        <p class="future__body">把 Tauri commands 拆出来做成本地 HTTP / gRPC 服务，CI 系统或调度器可以直接触发健康检查、批量 INI 修复、PSO 分发，不需要有人盯着 UI。</p>
+        <p class="future__why">夜里没人守着，集群该跑的检查还得自己跑</p>
+      </article>
+
+      <article class="future">
+        <div class="future__head"><span class="future__id">R · 02</span><span class="badge badge--healthy"><svg><use href="#i-zap"/></svg>Quick Win</span></div>
+        <div><div class="future__title">Scheduled maintenance</div><div class="future__cn">定时任务自动维护</div></div>
+        <p class="future__body">类 cron 调度：每天凌晨自动跑 Health Check，每周自动重新生成 DDC pak 并推到全集群，不需要人记着。</p>
+        <p class="future__why">靠人记得按按钮，总有忘的时候</p>
+      </article>
+
+      <article class="future">
+        <div class="future__head"><span class="future__id">R · 03</span><span class="badge badge--warning"><svg><use href="#i-compass"/></svg>Explore</span></div>
+        <div><div class="future__title">Telemetry export</div><div class="future__cn">把数据吐到 Grafana 看趋势</div></div>
+        <p class="future__body">接 Prometheus / OpenTelemetry，把 Health Check 结果、DDC / PSO 分发耗时都做成 metric，在 Grafana 里看历史曲线。</p>
+        <p class="future__why">快照只告诉你现在坏没坏，趋势才能告诉你在变好还是变坏</p>
+      </article>
+
+      <article class="future">
+        <div class="future__head"><span class="future__id">R · 04</span><span class="badge badge--info"><svg><use href="#i-rocket"/></svg>Moon Shot</span></div>
+        <div><div class="future__title">Anomaly detection</div><div class="future__cn">自动发现健康状态突变</div></div>
+        <p class="future__body">对历史 Health Check 时间序列做轻量异常检测：一台机从「长期绿」突然变「红黄交替」就推送告警，并附上可能的原因猜测。</p>
+        <p class="future__why">人眼盯不住 N 台机器 11 行矩阵的长期变化</p>
+      </article>
+
+      <article class="future">
+        <div class="future__head"><span class="future__id">R · 05</span><span class="badge badge--warning"><svg><use href="#i-compass"/></svg>Explore</span></div>
+        <div><div class="future__title">Render queue integration</div><div class="future__cn">任务派发前自动踢掉坏机器</div></div>
+        <p class="future__body">和 Deadline / Tractor 对接：任务派发前自动跑一次目标机 Health Check，检测不通过的直接从可用池里摘掉，不参与本次渲染。</p>
+        <p class="future__why">坏机器混进队列，整批任务都得重跑</p>
+      </article>
+
+      <article class="future">
+        <div class="future__head"><span class="future__id">R · 06</span><span class="badge badge--healthy"><svg><use href="#i-zap"/></svg>Quick Win</span></div>
+        <div><div class="future__title">Lark / Slack alerting</div><div class="future__cn">出红格就 @ 到运维群</div></div>
+        <p class="future__body">Health Check 出现新红格就自动发飞书消息到运维群，附机器名 + 失败的检查项 + 建议怎么处理。用 lark-cli skill 接最快。</p>
+        <p class="future__why">群里被 @ 比让人主动开 UECM 刷仪表盘，反应快多了</p>
+      </article>
+
+      <article class="future">
+        <div class="future__head"><span class="future__id">R · 07</span><span class="badge badge--info"><svg><use href="#i-rocket"/></svg>Moon Shot</span></div>
+        <div><div class="future__title">Plugin SDK</div><div class="future__cn">让各项目组自己写规则挂进来</div></div>
+        <p class="future__body">把 INI 规则引擎、Health probe、自定义 CVar 校验做成插件接口，每个项目组可以自己写专属规则，不用等主项目发版。</p>
+        <p class="future__why">规则永远加不完，让用户自己加比等我们改代码快</p>
+      </article>
+
+      <article class="future">
+        <div class="future__head"><span class="future__id">R · 08</span><span class="badge badge--healthy"><svg><use href="#i-zap"/></svg>Quick Win</span></div>
+        <div><div class="future__title">Audit log for all writes</div><div class="future__cn">每次写操作都留记录</div></div>
+        <p class="future__body">所有 env / INI / 共享 / 凭据写入操作全部写进本地 SQLite 审计表：谁操作、改了哪台机、改了什么、什么时间、改前改后的值。</p>
+        <p class="future__why">出问题翻日志能直接知道谁动过，省去扯皮</p>
+      </article>
+
+      <article class="future">
+        <div class="future__head"><span class="future__id">R · 09</span><span class="badge badge--warning"><svg><use href="#i-compass"/></svg>Explore</span></div>
+        <div><div class="future__title">Multi-site cluster</div><div class="future__cn">多片场、多地点，各管各的分发</div></div>
+        <p class="future__body">机器按 site 分组，逻辑项目可以跨 site 共享，但 DDC / PSO 分发路径各自独立，不用跨城走公网同步。</p>
+        <p class="future__why">团队大了就是多地办公，"全是一个集群"这个假设早晚撑不住</p>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="colophon">
+    <div class="colophon__mark">UECM · v1.0</div>
+    <div class="colophon__line">Compiled 2026·05·13 · Branch <code>codex/uecm-winrm-bootstrap-script</code></div>
+    <div class="colophon__line">Tauri 2.x · Rust · Vue 3 · Tailwind · SQLite · DPAPI · PsExec64</div>
+  </footer>
+
+</main>
+
+<script>
+  // theme toggle (mirrors useColorMode.ts)
+  (function(){
+    const root = document.documentElement;
+    const buttons = document.querySelectorAll('.themetoggle button');
+    const mql = window.matchMedia('(prefers-color-scheme: dark)');
+    const KEY = 'uecm-theme';
+
+    function getStored(){
+      try{
+        const v = localStorage.getItem(KEY);
+        return (v==='light'||v==='dark'||v==='system') ? v : 'dark';
+      }catch(e){return 'dark'}
+    }
+    function persist(m){ try{localStorage.setItem(KEY,m)}catch(e){} }
+    function apply(m){
+      const r = m==='system' ? (mql.matches?'dark':'light') : m;
+      root.classList.toggle('dark', r==='dark');
+      buttons.forEach(b=>b.setAttribute('aria-pressed', String(b.dataset.theme===m)));
+    }
+    let mode = getStored();
+    apply(mode); persist(mode);
+    buttons.forEach(b=>b.addEventListener('click',()=>{
+      mode = b.dataset.theme; persist(mode); apply(mode);
+    }));
+    mql.addEventListener('change',()=>{ if(mode==='system') apply(mode); });
+  })();
+</script>
+</body>
+</html>
