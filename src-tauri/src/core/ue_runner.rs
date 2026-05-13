@@ -9,6 +9,7 @@ use tokio::time::{sleep, Duration};
 
 const TAIL_INTERVAL: Duration = Duration::from_millis(1000);
 const MAX_LOG_TAIL_LINES: usize = 200;
+const MAX_CONSECUTIVE_TAIL_ERRORS: usize = 5;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -98,7 +99,15 @@ pub fn run(spec: UeRunSpec) -> RunnerHandle {
             }
         };
 
-        let pid = start.pid.parse::<i64>().unwrap_or(-1);
+        let pid = match parse_pid(&start.pid) {
+            Ok(pid) => pid,
+            Err(err) => {
+                let _ = tx.send(UeRunnerEvent::Error {
+                    message: format!("spawn failed: {}", err),
+                });
+                return;
+            }
+        };
         {
             let mut state = cancel_handle.lock().await;
             state.host = Some(spec.host.clone());
@@ -112,6 +121,7 @@ pub fn run(spec: UeRunSpec) -> RunnerHandle {
         });
 
         let mut offset = 0i64;
+        let mut consecutive_tail_errors = 0usize;
         let mut log_tail = Vec::<String>::new();
         loop {
             {
@@ -148,9 +158,35 @@ pub fn run(spec: UeRunSpec) -> RunnerHandle {
             .await
             {
                 Ok(value) => value,
-                Err(_) => continue,
+                Err(err) => {
+                    consecutive_tail_errors += 1;
+                    if consecutive_tail_errors >= MAX_CONSECUTIVE_TAIL_ERRORS {
+                        let _ = tx.send(UeRunnerEvent::Error {
+                            message: format!(
+                                "log tail failed {} times; last error: {}",
+                                consecutive_tail_errors, err
+                            ),
+                        });
+                        return;
+                    }
+                    continue;
+                }
             };
-            if !tail.ok || !tail.exists || tail.new_text.is_empty() {
+            if !tail.ok {
+                consecutive_tail_errors += 1;
+                if consecutive_tail_errors >= MAX_CONSECUTIVE_TAIL_ERRORS {
+                    let _ = tx.send(UeRunnerEvent::Error {
+                        message: format!(
+                            "log tail returned ok=false {} times",
+                            consecutive_tail_errors
+                        ),
+                    });
+                    return;
+                }
+                continue;
+            }
+            consecutive_tail_errors = 0;
+            if !tail.exists || tail.new_text.is_empty() {
                 continue;
             }
             offset = tail.new_offset.parse().unwrap_or(offset);
@@ -226,6 +262,27 @@ fn parse_line(line: &str) -> ParsedLine {
             pct: Some(0.95),
             label: "DDC fill complete".into(),
         });
+    } else if line.contains("LogShaderPipelineCache: Display: Logging shader pipeline cache to") {
+        parsed.kind = Some("pso_logging_started");
+        parsed.progress = Some(ProgressInfo {
+            pct: None,
+            label: "PSO logging started".into(),
+        });
+    } else if line.contains("LogShaderPipelineCache: Display: PSO snapshot saved to") {
+        parsed.kind = Some("pso_snapshot_saved");
+        parsed.progress = Some(ProgressInfo {
+            pct: None,
+            label: "PSO snapshot saved".into(),
+        });
+    } else if line.contains("LogShaderPipelineCache: Display: PSO logging stopped.")
+        && line.contains("Wrote")
+        && line.contains("PSOs")
+    {
+        parsed.kind = Some("pso_logging_stopped");
+        parsed.progress = Some(ProgressInfo {
+            pct: Some(1.0),
+            label: "PSO logging stopped".into(),
+        });
     } else if line.contains("LogInit: Engine exit requested") || line.contains("LogExit: Exiting.") {
         parsed.kind = Some("exit_clean");
         parsed.completed_exit = Some(0);
@@ -236,6 +293,19 @@ fn parse_line(line: &str) -> ParsedLine {
         parsed.completed_exit = Some(1);
     }
     parsed
+}
+
+fn parse_pid(raw: &str) -> UecmResult<i64> {
+    let pid = raw.trim().parse::<i64>().map_err(|_| {
+        UecmError::OperationFailed(format!("invalid process id returned by UE launcher: {:?}", raw))
+    })?;
+    if pid <= 0 {
+        return Err(UecmError::OperationFailed(format!(
+            "invalid process id returned by UE launcher: {}",
+            pid
+        )));
+    }
+    Ok(pid)
 }
 
 fn extract_pct_in_parens(line: &str) -> Option<f32> {
@@ -256,6 +326,13 @@ fn extract_pct_in_parens(line: &str) -> Option<f32> {
 
 async fn start_process(spec: &UeRunSpec) -> UecmResult<StartScriptResult> {
     match spec.backend {
+        UeRunnerBackend::Remote if crate::core::loopback::is_loopback_target(&spec.host) => {
+            tracing::debug!(
+                host = %spec.host,
+                "ue_runner: target is local, short-circuit start to local backend"
+            );
+            start_local_process(spec).await
+        }
         UeRunnerBackend::Remote => start_remote_process(spec),
         UeRunnerBackend::Local => start_local_process(spec).await,
     }
@@ -360,6 +437,13 @@ async fn read_tail(
 ) -> UecmResult<TailScriptResult> {
     match backend {
         UeRunnerBackend::Remote => {
+            if crate::core::loopback::is_loopback_target(host) {
+                tracing::debug!(
+                    host = %host,
+                    "ue_runner: target is local, short-circuit log tail to local backend"
+                );
+                return read_tail_local(log_path, offset);
+            }
             let mut args = vec![
                 "-HostName".to_string(),
                 host.to_string(),
@@ -424,10 +508,17 @@ async fn stop_process(
 ) -> UecmResult<()> {
     match backend {
         UeRunnerBackend::Remote => {
+            if crate::core::loopback::is_loopback_target(host) {
+                tracing::debug!(
+                    host = %host,
+                    "ue_runner: target is local, short-circuit stop to local backend"
+                );
+                return stop_local_process(pid);
+            }
             let mut args = vec![
                 "-HostName".to_string(),
                 host.to_string(),
-                "-Pid".into(),
+                "-TargetPid".into(),
                 pid.to_string(),
             ];
             if let (Some(user), Some(pass)) = (user, pass) {
@@ -491,6 +582,21 @@ mod tests {
     }
 
     #[test]
+    fn parse_line_recognises_pso_markers() {
+        let started = parse_line(
+            "LogShaderPipelineCache: Display: Logging shader pipeline cache to D:/X/Saved/CollectedPSOs/X.upipelinecache",
+        );
+        assert_eq!(started.kind, Some("pso_logging_started"));
+        let snapshot = parse_line(
+            "LogShaderPipelineCache: Display: PSO snapshot saved to D:/X/Saved/CollectedPSOs/X.upipelinecache",
+        );
+        assert_eq!(snapshot.kind, Some("pso_snapshot_saved"));
+        let stopped = parse_line("LogShaderPipelineCache: Display: PSO logging stopped. Wrote 128 PSOs.");
+        assert_eq!(stopped.kind, Some("pso_logging_stopped"));
+        assert_eq!(stopped.progress.unwrap().pct, Some(1.0));
+    }
+
+    #[test]
     fn parse_line_recognises_critical_fail() {
         let parsed = parse_line("LogCore: Error: Critical fail in shader compile");
         assert_eq!(parsed.completed_exit, Some(1));
@@ -509,5 +615,24 @@ mod tests {
         assert!(extract_pct_in_parens("no parens here").is_none());
         assert!(extract_pct_in_parens("(abc/def)").is_none());
         assert!(extract_pct_in_parens("(0/0)").is_none());
+    }
+
+    #[test]
+    fn parse_pid_rejects_invalid_values() {
+        assert_eq!(parse_pid("42").unwrap(), 42);
+        assert!(parse_pid("").is_err());
+        assert!(parse_pid("0").is_err());
+        assert!(parse_pid("abc").is_err());
+    }
+
+    #[test]
+    fn local_host_short_circuits() {
+        assert!(crate::core::loopback::is_loopback_target("127.0.0.1"));
+        assert!(crate::core::loopback::is_loopback_target("localhost"));
+    }
+
+    #[test]
+    fn remote_host_does_not_short_circuit() {
+        assert!(!crate::core::loopback::is_loopback_target("203.0.113.10"));
     }
 }

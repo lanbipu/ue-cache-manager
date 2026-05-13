@@ -1,15 +1,15 @@
-//! CRUD for diagnostic scan sessions.
+//! CRUD for the `scan_runs` table. Each row is one INI-scan-or-health-check session.
 
 use crate::data::Db;
 use crate::error::{UecmError, UecmResult};
-use rusqlite::{params, Row};
+use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ScanRun {
     pub id: Option<i64>,
-    pub scan_type: String,
+    pub scan_type: String, // "ini" | "health"
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
     pub machine_ids: Vec<i64>,
@@ -56,39 +56,51 @@ pub fn list_recent(db: &Db, scan_type: &str, limit: i64) -> UecmResult<Vec<ScanR
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
         "SELECT id, scan_type, started_at, finished_at, machine_ids_json, summary_json
-         FROM scan_runs WHERE scan_type = ? ORDER BY started_at DESC, id DESC LIMIT ?",
+         FROM scan_runs WHERE scan_type = ? ORDER BY started_at DESC LIMIT ?",
     )?;
-    let rows = stmt.query_map(params![scan_type, limit], row_to_scan_run)?;
+    let rows = stmt.query_map(params![scan_type, limit], |row| row_to_scan_run(row))?;
     let mut out = Vec::new();
-    for row in rows {
-        out.push(row?);
+    for r in rows {
+        out.push(r?);
     }
     Ok(out)
 }
 
-fn row_to_scan_run(row: &Row<'_>) -> rusqlite::Result<ScanRun> {
-    let machine_ids_json: String = row.get(4)?;
+fn row_to_scan_run(row: &rusqlite::Row) -> rusqlite::Result<ScanRun> {
+    let id: i64 = row.get(0)?;
+    let scan_type: String = row.get(1)?;
+    let started_at: Option<String> = row.get(2)?;
+    let finished_at: Option<String> = row.get(3)?;
+    let ids_json: String = row.get(4)?;
     let summary_json: Option<String> = row.get(5)?;
-    let machine_ids = serde_json::from_str(&machine_ids_json).map_err(json_to_sql)?;
-    let summary = summary_json
-        .map(|s| serde_json::from_str(&s).map_err(json_to_sql))
-        .transpose()?;
+
+    let machine_ids: Vec<i64> = serde_json::from_str(&ids_json).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            4,
+            rusqlite::types::Type::Text,
+            format!("machine_ids_json parse error: {}", e).into(),
+        )
+    })?;
+
+    let summary: Option<JsonValue> = match summary_json {
+        Some(s) => Some(serde_json::from_str(&s).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
+                5,
+                rusqlite::types::Type::Text,
+                format!("summary_json parse error: {}", e).into(),
+            )
+        })?),
+        None => None,
+    };
+
     Ok(ScanRun {
-        id: Some(row.get(0)?),
-        scan_type: row.get(1)?,
-        started_at: row.get(2)?,
-        finished_at: row.get(3)?,
+        id: Some(id),
+        scan_type,
+        started_at,
+        finished_at,
         machine_ids,
         summary,
     })
-}
-
-fn json_to_sql(err: serde_json::Error) -> rusqlite::Error {
-    rusqlite::Error::FromSqlConversionFailure(
-        0,
-        rusqlite::types::Type::Text,
-        Box::new(err),
-    )
 }
 
 #[cfg(test)]
@@ -109,6 +121,7 @@ mod tests {
     fn insert_returns_new_id_with_started_at() {
         let db = setup();
         let id = insert(&db, "ini", &[1, 2, 3]).unwrap();
+        assert!(id > 0);
         let row = find_by_id(&db, id).unwrap().unwrap();
         assert_eq!(row.scan_type, "ini");
         assert_eq!(row.machine_ids, vec![1, 2, 3]);
@@ -120,10 +133,16 @@ mod tests {
     fn finish_updates_summary_and_finished_at() {
         let db = setup();
         let id = insert(&db, "ini", &[1]).unwrap();
-        finish(&db, id, &serde_json::json!({"critical": 0, "warning": 1})).unwrap();
+        finish(
+            &db,
+            id,
+            &serde_json::json!({"critical": 0, "warning": 1, "healthy": 4}),
+        )
+        .unwrap();
         let row = find_by_id(&db, id).unwrap().unwrap();
         assert!(row.finished_at.is_some());
-        assert_eq!(row.summary.unwrap()["warning"], 1);
+        let summary = row.summary.as_ref().unwrap();
+        assert_eq!(summary["warning"], 1);
     }
 
     #[test]

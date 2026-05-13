@@ -28,7 +28,7 @@ impl UeJobRegistry {
         self.jobs.lock().await.remove(job_id);
     }
 
-    pub(crate) async fn cancel(&self, job_id: &str) -> bool {
+    async fn cancel(&self, job_id: &str) -> bool {
         let cancel = {
             let jobs = self.jobs.lock().await;
             jobs.get(job_id).cloned()
@@ -188,13 +188,26 @@ pub async fn generate_ddc_pak(
                             "project {} not located on machine {}",
                             project_id, machine_id
                         ))
-                    })?;
+            })?;
             let engine_path = resolve_engine_path(&db, machine_id, ue_version.as_deref())?;
+            let runtime_backend = if crate::core::loopback::is_loopback_target(&machine.ip)
+                || crate::core::loopback::is_loopback_target(&machine.hostname)
+            {
+                tracing::debug!(
+                    machine_id,
+                    host = %machine.ip,
+                    hostname = %machine.hostname,
+                    "ddc_pak: source machine is local, forcing local UE backend"
+                );
+                UeRunnerBackend::Local
+            } else {
+                UeRunnerBackend::Remote
+            };
             (
                 machine.ip,
                 engine_path,
                 location.uproject_path,
-                UeRunnerBackend::Remote,
+                runtime_backend,
             )
         }
         BackendChoice::Local => {
@@ -353,7 +366,7 @@ pub async fn cancel_ue_job(
 }
 
 #[tauri::command]
-pub fn verify_pak_output(
+pub async fn verify_pak_output(
     db: State<'_, Db>,
     machine_id: i64,
     project_id: i64,
@@ -369,12 +382,18 @@ pub fn verify_pak_output(
             ))
         })?;
     let (op_user, op_pass) = resolve_operator_creds(&db, operator_credential_alias.as_deref())?;
-    ddc_pak::verify_output(
-        &machine.ip,
-        &location.abs_path,
-        op_user.as_deref(),
-        op_pass.as_deref(),
-    )
+    let host = machine.ip;
+    let project_dir = location.abs_path;
+    tokio::task::spawn_blocking(move || {
+        ddc_pak::verify_output(
+            &host,
+            &project_dir,
+            op_user.as_deref(),
+            op_pass.as_deref(),
+        )
+    })
+    .await
+    .map_err(|err| UecmError::OperationFailed(format!("verify_pak_output task failed: {err}")))?
 }
 
 #[tauri::command]
@@ -405,7 +424,9 @@ pub async fn distribute_ddc_pak(
         (op_user.clone(), op_pass.clone())
     };
 
+    let distribute_profile = pak_distribute::DistributeProfile::ddc_pak();
     let plan = pak_distribute::plan(
+        &distribute_profile,
         &db,
         source_machine_id,
         &source_machine.ip,
@@ -425,7 +446,7 @@ pub async fn distribute_ddc_pak(
     }
 
     for item in &plan {
-        pak_distribute::preflight_one(item).await.map_err(|e| {
+        pak_distribute::preflight_one_with_profile(&distribute_profile, item).await.map_err(|e| {
             UecmError::OperationFailed(format!(
                 "target {} cannot reach source UNC: {}",
                 item.target_machine_id, e
@@ -433,7 +454,14 @@ pub async fn distribute_ddc_pak(
         })?;
     }
 
-    let operation_id = operations::start(&db, "ddc_pak.distribute", &target_machine_ids)?;
+    let mut operation_machines = Vec::with_capacity(target_machine_ids.len() + 1);
+    operation_machines.push(source_machine_id);
+    for machine_id in target_machine_ids.iter().copied() {
+        if !operation_machines.contains(&machine_id) {
+            operation_machines.push(machine_id);
+        }
+    }
+    let operation_id = operations::start(&db, "ddc_pak.distribute", &operation_machines)?;
     let job_id = format!("ddc-pak-dist-{}-{}", source_machine_id, now_millis());
     let plan_for_task = Arc::new(plan.clone());
     let db_for_task: Db = (*db).clone();
@@ -452,6 +480,7 @@ pub async fn distribute_ddc_pak(
             move |machine_id| {
                 let plan_lookup = plan_lookup.clone();
                 async move {
+                    let distribute_profile = pak_distribute::DistributeProfile::ddc_pak();
                     let item = plan_lookup
                         .iter()
                         .find(|item| item.target_machine_id == machine_id)
@@ -462,7 +491,11 @@ pub async fn distribute_ddc_pak(
                             ))
                         })?
                         .clone();
-                    let outcome = pak_distribute::run_one(item).await?;
+                    let outcome = pak_distribute::run_one_with_profile(
+                        &distribute_profile,
+                        item,
+                    )
+                    .await?;
                     if !outcome.ok {
                         return Err(UecmError::OperationFailed(format!(
                             "robocopy exit {}: {}",

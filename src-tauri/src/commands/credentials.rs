@@ -20,6 +20,8 @@ pub fn save_credential(
     username: String,
     password: String,
 ) -> UecmResult<i64> {
+    let username = core_creds::normalize_username_for_storage(&username);
+
     // Cmdkey first: if this fails, nothing else gets written.
     core_creds::store(&alias, &username, &password)?;
 

@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory=$true)] [string]$HostName,
     [Parameter(Mandatory=$true)] [string]$LogPath,
-    [Parameter(Mandatory=$true)] [int]$LastReadOffset,
+    [Parameter(Mandatory=$true)] [long]$LastReadOffset,
     [int]$MaxBytes = 65536,
     [string]$Username,
     [string]$Password
@@ -18,7 +18,7 @@ function Build-CredentialOrNull {
 
 try {
     $script = {
-        param($LogPath, $LastReadOffset, $MaxBytes)
+        param($LogPath, [long]$LastReadOffset, [int]$MaxBytes)
         if (-not (Test-Path -LiteralPath $LogPath)) {
             return @{ exists = $false; new_offset = "0"; new_text = "" }
         }

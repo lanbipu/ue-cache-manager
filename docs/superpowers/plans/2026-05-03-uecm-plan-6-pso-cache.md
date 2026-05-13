@@ -30,7 +30,7 @@
 - `core::gpu_consistency` — Pure-Rust aggregator over `machine_gpus` rows. Produces a per-machine `(gpu_model, driver_version)` signature, identifies the cluster baseline (highest count), classifies each machine as `match | deviation | unknown`, and emits a structured matrix for UI consumption. Plan 4 already shipped a derivative of this for the health-check #11 row; Plan 6 promotes it to a dedicated module so the PSO surface and Health surface share one source of truth.
 - `core::ini_diagnostics` extension — Three new rules `R008`, `R009`, `R010` covering the PSO Precaching CVars (`r.PSOPrecaching=1`, `r.PSOPrecache.Compile=1`, `r.PSOPrecache.GlobalShaders=1`). Pure rule additions; no orchestration code.
 - New PowerShell sidecars: `start-pso-collect.ps1` (composes UE args), `list-pso-cache-files.ps1` (enumerates collected files post-run), `distribute-pso-cache.ps1` (Robocopy variant for the `Saved/CollectedPSOs/` glob).
-- Two SQLite migrations: `011_pso_cache_files_table` + `012_pso_distributions_table`.
+- Two SQLite migrations: `010_pso_cache_files_table` + `011_pso_distributions_table`.
 - Tauri command surface: `verify_pso_precaching`, `start_pso_collection`, `cancel_ue_job` (already exists from Plan 5; reused), `list_pso_cache_files`, `distribute_pso_cache`, `get_gpu_consistency_matrix`.
 - Frontend stores: `usePsoStore` (collection + distribution state) and `useGpuConsistencyStore` (matrix). Both consume the same `ue-runner-progress` and `pak-distribute-progress` channels Plan 5 introduced — no new event type.
 - Frontend primitives expansion: `UecmGpuMatrix.vue` (cluster matrix cell), `UecmHorizontalSplit.vue` (collected-files explorer pane). Plus the polish-pass touch-ups described in T22/T23.
@@ -141,7 +141,7 @@ ue-cache-manager/
 │   │   └── data/
 │   │       ├── pso_cache_files.rs              # NEW
 │   │       ├── pso_distributions.rs            # NEW
-│   │       ├── schema.rs                       # MODIFY (migrations 011 + 012)
+│   │       ├── schema.rs                       # MODIFY (migrations 010 + 011)
 │   │       └── mod.rs                          # MODIFY
 │
 ├── src/
@@ -266,7 +266,7 @@ Polish is gated by visual review — engineer captures screenshots and posts the
 - [ ] **Selectors preserved:** all existing `data-*` selectors on Plan 5 views remain functional after the polish pass.
 - [ ] **Stores untouched:** `useMachinesStore`, `useDiscoveryStore`, `useCredentialsStore`, `useSharesStore`, `useBatchStore`, `useClusterStore`, `useTasksStore`, `useDiagnosticsStore`, `useHealthCheckStore`, `useProjectsStore`, `useDdcPakStore` — Plan 6 ONLY adds `usePsoStore` + `useGpuConsistencyStore`. `useHealthCheckStore` is *modified* to rewire #10/#11 — but signature stays.
 - [ ] **Routes intact:** all 8 existing routes still resolve.
-- [ ] **Migration ordering:** 011 + 012 land after the integrated Plan 4/5 baseline (`007_diagnostics_tables`, `008_operations_table`, `009_projects_table`, `010_project_locations_table`).
+- [ ] **Migration ordering:** 010 + 011 land after Plan 5's 008 + 009.
 - [ ] **`core::ue_runner` left intact:** Plan 6 does NOT modify the runner; it only wraps it. If a Plan 6 task tries to add PSO-specific markers to `parse_line`, push back — the parsing belongs in `core::pso_collect`.
 
 ---
@@ -304,22 +304,20 @@ Expected: all 5 listed in `invoke_handler!`.
 - [ ] **Step 4: Confirm Plan 4 INI scanner exists for F1 reuse**
 
 ```bash
-grep -n "pub fn run_scan" src-tauri/src/core/ini_scanner.rs
+grep -n "fn scan_machine" src-tauri/src/core/ini_scanner.rs
 ```
 
-Expected: function exists (Plan 4 placed scan orchestration in `run_scan`, not `scan_machine`). If absent, the F1 tasks (T4 + T5) need to be re-scoped — STOP and ask.
+Expected: function exists (was added in Plan 4 T8). If absent, the F1 tasks (T4 + T5) need to be re-scoped — STOP and ask.
 
 - [ ] **Step 5: Branch and tracking note**
 
 ```bash
-git branch --show-current
+git checkout -b feature/plan-6-pso-cache
 ```
-
-Expected: `codex/plan-6-pso-cache`. The worktree was created from `codex/plan-5-ddc-pak`, then merged with `main` docs and `codex/plan-4-diagnostics`.
 
 ---
 
-## Task 2: SQLite migrations 011 + 012 — `pso_cache_files` + `pso_distributions`
+## Task 2: SQLite migrations 010 + 011 — `pso_cache_files` + `pso_distributions`
 
 **Files:**
 - Modify: `src-tauri/src/data/schema.rs`
@@ -328,7 +326,7 @@ Expected: `codex/plan-6-pso-cache`. The worktree was created from `codex/plan-5-
 
 ```rust
     (
-        "011_pso_cache_files_table",
+        "010_pso_cache_files_table",
         r#"
         CREATE TABLE IF NOT EXISTS pso_cache_files (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -349,7 +347,7 @@ Expected: `codex/plan-6-pso-cache`. The worktree was created from `codex/plan-5-
         "#,
     ),
     (
-        "012_pso_distributions_table",
+        "011_pso_distributions_table",
         r#"
         CREATE TABLE IF NOT EXISTS pso_distributions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -375,7 +373,7 @@ In `data/schema.rs` `tests` module, append:
 
 ```rust
     #[test]
-    fn migration_011_creates_pso_cache_files_with_unique_constraint() {
+    fn migration_010_creates_pso_cache_files_with_unique_constraint() {
         let mut conn = rusqlite::Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
         let count: i64 = conn
@@ -389,7 +387,7 @@ In `data/schema.rs` `tests` module, append:
     }
 
     #[test]
-    fn migration_012_creates_pso_distributions_with_fk() {
+    fn migration_011_creates_pso_distributions_with_fk() {
         let mut conn = rusqlite::Connection::open_in_memory().unwrap();
         migrate(&mut conn).unwrap();
         conn.execute("PRAGMA foreign_keys = ON;", []).unwrap();
@@ -407,7 +405,7 @@ In `data/schema.rs` `tests` module, append:
 ```bash
 cd src-tauri && cargo test --lib data::schema 2>&1 | tail -10 && cd ..
 git add src-tauri/src/data/schema.rs
-git commit -m "feat: schema migrations 011-012 (pso_cache_files + pso_distributions)"
+git commit -m "feat: schema migrations 010-011 (pso_cache_files + pso_distributions)"
 ```
 
 ---
@@ -4181,7 +4179,7 @@ cd src-tauri && cargo test --lib 2>&1 | tail -5 && cd ..
 - [ ] **Step 2: Push**
 
 ```bash
-git push -u origin codex/plan-6-pso-cache
+git push -u origin feature/plan-6-pso-cache
 ```
 
 - [ ] **Step 3: Open PR**

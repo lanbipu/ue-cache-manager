@@ -69,7 +69,7 @@ export const usePsoStore = defineStore("pso", () => {
       },
     );
     unlistenDistribute = await listen<PakDistributeProgressPayload>(
-      "pak-distribute-progress",
+      "pso-distribute-progress",
       (event) => {
         onDistributeEvent(event.payload);
       },
@@ -118,10 +118,17 @@ export const usePsoStore = defineStore("pso", () => {
   async function onFinalized(payload: PsoCollectFinalizedPayload) {
     const job = collectJobs.value.find((item) => item.job_id === payload.job_id);
     if (!job) return;
-    job.status = "completed";
-    job.files_collected = payload.files_collected;
+    if (payload.error_message) {
+      job.status = "error";
+      job.error_message = payload.error_message;
+    } else {
+      job.status = "completed";
+      job.files_collected = payload.files_collected ?? 0;
+    }
     job.finished_at = new Date().toISOString();
-    await loadFiles(payload.project_id);
+    if (!payload.error_message) {
+      await loadFiles(payload.project_id);
+    }
   }
 
   function onDistributeEvent(payload: PakDistributeProgressPayload) {

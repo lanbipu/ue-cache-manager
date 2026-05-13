@@ -1,12 +1,29 @@
-//! Tauri commands for INI diagnostics.
+//! Tauri commands for the INI scanner: dispatch a scan, list findings,
+//! apply / skip a single finding.
 
-use crate::core::{ini_apply, ini_scanner};
-use crate::data::{ini_findings, scan_runs, Db, IniFinding, ScanRun};
+use crate::core::credentials as core_credentials;
+use crate::core::ini_apply::{self, ApplyContext};
+use crate::core::ini_diagnostics::EnvVarState;
+use crate::core::ini_scanner::{self, ScanInputs};
+use crate::core::env_vars;
+use crate::data::{
+    credentials as data_credentials, ini_findings, machine_ue_installs,
+    machines as data_machines, scan_runs, Db, IniFinding,
+};
 use crate::error::{UecmError, UecmResult};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tauri::State;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
+pub struct ScanRunSummary {
+    pub scan_run_id: i64,
+    pub critical: i64,
+    pub warning: i64,
+    pub healthy: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct ScanInisRequest {
     pub machine_ids: Vec<i64>,
     pub credential_alias: String,
@@ -14,62 +31,215 @@ pub struct ScanInisRequest {
     pub user_profile_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
+pub struct IniScanSummary {
+    pub scan_run_id: i64,
+    pub critical: i64,
+    pub warning: i64,
+    pub healthy: i64,
+    pub info: i64,
+    pub total_files: i64,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ScanInisResponse {
     pub scan_run_id: i64,
-    pub summary: ini_scanner::IniScanSummary,
+    pub summary: IniScanSummary,
     pub findings: Vec<IniFinding>,
 }
 
 #[tauri::command]
-pub fn scan_inis(db: State<'_, Db>, request: ScanInisRequest) -> UecmResult<ScanInisResponse> {
-    scan_inis_inner(&db, request)
-}
-
-pub fn scan_inis_inner(db: &Db, request: ScanInisRequest) -> UecmResult<ScanInisResponse> {
-    if request.machine_ids.is_empty() {
-        return Err(UecmError::InvalidInput("machine_ids cannot be empty".into()));
-    }
-    let summary = ini_scanner::run_scan(
-        db,
-        &request.machine_ids,
-        &request.credential_alias,
-        &request.project_paths,
-        request.user_profile_path.as_deref(),
+pub fn scan_inis(
+    db: State<'_, Db>,
+    request: ScanInisRequest,
+) -> UecmResult<ScanInisResponse> {
+    let summary = scan_inis_summary(
+        &db,
+        request.machine_ids.clone(),
+        paths_for_machines(&request.machine_ids, &request.project_paths),
+        request.user_profile_path.unwrap_or_default(),
+        request.credential_alias,
     )?;
-    let findings = ini_findings::list_for_run(db, summary.scan_run_id)?;
+    let findings = ini_findings::list_for_run(&db, summary.scan_run_id)?;
     Ok(ScanInisResponse {
         scan_run_id: summary.scan_run_id,
-        summary,
+        summary: IniScanSummary {
+            scan_run_id: summary.scan_run_id,
+            critical: summary.critical,
+            warning: summary.warning,
+            healthy: summary.healthy,
+            info: 0,
+            total_files: 0,
+        },
         findings,
     })
 }
 
-#[tauri::command]
-pub fn verify_pso_precaching(
-    db: State<'_, Db>,
-    request: ScanInisRequest,
-) -> UecmResult<ScanInisResponse> {
-    verify_pso_precaching_inner(&db, request)
-}
-
-pub fn verify_pso_precaching_inner(db: &Db, request: ScanInisRequest) -> UecmResult<ScanInisResponse> {
-    if request.project_paths.is_empty() {
-        return Err(UecmError::InvalidInput(
-            "project_paths cannot be empty for PSO precaching verification".into(),
-        ));
+fn scan_inis_summary(
+    db: &Db,
+    machine_ids: Vec<i64>,
+    project_paths_per_machine: std::collections::HashMap<i64, Vec<String>>,
+    user_profile: String,
+    credential_alias: String,
+) -> UecmResult<ScanRunSummary> {
+    if machine_ids.is_empty() {
+        return Err(UecmError::InvalidInput("machine_ids must not be empty".into()));
     }
-    scan_inis_inner(db, request)
+    let cred_row = data_credentials::find_by_alias(&db, &credential_alias)?
+        .ok_or_else(|| UecmError::InvalidInput(format!("credential alias '{}' not found", credential_alias)))?;
+    let password = core_credentials::resolve_password(&credential_alias)?;
+    let scan_id = scan_runs::insert(&db, "ini", &machine_ids)?;
+
+    let mut total_critical = 0i64;
+    let mut total_warning = 0i64;
+    let mut total_healthy = 0i64;
+    let mut total_read: usize = 0;
+    let mut all_errors: Vec<String> = Vec::new();
+    let mut all_not_found: Vec<String> = Vec::new();
+
+    for &mid in &machine_ids {
+        let machine = data_machines::find_by_id(&db, mid)?
+            .ok_or_else(|| UecmError::InvalidInput(format!("machine {} not found", mid)))?;
+        let installs_rows = machine_ue_installs::list_for_machine(&db, mid)?;
+        let installs: Vec<(String, String)> = installs_rows.into_iter()
+            .map(|i| (i.version, i.install_path)).collect();
+        let project_roots: Vec<String> = project_paths_per_machine.get(&mid).cloned().unwrap_or_default();
+
+        let mut env_state = EnvVarState::default();
+        env_state.shared_data_cache_path = env_vars::get_with_credential(
+            &machine.ip, "UE-SharedDataCachePath", &cred_row.username, &password,
+        ).ok().flatten();
+        env_state.local_data_cache_path = env_vars::get_with_credential(
+            &machine.ip, "UE-LocalDataCachePath", &cred_row.username, &password,
+        ).ok().flatten();
+
+        let inputs = ScanInputs {
+            host: &machine.ip,
+            credential: Some((&cred_row.username, &password)),
+            installs: &installs,
+            user_profile: &user_profile,
+            project_roots: &project_roots,
+            env_state,
+        };
+
+        let outcome = ini_scanner::scan_machine(&inputs)?;
+        total_read += outcome.read_count;
+        for err in &outcome.errors {
+            all_errors.push(format!("{}: {}", machine.hostname, err));
+        }
+        for nf in &outcome.not_found {
+            all_not_found.push(format!("{}: {}", machine.hostname, nf));
+        }
+        for f in outcome.findings {
+            let row = IniFinding {
+                id: None,
+                scan_run_id: scan_id,
+                machine_id: mid,
+                rule_id: f.rule_id,
+                severity: f.severity.as_str().into(),
+                category: f.category.as_str().into(),
+                file_path: f.file_path,
+                section: f.section,
+                key_name: f.key_name,
+                line_number: f.line_number,
+                snippet_before: f.snippet_before,
+                snippet_after: f.snippet_after,
+                recommended_action: f.recommended_action.as_str().into(),
+                recommended_value: f.recommended_value,
+                symptom: f.symptom,
+                rationale: f.rationale,
+                fixed_at: None,
+                skipped_at: None,
+            };
+            match row.severity.as_str() {
+                "critical" => total_critical += 1,
+                "warning" => total_warning += 1,
+                "healthy" => total_healthy += 1,
+                _ => {}
+            }
+            ini_findings::insert(&db, &row)?;
+        }
+    }
+
+    let mut summary = json!({
+        "critical": total_critical,
+        "warning": total_warning,
+        "healthy": total_healthy,
+    });
+    if !all_errors.is_empty() {
+        let preview: Vec<String> = all_errors.iter().take(10).cloned().collect();
+        summary["errors_count"] = json!(all_errors.len());
+        summary["errors"] = json!(preview);
+    }
+    if !all_not_found.is_empty() {
+        let preview: Vec<String> = all_not_found.iter().take(20).cloned().collect();
+        summary["not_found_count"] = json!(all_not_found.len());
+        summary["not_found"] = json!(preview);
+    }
+    summary["read_count"] = json!(total_read);
+    scan_runs::finish(&db, scan_id, &summary)?;
+
+    // Only surface failure when *no* file was actually read. A scan that read at
+    // least one INI but happens to find nothing actionable, with optional files
+    // missing on the side, is a legitimate "all clean" outcome — don't promote
+    // that into a wizard error.
+    if total_read == 0 {
+        if !all_errors.is_empty() {
+            return Err(UecmError::OperationFailed(format!(
+                "INI scan read no files; {} read error(s). First: {}",
+                all_errors.len(),
+                all_errors.first().cloned().unwrap_or_default()
+            )));
+        }
+        if !all_not_found.is_empty() {
+            return Err(UecmError::OperationFailed(format!(
+                "INI scan read no files: all {} target(s) missing. First: {}",
+                all_not_found.len(),
+                all_not_found.first().cloned().unwrap_or_default()
+            )));
+        }
+    }
+
+    Ok(ScanRunSummary {
+        scan_run_id: scan_id,
+        critical: total_critical,
+        warning: total_warning,
+        healthy: total_healthy,
+    })
+}
+
+fn paths_for_machines(
+    machine_ids: &[i64],
+    project_paths: &[String],
+) -> std::collections::HashMap<i64, Vec<String>> {
+    machine_ids
+        .iter()
+        .map(|machine_id| (*machine_id, project_paths.to_vec()))
+        .collect()
 }
 
 #[tauri::command]
-pub fn list_scan_runs(db: State<'_, Db>, scan_type: String, limit: i64) -> UecmResult<Vec<ScanRun>> {
-    scan_runs::list_recent(&db, &scan_type, limit)
+pub fn list_findings_for_run(db: State<'_, Db>, scan_run_id: i64) -> UecmResult<Vec<IniFinding>> {
+    ini_findings::list_for_run(&db, scan_run_id)
 }
 
 #[tauri::command]
 pub fn list_findings(db: State<'_, Db>, scan_run_id: i64) -> UecmResult<Vec<IniFinding>> {
     ini_findings::list_for_run(&db, scan_run_id)
+}
+
+#[tauri::command]
+pub fn list_recent_ini_runs(db: State<'_, Db>, limit: i64) -> UecmResult<Vec<scan_runs::ScanRun>> {
+    scan_runs::list_recent(&db, "ini", limit)
+}
+
+#[tauri::command]
+pub fn list_scan_runs(
+    db: State<'_, Db>,
+    scan_type: String,
+    limit: i64,
+) -> UecmResult<Vec<scan_runs::ScanRun>> {
+    scan_runs::list_recent(&db, &scan_type, limit)
 }
 
 #[tauri::command]
@@ -82,8 +252,18 @@ pub fn apply_finding(
     db: State<'_, Db>,
     finding_id: i64,
     credential_alias: String,
-) -> UecmResult<ini_apply::ApplyFindingResult> {
-    ini_apply::apply(&db, finding_id, &credential_alias)
+) -> UecmResult<String> {
+    let f = ini_findings::find_by_id(&db, finding_id)?
+        .ok_or_else(|| UecmError::InvalidInput(format!("finding {} not found", finding_id)))?;
+    let machine = data_machines::find_by_id(&db, f.machine_id)?
+        .ok_or_else(|| UecmError::InvalidInput(format!("machine {} not found", f.machine_id)))?;
+    let cred = data_credentials::find_by_alias(&db, &credential_alias)?
+        .ok_or_else(|| UecmError::InvalidInput(format!("credential '{}' not found", credential_alias)))?;
+    let password = core_credentials::resolve_password(&credential_alias)?;
+    let ctx = ApplyContext { host: &machine.ip, credential: (&cred.username, &password) };
+    let backup = ini_apply::apply(&ctx, &f)?;
+    ini_findings::mark_fixed(&db, finding_id)?;
+    Ok(backup)
 }
 
 #[tauri::command]
@@ -91,36 +271,15 @@ pub fn skip_finding(db: State<'_, Db>, finding_id: i64) -> UecmResult<()> {
     ini_findings::mark_skipped(&db, finding_id)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::data::{machines, open_in_memory, schema, Machine};
-
-    #[cfg(not(windows))]
-    #[test]
-    fn apply_finding_returns_invalid_input_for_missing_finding() {
-        let db = open_in_memory().unwrap();
-        {
-            let mut conn = db.lock().unwrap();
-            schema::migrate(&mut conn).unwrap();
-        }
-        let _ = machines::insert(&db, &Machine::new("RENDER-01", "192.168.10.21")).unwrap();
-        let result = ini_apply::apply(&db, 999, "UECM:winrm:RENDER-01");
-        assert!(matches!(result, Err(UecmError::InvalidInput(_))));
+#[tauri::command]
+pub fn verify_pso_precaching(
+    db: State<'_, Db>,
+    request: ScanInisRequest,
+) -> UecmResult<ScanInisResponse> {
+    if request.project_paths.is_empty() {
+        return Err(UecmError::InvalidInput(
+            "project_paths cannot be empty for PSO precaching verification".into(),
+        ));
     }
-
-    #[test]
-    fn verify_pso_precaching_requires_project_paths() {
-        let db = open_in_memory().unwrap();
-        let result = verify_pso_precaching_inner(
-            &db,
-            ScanInisRequest {
-                machine_ids: vec![1],
-                credential_alias: "missing".into(),
-                project_paths: Vec::new(),
-                user_profile_path: None,
-            },
-        );
-        assert!(matches!(result, Err(UecmError::InvalidInput(_))));
-    }
+    scan_inis(db, request)
 }

@@ -1,301 +1,233 @@
-//! INI scanner orchestration and path enumeration.
+//! INI scanner orchestration: enumerate target files for one machine, read
+//! them via `read-ini-file.ps1`, and run the pure rule engine over the result.
 
-use crate::core::{env_vars, ini_diagnostics, powershell, remote_path};
-use crate::data::{self, Db, IniFinding, UeInstall};
+use crate::core::ini_diagnostics::{
+    self, Category, EnvVarState, Finding, ParsedFile, ParsedKey, ParsedSection,
+};
+use crate::core::{loopback, powershell};
 use crate::error::{UecmError, UecmResult};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde::Deserialize;
+use std::io::ErrorKind;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct IniScanTarget {
-    pub category: String,
-    pub file_path: String,
+#[derive(Debug, Clone, PartialEq)]
+pub struct TargetFile {
+    pub path: String,
+    pub category: Category,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IniScanSummary {
-    pub scan_run_id: i64,
-    pub critical: i64,
-    pub warning: i64,
-    pub healthy: i64,
-    pub info: i64,
-    pub total_files: i64,
+pub fn enumerate_engine_paths(installs: &[(String, String)]) -> Vec<TargetFile> {
+    installs.iter().map(|(_, root)| TargetFile {
+        path: format!("{}\\Engine\\Config\\BaseEngine.ini", root.trim_end_matches('\\')),
+        category: Category::Engine,
+    }).collect()
 }
 
-#[derive(Debug, Deserialize)]
-struct ReadIniFileResult {
-    ok: bool,
-    sections: Vec<ReadIniSection>,
-    message: String,
+pub fn enumerate_user_paths(installs: &[(String, String)], user_profile: &str) -> Vec<TargetFile> {
+    installs.iter().map(|(version, _)| TargetFile {
+        path: format!(
+            "{}\\AppData\\Local\\UnrealEngine\\{}\\Saved\\Config\\WindowsEditor\\EditorPerProjectUserSettings.ini",
+            user_profile.trim_end_matches('\\'),
+            version
+        ),
+        category: Category::User,
+    }).collect()
 }
 
-#[derive(Debug, Deserialize)]
-struct ReadIniSection {
-    name: String,
-    keys: Vec<ReadIniKey>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ReadIniKey {
-    name: String,
-    value: String,
-    line_number: i64,
-    raw: String,
-}
-
-pub fn enumerate_targets(
-    installs: &[UeInstall],
-    project_paths: &[String],
-    user_profile_path: Option<&str>,
-) -> Vec<IniScanTarget> {
+pub fn enumerate_project_paths(project_roots: &[String]) -> Vec<TargetFile> {
     let mut out = Vec::new();
-    for project in project_paths.iter().filter(|p| !p.trim().is_empty()) {
-        let base = trim_slashes(project);
-        out.push(target("project", format!("{}\\Config\\DefaultEngine.ini", base)));
-        out.push(target("project", format!("{}\\Config\\ConsoleVariables.ini", base)));
-        out.push(target("project", format!("{}\\Config\\Windows\\ConsoleVariables.ini", base)));
+    for root in project_roots {
+        let r = root.trim_end_matches('\\');
+        out.push(TargetFile { path: format!("{}\\Config\\DefaultEngine.ini", r), category: Category::Project });
+        out.push(TargetFile { path: format!("{}\\Config\\ConsoleVariables.ini", r), category: Category::Project });
+        out.push(TargetFile { path: format!("{}\\Config\\Windows\\WindowsEngine.ini", r), category: Category::Project });
     }
-    for install in installs {
-        let engine = trim_slashes(&install.install_path);
-        out.push(target("engine", format!("{}\\Engine\\Config\\BaseEngine.ini", engine)));
-        if let Some(profile) = user_profile_path {
-            out.push(target(
-                "user",
-                format!(
-                    "{}\\AppData\\Local\\UnrealEngine\\{}\\Saved\\Config\\WindowsEditor\\EditorPerProjectUserSettings.ini",
-                    trim_slashes(profile),
-                    install.version
-                ),
-            ));
-        }
-    }
-    out.sort_by(|a, b| a.file_path.cmp(&b.file_path));
-    out.dedup_by(|a, b| a.file_path.eq_ignore_ascii_case(&b.file_path));
     out
 }
 
-pub fn run_scan(
-    db: &Db,
-    machine_ids: &[i64],
-    credential_alias: &str,
-    project_paths: &[String],
-    user_profile_path: Option<&str>,
-) -> UecmResult<IniScanSummary> {
-    let credential = data::credentials::find_by_alias(db, credential_alias)?.ok_or_else(|| {
-        UecmError::InvalidInput(format!("credential alias '{}' not found", credential_alias))
-    })?;
-    let password = crate::core::credentials::resolve_password(credential_alias)?;
-    let scan_run_id = data::scan_runs::insert(db, "ini", machine_ids)?;
-    let mut summary = IniScanSummary {
-        scan_run_id,
-        critical: 0,
-        warning: 0,
-        healthy: 0,
-        info: 0,
-        total_files: 0,
-    };
-
-    for machine_id in machine_ids {
-        let machine = data::machines::find_by_id(db, *machine_id)?
-            .ok_or_else(|| UecmError::InvalidInput(format!("machine {} not found", machine_id)))?;
-        let installs = data::machine_ue_installs::list_for_machine(db, *machine_id)?;
-        let targets = enumerate_targets(&installs, project_paths, user_profile_path);
-        let mut env_state = HashMap::new();
-        if let Ok(value) = env_vars::get_with_credential(&machine.ip, ini_diagnostics::SHARED_DDC_ENV, &credential.username, &password) {
-            env_state.insert(ini_diagnostics::SHARED_DDC_ENV.to_string(), value);
-        }
-        for target in targets {
-            match read_file_with_credential(&machine.ip, &target.file_path, &credential.username, &password) {
-                Ok(doc) => {
-                    summary.total_files += 1;
-                    let diagnostics_doc = to_diagnostics_doc(&target, doc);
-                    let path_reachability = probe_reachable_paths(
-                        &machine.ip,
-                        &diagnostics_doc,
-                        &env_state,
-                        &credential.username,
-                        &password,
-                    );
-                    let ctx = ini_diagnostics::DiagnosticContext {
-                        env_vars: env_state.clone(),
-                        path_reachability,
-                    };
-                    for finding in ini_diagnostics::diagnose(&diagnostics_doc, &ctx) {
-                        bump_summary(&mut summary, finding.severity);
-                        data::ini_findings::insert(db, &to_data_finding(scan_run_id, *machine_id, finding))?;
-                    }
-                }
-                Err(err) => {
-                    data::ini_findings::insert(db, &IniFinding {
-                        id: None,
-                        scan_run_id,
-                        machine_id: *machine_id,
-                        rule_id: "SCAN_ERROR".into(),
-                        severity: "info".into(),
-                        category: target.category,
-                        file_path: target.file_path,
-                        section: None,
-                        key_name: None,
-                        line_number: None,
-                        snippet_before: "".into(),
-                        snippet_after: None,
-                        recommended_action: "manual".into(),
-                        recommended_value: None,
-                        symptom: "INI file could not be read.".into(),
-                        rationale: err.to_string(),
-                        fixed_at: None,
-                        skipped_at: None,
-                    })?;
-                    summary.info += 1;
-                }
-            }
-        }
-    }
-
-    data::scan_runs::finish(
-        db,
-        scan_run_id,
-        &serde_json::json!({
-            "critical": summary.critical,
-            "warning": summary.warning,
-            "healthy": summary.healthy,
-            "info": summary.info,
-            "total_files": summary.total_files
-        }),
-    )?;
-    Ok(summary)
+#[derive(Debug, Deserialize)]
+struct ReadFileResult {
+    pub ok: bool,
+    pub found: bool,
+    #[serde(default)]
+    pub sections: Vec<RawSection>,
+    #[serde(default)]
+    pub message: String,
 }
 
-fn read_file_with_credential(
+#[derive(Debug, Deserialize)]
+struct RawSection {
+    pub name: String,
+    #[serde(default)]
+    pub keys: Vec<RawKey>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawKey {
+    pub name: String,
+    pub value: String,
+    pub line_number: usize,
+}
+
+pub fn read_file(
     host: &str,
-    file_path: &str,
-    username: &str,
-    password: &str,
-) -> UecmResult<ReadIniFileResult> {
-    let result: ReadIniFileResult = powershell::run_json(
+    target: &TargetFile,
+    cred: Option<(&str, &str)>,
+) -> UecmResult<Option<ParsedFile>> {
+    if loopback::is_loopback_target(host) {
+        let _ = cred;
+        return read_local_file(target);
+    }
+
+    let mut args: Vec<String> = vec![
+        "-HostName".into(), host.into(),
+        "-FilePath".into(), target.path.clone(),
+    ];
+    if let Some((u, p)) = cred {
+        args.push("-Username".into()); args.push(u.into());
+        args.push("-Password".into()); args.push(p.into());
+    }
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let result: ReadFileResult = powershell::run_json(
         &powershell::script_path("read-ini-file.ps1"),
-        &[
-            "-HostName", host,
-            "-FilePath", file_path,
-            "-Username", username,
-            "-Password", password,
-        ],
+        &arg_refs,
     )?;
     if !result.ok {
-        return Err(UecmError::OperationFailed(result.message));
+        return Err(UecmError::OperationFailed(format!(
+            "read-ini-file failed: {}",
+            result.message
+        )));
     }
-    Ok(result)
+    if !result.found {
+        return Ok(None);
+    }
+    Ok(Some(ParsedFile {
+        path: target.path.clone(),
+        category: target.category,
+        sections: result.sections.into_iter().map(|s| ParsedSection {
+            name: s.name,
+            keys: s.keys.into_iter().map(|k| ParsedKey {
+                name: k.name,
+                value: k.value,
+                line_number: k.line_number,
+            }).collect(),
+        }).collect(),
+    }))
 }
 
-fn to_diagnostics_doc(target: &IniScanTarget, read: ReadIniFileResult) -> ini_diagnostics::IniDocument {
-    let entries = read
-        .sections
-        .into_iter()
-        .flat_map(|section| {
-            section.keys.into_iter().map(move |key| ini_diagnostics::IniEntry {
-                section: section.name.clone(),
-                key: key.name,
-                value: key.value,
-                line_number: key.line_number,
-                raw: key.raw,
-            })
-        })
-        .collect();
-    ini_diagnostics::IniDocument {
-        file_path: target.file_path.clone(),
-        category: target.category.clone(),
-        entries,
-    }
+fn read_local_file(target: &TargetFile) -> UecmResult<Option<ParsedFile>> {
+    let raw = match std::fs::read_to_string(&target.path) {
+        Ok(contents) => contents,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(UecmError::OperationFailed(format!(
+                "read local INI failed: {}",
+                e
+            )));
+        }
+    };
+    // UE editors save user INI files as UTF-8 with a BOM. read_to_string keeps
+    // the BOM as U+FEFF, which makes the first line not start with '[' and the
+    // parser drops the entire file. The remote PowerShell path strips the BOM
+    // via `Get-Content -Encoding UTF8`, so do the same here for parity.
+    let contents = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
+    Ok(Some(parse_ini_contents(target, contents)))
 }
 
-fn to_data_finding(scan_run_id: i64, machine_id: i64, finding: ini_diagnostics::Finding) -> IniFinding {
-    IniFinding {
-        id: None,
-        scan_run_id,
-        machine_id,
-        rule_id: finding.rule_id,
-        severity: finding.severity.as_str().into(),
-        category: finding.category,
-        file_path: finding.file_path,
-        section: finding.section,
-        key_name: finding.key_name,
-        line_number: finding.line_number,
-        snippet_before: finding.snippet_before,
-        snippet_after: finding.snippet_after,
-        recommended_action: finding.recommended_action,
-        recommended_value: finding.recommended_value,
-        symptom: finding.symptom,
-        rationale: finding.rationale,
-        fixed_at: None,
-        skipped_at: None,
-    }
-}
+fn parse_ini_contents(target: &TargetFile, contents: &str) -> ParsedFile {
+    let mut sections = Vec::new();
+    let mut current: Option<ParsedSection> = None;
 
-fn probe_reachable_paths(
-    host: &str,
-    doc: &ini_diagnostics::IniDocument,
-    env_state: &HashMap<String, Option<String>>,
-    username: &str,
-    password: &str,
-) -> HashMap<String, bool> {
-    let mut out = HashMap::new();
-    for path in collect_reachable_candidates(doc, env_state) {
-        let reachable = remote_path::exists_with_credential(host, &path, username, password).unwrap_or(false);
-        out.insert(path, reachable);
-    }
-    out
-}
-
-fn collect_reachable_candidates(
-    doc: &ini_diagnostics::IniDocument,
-    env_state: &HashMap<String, Option<String>>,
-) -> Vec<String> {
-    let mut out = Vec::new();
-    for entry in &doc.entries {
-        if !entry.section.eq_ignore_ascii_case(ini_diagnostics::DDC_SECTION) {
+    for (idx, line) in contents.lines().enumerate() {
+        let line_number = idx + 1;
+        let trim = line.trim();
+        if trim.starts_with('[') && trim.ends_with(']') && trim.len() > 2 {
+            if let Some(section) = current.take() {
+                sections.push(section);
+            }
+            current = Some(ParsedSection {
+                name: trim[1..trim.len() - 1].to_string(),
+                keys: Vec::new(),
+            });
             continue;
         }
-        let key = ini_diagnostics::normalized_key(&entry.key);
-        if key == "Path" && looks_like_path(&entry.value) {
-            out.push(entry.value.clone());
-        } else if key == "EnvPathOverride" {
-            if let Some(Some(value)) = env_state.get(entry.value.trim()) {
-                if looks_like_path(value) {
-                    out.push(value.clone());
-                }
+
+        let Some(section) = current.as_mut() else {
+            continue;
+        };
+        if trim.is_empty()
+            || trim.starts_with(';')
+            || trim.starts_with('#')
+            || trim.starts_with("//")
+        {
+            continue;
+        }
+        if let Some(eq) = trim.find('=') {
+            if eq > 0 {
+                section.keys.push(ParsedKey {
+                    name: trim[..eq].trim().to_string(),
+                    value: trim[eq + 1..].trim().to_string(),
+                    line_number,
+                });
             }
         }
     }
-    out.sort();
-    out.dedup();
-    out
-}
 
-fn looks_like_path(value: &str) -> bool {
-    let value = value.trim();
-    value.starts_with("\\\\")
-        || value.starts_with("//")
-        || (value.len() >= 3 && value.as_bytes()[1] == b':' && value.as_bytes()[0].is_ascii_alphabetic())
-}
+    if let Some(section) = current {
+        sections.push(section);
+    }
 
-fn bump_summary(summary: &mut IniScanSummary, severity: ini_diagnostics::Severity) {
-    match severity {
-        ini_diagnostics::Severity::Critical => summary.critical += 1,
-        ini_diagnostics::Severity::Warning => summary.warning += 1,
-        ini_diagnostics::Severity::Healthy => summary.healthy += 1,
-        ini_diagnostics::Severity::Info => summary.info += 1,
+    ParsedFile {
+        path: target.path.clone(),
+        category: target.category,
+        sections,
     }
 }
 
-fn target(category: &str, file_path: String) -> IniScanTarget {
-    IniScanTarget {
-        category: category.into(),
-        file_path,
-    }
+pub struct ScanInputs<'a> {
+    pub host: &'a str,
+    pub credential: Option<(&'a str, &'a str)>,
+    pub installs: &'a [(String, String)],
+    pub user_profile: &'a str,
+    pub project_roots: &'a [String],
+    pub env_state: EnvVarState,
 }
 
-fn trim_slashes(value: &str) -> &str {
-    value.trim().trim_end_matches(['\\', '/'])
+/// Per-file outcome of one scan pass for a single machine.
+///
+/// `errors` carries hard read failures (WinRM down, permission denied, etc.).
+/// `not_found` carries paths the scanner attempted but the file did not exist —
+/// kept separate so the wizard can show "X files missing" without misclassifying
+/// them as errors, and so a fully-empty scan never looks "healthy" by default.
+#[derive(Debug, Default)]
+pub struct ScanOutcome {
+    pub findings: Vec<Finding>,
+    pub errors: Vec<String>,
+    pub not_found: Vec<String>,
+    pub read_count: usize,
+}
+
+pub fn scan_machine(inputs: &ScanInputs) -> UecmResult<ScanOutcome> {
+    let mut targets: Vec<TargetFile> = Vec::new();
+    targets.extend(enumerate_engine_paths(inputs.installs));
+    targets.extend(enumerate_user_paths(inputs.installs, inputs.user_profile));
+    targets.extend(enumerate_project_paths(inputs.project_roots));
+
+    let mut outcome = ScanOutcome::default();
+    for tf in &targets {
+        match read_file(inputs.host, tf, inputs.credential) {
+            Ok(Some(pf)) => {
+                outcome.read_count += 1;
+                outcome.findings.extend(ini_diagnostics::run_rules(&pf, &inputs.env_state));
+            }
+            Ok(None) => outcome.not_found.push(tf.path.clone()),
+            Err(e) => {
+                let msg = format!("{}: {}", tf.path, e);
+                eprintln!("[ini_scanner] {}", msg);
+                outcome.errors.push(msg);
+            }
+        }
+    }
+    Ok(outcome)
 }
 
 #[cfg(test)]
@@ -303,33 +235,58 @@ mod tests {
     use super::*;
 
     #[test]
-    fn enumerate_targets_includes_project_engine_and_user_files() {
-        let installs = vec![UeInstall {
-            id: None,
-            machine_id: 1,
-            version: "5.4".into(),
-            install_path: "C:\\UE_5.4".into(),
-            is_primary: true,
-        }];
-        let targets = enumerate_targets(&installs, &["E:\\Proj".into()], Some("C:\\Users\\lanpc"));
-        assert!(targets.iter().any(|t| t.file_path.ends_with("DefaultEngine.ini")));
-        assert!(targets.iter().any(|t| t.file_path.ends_with("BaseEngine.ini")));
-        assert!(targets.iter().any(|t| t.file_path.ends_with("EditorPerProjectUserSettings.ini")));
+    fn enumerate_engine_paths_returns_baseengine_per_install() {
+        let installs = vec![
+            ("5.4".to_string(), "C:\\Program Files\\Epic Games\\UE_5.4".to_string()),
+            ("5.5".to_string(), "D:\\UE\\UE_5.5".to_string()),
+        ];
+        let paths = enumerate_engine_paths(&installs);
+        assert_eq!(paths.len(), 2);
+        assert!(paths[0].path.contains("UE_5.4"));
+        assert!(paths[0].path.ends_with("Engine\\Config\\BaseEngine.ini"));
     }
 
     #[test]
-    fn collect_reachable_candidates_includes_ddc_path_and_env_value() {
-        let doc = ini_diagnostics::parse_ini(
-            "DefaultEngine.ini",
-            "project",
-            "[/Script/UnrealEd.DerivedDataCacheSettings]\nPath=\\\\HOST\\Bad\nEnvPathOverride=UE-SharedDataCachePath",
-        );
-        let mut env = HashMap::new();
-        env.insert(
-            ini_diagnostics::SHARED_DDC_ENV.into(),
-            Some("\\\\HOST\\Good".into()),
-        );
-        let paths = collect_reachable_candidates(&doc, &env);
-        assert_eq!(paths, vec!["\\\\HOST\\Bad", "\\\\HOST\\Good"]);
+    fn enumerate_user_paths_returns_one_per_version() {
+        let installs = vec![
+            ("5.4".to_string(), "C:\\anything".to_string()),
+        ];
+        let paths = enumerate_user_paths(&installs, "C:\\Users\\lanpc");
+        assert_eq!(paths.len(), 1);
+        assert!(paths[0].path.contains("AppData\\Local\\UnrealEngine\\5.4"));
+        assert_eq!(paths[0].category, crate::core::ini_diagnostics::Category::User);
+    }
+
+    #[test]
+    fn enumerate_project_paths_returns_three_files_per_project_path() {
+        let projects = vec!["E:\\Work\\EXLY".to_string()];
+        let paths = enumerate_project_paths(&projects);
+        assert_eq!(paths.len(), 3);
+        assert!(paths.iter().any(|p| p.path.ends_with("DefaultEngine.ini")));
+        assert!(paths.iter().any(|p| p.path.ends_with("ConsoleVariables.ini")));
+        assert!(paths.iter().any(|p| p.path.ends_with("WindowsEngine.ini")));
+    }
+
+    #[test]
+    fn read_file_uses_local_filesystem_for_loopback_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("DefaultEngine.ini");
+        std::fs::write(
+            &path,
+            "[/Script/Engine.RendererSettings]\nr.PSOPrecaching=1\n",
+        )
+        .unwrap();
+
+        let target = TargetFile {
+            path: path.to_string_lossy().to_string(),
+            category: Category::Project,
+        };
+        let parsed = read_file("localhost", &target, Some(("ignored", "ignored")))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(parsed.sections[0].name, "/Script/Engine.RendererSettings");
+        assert_eq!(parsed.sections[0].keys[0].name, "r.PSOPrecaching");
+        assert_eq!(parsed.sections[0].keys[0].value, "1");
     }
 }

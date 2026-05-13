@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import BaseModal from "./BaseModal.vue";
 import { useMachinesStore } from "@/stores/machines";
 import { useCredentialsStore } from "@/stores/credentials";
@@ -9,6 +10,7 @@ import type { ShareMode } from "@/services/tauri";
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ (e: "close"): void }>();
 
+const { t } = useI18n();
 const machines = useMachinesStore();
 const credentials = useCredentialsStore();
 const shares = useSharesStore();
@@ -71,19 +73,22 @@ function onHostChange(e: Event) {
 const previewLines = computed(() => {
   const host =
     machines.machines.find((m) => m.id === hostMachineId.value)?.hostname ?? "<host>";
+  const modeLabel = mode.value === "open"
+    ? t("modal.shareWizard.previewModeOpen")
+    : t("modal.shareWizard.previewModeManaged");
   const lines = [
-    `Mode: ${mode.value === "open" ? "A (open)" : "B (managed)"}`,
-    `Host: ${host}`,
-    `Share: \\\\${host}\\${shareName.value}`,
-    `Local path: ${localPath.value}`,
+    t("modal.shareWizard.previewMode", { value: modeLabel }),
+    t("modal.shareWizard.previewHost", { value: host }),
+    t("modal.shareWizard.previewShare", { value: `\\\\${host}\\${shareName.value}` }),
+    t("modal.shareWizard.previewLocalPath", { value: localPath.value }),
   ];
   if (mode.value === "managed") {
-    lines.push(`Svc account: ${svcUsername.value} (24-byte random pwd)`);
+    lines.push(t("modal.shareWizard.previewSvc", { user: svcUsername.value }));
   }
   if (operatorAlias.value) {
-    lines.push(`Operator credential: ${operatorAlias.value}`);
+    lines.push(t("modal.shareWizard.previewOperator", { value: operatorAlias.value }));
   } else {
-    lines.push(`Operator credential: <current process token>`);
+    lines.push(t("modal.shareWizard.previewOperator", { value: t("modal.shareWizard.previewOperatorDefault") }));
   }
   return lines;
 });
@@ -103,7 +108,7 @@ async function onCreate() {
     );
     successUnc.value = result.unc_path;
   } catch (e) {
-    submitError.value = (e as { message?: string }).message ?? "create failed";
+    submitError.value = (e as { message?: string }).message ?? t("modal.shareWizard.createFailed");
   } finally {
     isSubmitting.value = false;
   }
@@ -111,10 +116,10 @@ async function onCreate() {
 </script>
 
 <template>
-  <BaseModal :open="props.open" title="Create SMB share" @close="emit('close')">
+  <BaseModal :open="props.open" :title="t('modal.shareWizard.title')" @close="emit('close')">
     <div data-share-wizard>
       <div v-if="step === 1">
-        <p class="text-sm mb-3">Choose the share mode.</p>
+        <p class="text-sm mb-3">{{ t("modal.shareWizard.step1Hint") }}</p>
         <label class="flex items-start gap-2 mb-2 cursor-pointer">
           <input
             data-mode-open
@@ -124,9 +129,9 @@ async function onCreate() {
             class="mt-1"
           />
           <span>
-            <span class="font-medium">Mode A — open</span>
+            <span class="font-medium">{{ t("modal.shareWizard.modeOpenTitle") }}</span>
             <span class="block text-xs text-gray-500">
-              Guest enabled, Everyone:Full. Trusted-LAN only.
+              {{ t("modal.shareWizard.modeOpenHint") }}
             </span>
           </span>
         </label>
@@ -139,60 +144,60 @@ async function onCreate() {
             class="mt-1"
           />
           <span>
-            <span class="font-medium">Mode B — managed</span>
+            <span class="font-medium">{{ t("modal.shareWizard.modeManagedTitle") }}</span>
             <span class="block text-xs text-gray-500">
-              Dedicated ddc-svc account; share authorized only to that account.
+              {{ t("modal.shareWizard.modeManagedHint") }}
             </span>
           </span>
         </label>
       </div>
 
       <div v-else-if="step === 2">
-        <p class="text-sm mb-3">Pick the host machine that will own the share.</p>
+        <p class="text-sm mb-3">{{ t("modal.shareWizard.step2Hint") }}</p>
         <select
           data-host-select
           :value="hostMachineId ?? ''"
           class="w-full border rounded px-2 py-1 text-sm"
           @change="onHostChange"
         >
-          <option value="" disabled>— select machine —</option>
+          <option value="" disabled>{{ t("modal.shareWizard.selectMachinePlaceholder") }}</option>
           <option v-for="m in machines.machines" :key="m.id ?? m.ip" :value="m.id">
             {{ m.hostname }} ({{ m.ip }})
           </option>
         </select>
         <p v-if="machines.machines.length === 0" class="mt-2 text-xs text-gray-500">
-          No machines registered. Add one via the Scan wizard first.
+          {{ t("modal.shareWizard.noMachinesHint") }}
         </p>
       </div>
 
       <div v-else-if="step === 3">
-        <label class="block text-sm mb-1">Share name</label>
+        <label class="block text-sm mb-1">{{ t("modal.shareWizard.shareName") }}</label>
         <input
           data-share-name-input
           v-model="shareName"
           class="w-full border rounded px-2 py-1 text-sm mb-3"
         />
-        <label class="block text-sm mb-1">Local path on host</label>
+        <label class="block text-sm mb-1">{{ t("modal.shareWizard.localPath") }}</label>
         <input
           data-local-path-input
           v-model="localPath"
           class="w-full border rounded px-2 py-1 text-sm mb-3"
         />
         <template v-if="mode === 'managed'">
-          <label class="block text-sm mb-1">Service account username</label>
+          <label class="block text-sm mb-1">{{ t("modal.shareWizard.svcUsername") }}</label>
           <input
             data-svc-user-input
             v-model="svcUsername"
             class="w-full border rounded px-2 py-1 text-sm mb-3"
           />
         </template>
-        <label class="block text-sm mb-1">Operator credential (optional)</label>
+        <label class="block text-sm mb-1">{{ t("modal.shareWizard.operatorCredential") }}</label>
         <select
           data-operator-cred-select
           v-model="operatorAlias"
           class="w-full border rounded px-2 py-1 text-sm"
         >
-          <option :value="null">— current process token —</option>
+          <option :value="null">{{ t("modal.shareWizard.operatorPlaceholder") }}</option>
           <option
             v-for="c in credentials.credentials.filter((cred) => cred.kind === 'winrm')"
             :key="c.id ?? c.alias"
@@ -202,13 +207,12 @@ async function onCreate() {
           </option>
         </select>
         <p class="mt-1 text-xs text-gray-500">
-          Only WinRM credentials are listed. Share-kind aliases authorize SMB
-          mounts, not remote admin operations on the host.
+          {{ t("modal.shareWizard.operatorOnlyWinrm") }}
         </p>
       </div>
 
       <div v-else-if="step === 4">
-        <p class="text-sm mb-2">Preview — review before creating.</p>
+        <p class="text-sm mb-2">{{ t("modal.shareWizard.previewHint") }}</p>
         <pre
           data-preview
           class="text-xs bg-gray-100 rounded p-2 whitespace-pre-wrap font-mono"
@@ -221,7 +225,7 @@ async function onCreate() {
           data-submit-success
           class="mt-2 text-xs text-green-600"
         >
-          Created: {{ successUnc }}
+          {{ t("modal.shareWizard.createdPrefix") }}{{ successUnc }}
         </p>
       </div>
     </div>
@@ -232,7 +236,7 @@ async function onCreate() {
         class="px-3 py-1 text-sm border rounded hover:bg-gray-100"
         @click="back"
       >
-        Back
+        {{ t("common.back") }}
       </button>
       <button
         v-if="step < 4"
@@ -241,7 +245,7 @@ async function onCreate() {
         class="px-3 py-1 text-sm bg-gray-200 rounded hover:bg-gray-300 disabled:opacity-50"
         @click="next"
       >
-        Next
+        {{ t("common.next") }}
       </button>
       <button
         v-if="step === 4 && !successUnc"
@@ -250,13 +254,13 @@ async function onCreate() {
         class="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
         @click="onCreate"
       >
-        {{ isSubmitting ? "Creating..." : "Create" }}
+        {{ isSubmitting ? t("common.creating") : t("common.create") }}
       </button>
       <button
         class="px-3 py-1 text-sm border rounded hover:bg-gray-100"
         @click="emit('close')"
       >
-        {{ successUnc ? "Done" : "Cancel" }}
+        {{ successUnc ? t("common.done") : t("common.cancel") }}
       </button>
     </template>
   </BaseModal>

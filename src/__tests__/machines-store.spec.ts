@@ -10,6 +10,8 @@ const { mockApi } = vi.hoisted(() => ({
     renameMachine: vi.fn(),
     getMachineDetail: vi.fn(),
     refreshMachine: vi.fn(),
+    bootstrapWinrm: vi.fn(),
+    getWinrmBootstrapScript: vi.fn(),
   },
 }));
 
@@ -28,6 +30,8 @@ describe("machines store", () => {
     mockApi.renameMachine.mockReset();
     mockApi.getMachineDetail.mockReset();
     mockApi.refreshMachine.mockReset();
+    mockApi.bootstrapWinrm.mockReset();
+    mockApi.getWinrmBootstrapScript.mockReset();
   });
 
   it("starts with empty machines list", () => {
@@ -134,5 +138,74 @@ describe("machines store", () => {
     await store.refreshSelected();
     expect(mockApi.refreshMachine).toHaveBeenCalledWith(5);
     expect(store.selectedDetail?.ue_installs).toHaveLength(1);
+  });
+
+  it("bootstrapSelected re-reads detail after successful bootstrap", async () => {
+    mockApi.getMachineDetail.mockResolvedValueOnce({
+      machine: { id: 5, hostname: "X", ip: "1.1.1.1", role: "render", status: "offline", last_seen_at: null },
+      ue_installs: [],
+      gpus: [],
+    });
+    mockApi.bootstrapWinrm.mockResolvedValue({
+      ok: true,
+      method: "psexec",
+      message: "WinRM enabled",
+      winrm_ok: true,
+      manual_script: null,
+    });
+    mockApi.getMachineDetail.mockResolvedValueOnce({
+      machine: { id: 5, hostname: "X", ip: "1.1.1.1", role: "render", status: "online", last_seen_at: "2026-05-09 12:00:00" },
+      ue_installs: [],
+      gpus: [],
+    });
+    const store = useMachinesStore();
+    await store.selectMachine(5);
+    await store.bootstrapSelected("UECM:winrm:X");
+    expect(mockApi.bootstrapWinrm).toHaveBeenCalledWith(5, "UECM:winrm:X", false);
+    expect(store.bootstrapResult?.method).toBe("psexec");
+    expect(store.selectedDetail?.machine.status).toBe("online");
+  });
+
+  it("loadBootstrapScript stores the manual fallback script", async () => {
+    mockApi.getWinrmBootstrapScript.mockResolvedValue("Enable-PSRemoting -Force");
+    const store = useMachinesStore();
+    await store.loadBootstrapScript();
+    expect(store.bootstrapScript).toContain("Enable-PSRemoting");
+  });
+
+  it("clears bootstrap state when switching machines", async () => {
+    mockApi.getMachineDetail.mockResolvedValueOnce({
+      machine: { id: 5, hostname: "X", ip: "1.1.1.1", role: "render", status: "offline", last_seen_at: null },
+      ue_installs: [],
+      gpus: [],
+    });
+    mockApi.bootstrapWinrm.mockResolvedValue({
+      ok: false,
+      method: "psexec",
+      message: "ADMIN$ unavailable",
+      winrm_ok: false,
+      manual_script: "Enable-PSRemoting -Force",
+    });
+    mockApi.getMachineDetail.mockResolvedValueOnce({
+      machine: { id: 5, hostname: "X", ip: "1.1.1.1", role: "render", status: "offline", last_seen_at: null },
+      ue_installs: [],
+      gpus: [],
+    });
+    mockApi.getMachineDetail.mockResolvedValueOnce({
+      machine: { id: 6, hostname: "Y", ip: "1.1.1.2", role: "render", status: "offline", last_seen_at: null },
+      ue_installs: [],
+      gpus: [],
+    });
+
+    const store = useMachinesStore();
+    await store.selectMachine(5);
+    await store.bootstrapSelected("UECM:winrm:X");
+    expect(store.bootstrapError).toBe("ADMIN$ unavailable");
+    expect(store.bootstrapScript).toContain("Enable-PSRemoting");
+
+    await store.selectMachine(6);
+    expect(store.bootstrapError).toBeNull();
+    expect(store.bootstrapResult).toBeNull();
+    expect(store.bootstrapScript).toBeNull();
   });
 });

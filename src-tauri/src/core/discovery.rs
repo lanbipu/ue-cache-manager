@@ -33,8 +33,11 @@ pub fn detect_gpus(host: &str) -> UecmResult<Vec<DetectedGpu>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::core::powershell;
+    #[cfg(not(windows))]
     use crate::error::UecmError;
+    #[cfg(not(windows))]
+    use super::{detect_gpus, detect_ue_versions};
 
     #[test]
     fn discovery_scripts_are_loadable() {

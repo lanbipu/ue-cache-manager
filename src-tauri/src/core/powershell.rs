@@ -133,8 +133,10 @@ pub fn run_json<T: DeserializeOwned>(script_path: &Path, args: &[&str]) -> UecmR
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
     use serde::Deserialize;
 
+    #[cfg(windows)]
     #[derive(Debug, Deserialize)]
     struct EchoOutput {
         received: String,

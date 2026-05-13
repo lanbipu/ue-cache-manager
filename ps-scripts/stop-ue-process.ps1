@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory=$true)] [string]$HostName,
-    [Parameter(Mandatory=$true)] [int]$Pid,
+    [Parameter(Mandatory=$true)] [int]$TargetPid,
     [string]$Username,
     [string]$Password
 )
@@ -29,7 +29,7 @@ try {
     $invokeArgs = @{
         ComputerName = $HostName
         ScriptBlock = $script
-        ArgumentList = @($Pid)
+        ArgumentList = @($TargetPid)
         ErrorAction = 'Stop'
     }
     if ($cred) { $invokeArgs['Credential'] = $cred }

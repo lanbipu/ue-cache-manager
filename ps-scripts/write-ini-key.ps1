@@ -1,9 +1,3 @@
-# Sets a single key in an INI section on a remote host with auto-backup.
-# Parameters: -HostName <string> -FilePath <string> -Section <string>
-#             -Name <string> -Value <string> [-RemoveKey]
-#             [-Username <string>] [-Password <string>]
-# Output: JSON { ok: bool, backup_path: string, message: string }
-
 param(
     [Parameter(Mandatory=$true)] [string]$HostName,
     [Parameter(Mandatory=$true)] [string]$FilePath,
@@ -15,81 +9,68 @@ param(
     [string]$Password
 )
 
+[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
+
 $ErrorActionPreference = 'Stop'
 
 function Build-CredentialOrNull {
     param([string]$User, [string]$Pass)
     if ([string]::IsNullOrEmpty($User) -or [string]::IsNullOrEmpty($Pass)) { return $null }
-    if ($User -notmatch '[\\@]') {
-        $User = ".\$User"
-    }
+    $User = $User.Trim()
+    if ([string]::IsNullOrEmpty($User)) { return $null }
+    if ($User.StartsWith(".\") -or $User.StartsWith("./")) { $User = $User.Substring(2) }
     $secure = ConvertTo-SecureString -String $Pass -AsPlainText -Force
     return New-Object System.Management.Automation.PSCredential($User, $secure)
 }
 
 try {
     $script = {
-        param($FilePath, $Section, $Name, $Value, $RemoveKey)
-
-        if (-not (Test-Path $FilePath)) {
-            throw "file not found: $FilePath"
-        }
-
-        # Backup
-        $ts = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-        $backup = "$FilePath.uecm-bak-$ts"
+        param($FilePath, $Section, $Name, $Value, $Remove)
+        if (-not (Test-Path $FilePath)) { throw "file not found: $FilePath" }
+        $backup = "$FilePath.bak.$(Get-Date -UFormat '%Y%m%d-%H%M%S')"
         Copy-Item -Path $FilePath -Destination $backup -Force
-
         $lines = Get-Content -Path $FilePath -Encoding UTF8
-        $sectionPattern = "[$Section]"
+        $out = New-Object System.Collections.ArrayList
         $inSection = $false
-        $found = $false
-        $newLines = New-Object System.Collections.Generic.List[string]
-        $sectionIndex = -1
-        $i = 0
-
+        $sectionSeen = $false
+        $written = $false
+        $bracket = "[$Section]"
         foreach ($line in $lines) {
             $trim = $line.Trim()
-            if ($trim -eq $sectionPattern) {
-                $inSection = $true
-                $sectionIndex = $i
-                $newLines.Add($line)
-            }
-            elseif ($inSection -and $trim.StartsWith('[') -and $trim.EndsWith(']')) {
-                if (-not $found -and -not $RemoveKey) {
-                    # Insert key at the end of this section
-                    $newLines.Add("$Name=$Value")
-                    $found = $true
+            if ($trim -eq $bracket) { $inSection = $true; $sectionSeen = $true; [void]$out.Add($line); continue }
+            if ($inSection -and $trim.StartsWith('[') -and $trim.EndsWith(']')) {
+                if (-not $Remove -and -not $written) {
+                    [void]$out.Add("$Name=$Value"); $written = $true
                 }
                 $inSection = $false
-                $newLines.Add($line)
+                [void]$out.Add($line)
+                continue
             }
-            elseif ($inSection -and ($trim -match "^\s*[\+\-\!]*$([regex]::Escape($Name))\s*=")) {
-                if (-not $RemoveKey) {
-                    $newLines.Add("$Name=$Value")
-                }
-                $found = $true
+            if ($inSection -and $trim -match "^\s*$([regex]::Escape($Name))\s*=") {
+                if ($Remove) { continue }
+                [void]$out.Add("$Name=$Value"); $written = $true; continue
             }
-            else {
-                $newLines.Add($line)
+            [void]$out.Add($line)
+        }
+        if (-not $Remove -and -not $written -and $inSection) {
+            [void]$out.Add("$Name=$Value")
+            $written = $true
+        }
+        # Section never appeared: append it (with the key) so callers can
+        # create new sections instead of silently writing the file unchanged.
+        # The pre-Plan-4 behavior of write-ini-key.ps1 had this fallback;
+        # restore it. Skip in -RemoveKey mode (nothing to remove).
+        if (-not $Remove -and -not $sectionSeen) {
+            if ($out.Count -gt 0) {
+                $last = [string]$out[$out.Count - 1]
+                if ($last.Trim().Length -ne 0) { [void]$out.Add("") }
             }
-            $i++
+            [void]$out.Add($bracket)
+            [void]$out.Add("$Name=$Value")
+            $written = $true
         }
-
-        if ($inSection -and -not $found -and -not $RemoveKey) {
-            $newLines.Add("$Name=$Value")
-            $found = $true
-        }
-
-        if (-not $found -and $sectionIndex -lt 0 -and -not $RemoveKey) {
-            # Section did not exist; append section + key.
-            $newLines.Add("")
-            $newLines.Add("[$Section]")
-            $newLines.Add("$Name=$Value")
-        }
-
-        Set-Content -Path $FilePath -Value $newLines -Encoding UTF8
-        return $backup
+        Set-Content -Path $FilePath -Value $out -Encoding UTF8
+        return "$backup"
     }
     $cred = Build-CredentialOrNull -User $Username -Pass $Password
     $invokeArgs = @{
@@ -97,16 +78,11 @@ try {
         ScriptBlock  = $script
         ArgumentList = @($FilePath, $Section, $Name, $Value, [bool]$RemoveKey)
         ErrorAction  = 'Stop'
+        Authentication = 'Negotiate'
     }
     if ($cred) { $invokeArgs['Credential'] = $cred }
     $remoteResult = Invoke-Command @invokeArgs
-
-    # Invoke-Command wraps the returned string in a PSObject with
-    # PSComputerName/RunspaceId metadata; force-cast to plain string so
-    # ConvertTo-Json emits a flat field instead of a nested object.
-    $backupPath = "$remoteResult"
-
-    @{ ok = $true; backup_path = $backupPath; message = "" } | ConvertTo-Json -Compress
+    @{ ok = $true; backup_path = "$remoteResult"; message = "wrote $Name in [$Section]" } | ConvertTo-Json -Compress
 }
 catch {
     @{ ok = $false; backup_path = ""; message = $_.Exception.Message } | ConvertTo-Json -Compress

@@ -165,7 +165,7 @@ describe("pso store", () => {
       sourceSmbCredentialAlias: null,
       forceGpuMismatch: false,
     });
-    handlers["pak-distribute-progress"]!({
+    handlers["pso-distribute-progress"]!({
       payload: {
         job_id: "ddc-job",
         project_id: 10,
@@ -174,7 +174,7 @@ describe("pso store", () => {
       },
     });
     expect(store.distributeJobs[0].targets[0].status).toBe("pending");
-    handlers["pak-distribute-progress"]!({
+    handlers["pso-distribute-progress"]!({
       payload: {
         job_id: "dist-1",
         project_id: 10,

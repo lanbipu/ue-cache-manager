@@ -161,35 +161,67 @@ pub async fn start_pso_collection(
 
             match &event {
                 UeRunnerEvent::Completed { .. } | UeRunnerEvent::Cancelled => {
-                    if let Ok(files) = pso_collect::enumerate_remote(
+                    #[derive(Clone, Serialize)]
+                    struct FinalizedPayload<'a> {
+                        job_id: &'a str,
+                        source_machine_id: i64,
+                        project_id: i64,
+                        files_collected: Option<usize>,
+                        error_message: Option<String>,
+                    }
+
+                    match pso_collect::enumerate_remote(
                         &source_machine_ip,
                         &project_dir,
                         user_for_task.as_deref(),
                         pass_for_task.as_deref(),
                     ) {
-                        let _ = pso_collect::finalize_persist(
+                        Ok(files) => match pso_collect::finalize_persist(
                             &db_for_task,
                             project_id,
                             source_machine_id,
                             ue_version_for_task.as_deref(),
                             &files,
-                        );
-                        #[derive(Clone, Serialize)]
-                        struct FinalizedPayload<'a> {
-                            job_id: &'a str,
-                            source_machine_id: i64,
-                            project_id: i64,
-                            files_collected: usize,
+                        ) {
+                            Ok(_) => {
+                                let _ = app_for_task.emit(
+                                    "pso-collect-finalized",
+                                    FinalizedPayload {
+                                        job_id: &job_id_for_task,
+                                        source_machine_id,
+                                        project_id,
+                                        files_collected: Some(files.len()),
+                                        error_message: None,
+                                    },
+                                );
+                            }
+                            Err(err) => {
+                                tracing::error!(?err, "pso finalize_persist failed");
+                                let _ = app_for_task.emit(
+                                    "pso-collect-finalized",
+                                    FinalizedPayload {
+                                        job_id: &job_id_for_task,
+                                        source_machine_id,
+                                        project_id,
+                                        files_collected: None,
+                                        error_message: Some(format!("persist failed: {err}")),
+                                    },
+                                );
+                            }
+                        },
+                        Err(err) => {
+                            tracing::error!(?err, "pso enumerate_remote failed");
+                            let _ = app_for_task.emit(
+                                "pso-collect-finalized",
+                                FinalizedPayload {
+                                    job_id: &job_id_for_task,
+                                    source_machine_id,
+                                    project_id,
+                                    files_collected: None,
+                                    error_message: Some(format!("enumerate failed: {err}")),
+                                },
+                            );
                         }
-                        let _ = app_for_task.emit(
-                            "pso-collect-finalized",
-                            FinalizedPayload {
-                                job_id: &job_id_for_task,
-                                source_machine_id,
-                                project_id,
-                                files_collected: files.len(),
-                            },
-                        );
                     }
                     app_for_task
                         .state::<UeJobRegistry>()
@@ -217,8 +249,32 @@ pub async fn start_pso_collection(
 }
 
 #[tauri::command]
-pub fn list_pso_cache_files(db: State<'_, Db>, project_id: i64) -> UecmResult<Vec<PsoCacheFile>> {
-    pso_cache_files::list_by_project(&db, project_id)
+pub fn list_pso_cache_files(
+    db: State<'_, Db>,
+    project_id: i64,
+    source_machine_id: Option<i64>,
+    gpu_signature: Option<String>,
+) -> UecmResult<Vec<PsoCacheFile>> {
+    let normalized_filter = gpu_signature
+        .as_deref()
+        .map(crate::core::gpu_consistency::normalize_signature_string);
+    Ok(pso_cache_files::list_by_project(&db, project_id)?
+        .into_iter()
+        .filter(|file| {
+            source_machine_id
+                .map(|machine_id| file.source_machine_id == machine_id)
+                .unwrap_or(true)
+        })
+        .filter(|file| {
+            normalized_filter
+                .as_ref()
+                .map(|filter| {
+                    crate::core::gpu_consistency::normalize_signature_string(&file.gpu_signature)
+                        == *filter
+                })
+                .unwrap_or(true)
+        })
+        .collect())
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -261,7 +317,9 @@ pub async fn distribute_pso_cache(
                     target_id
                 )));
             };
-            if signature.as_string() != file.gpu_signature {
+            if crate::core::gpu_consistency::normalize_signature_string(&signature.as_string())
+                != crate::core::gpu_consistency::normalize_signature_string(&file.gpu_signature)
+            {
                 return Err(UecmError::InvalidInput(format!(
                     "target machine {} GPU signature {} does not match file signature {}",
                     target_id,
@@ -380,7 +438,7 @@ pub async fn distribute_pso_cache(
                 event: batch::BatchEvent,
             }
             let _ = app_for_task.emit(
-                "pak-distribute-progress",
+                "pso-distribute-progress",
                 Payload {
                     job_id: &job_id_for_task,
                     project_id,
@@ -410,11 +468,8 @@ fn upsert_distribution(
             target_machine_id,
             status,
             bytes_copied,
-            distributed_at: if status == DistributionStatus::Ok {
-                Some(now_millis().to_string())
-            } else {
-                None
-            },
+            distributed_at: (status == DistributionStatus::Ok)
+                .then(|| chrono::Utc::now().to_rfc3339()),
             error_message,
             created_at: None,
         },

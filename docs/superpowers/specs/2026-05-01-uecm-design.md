@@ -509,7 +509,7 @@ Rust 通过 `Command::new("powershell.exe")` 调用，传参 + 解析 stdout JSO
 - [x] **Plan 4：诊断模块** — `docs/superpowers/plans/2026-05-03-uecm-plan-4-diagnostics.md`
   - INI 扫描器 + 冲突诊断 + 集群健康检查矩阵（11 项）
   - 工期：~2 周
-  - 状态：✅ 已执行完成（2026-05-03，分支 `codex/plan-4-diagnostics`，commit `b3b11a2`，待合并 main）
+  - 状态：✅ 已执行完成（2026-05-05，分支 `feature/plan-4-diagnostics`，20 commits `c1b5c57..5df4607`，待合并 main）
 - [ ] **Plan 5：DDC Pak**
   - 生成 + 分发 + 项目身份匹配（三种实用组合）
   - 工期：~1.5 周

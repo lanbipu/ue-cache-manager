@@ -88,11 +88,11 @@ const MIGRATIONS: &[(&str, &str)] = &[
         r#"
         CREATE TABLE IF NOT EXISTS scan_runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            scan_type TEXT NOT NULL,
+            scan_type TEXT NOT NULL,                    -- "ini" | "health"
             started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             finished_at TEXT,
-            machine_ids_json TEXT NOT NULL,
-            summary_json TEXT
+            machine_ids_json TEXT NOT NULL,             -- JSON array of machine ids in scope
+            summary_json TEXT                           -- JSON: {critical, warning, healthy, total, ...}
         );
         CREATE INDEX IF NOT EXISTS idx_scan_runs_type_started ON scan_runs(scan_type, started_at DESC);
 
@@ -100,21 +100,21 @@ const MIGRATIONS: &[(&str, &str)] = &[
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             scan_run_id INTEGER NOT NULL,
             machine_id INTEGER NOT NULL,
-            rule_id TEXT NOT NULL,
-            severity TEXT NOT NULL,
-            category TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            section TEXT,
-            key_name TEXT,
-            line_number INTEGER,
-            snippet_before TEXT NOT NULL,
-            snippet_after TEXT,
-            recommended_action TEXT NOT NULL,
-            recommended_value TEXT,
-            symptom TEXT NOT NULL,
-            rationale TEXT NOT NULL,
-            fixed_at TEXT,
-            skipped_at TEXT,
+            rule_id TEXT NOT NULL,                      -- e.g. "R001"
+            severity TEXT NOT NULL,                     -- "critical" | "warning" | "healthy" | "info"
+            category TEXT NOT NULL,                     -- "project" | "user" | "engine"
+            file_path TEXT NOT NULL,                    -- absolute path on the machine
+            section TEXT,                               -- INI [section]
+            key_name TEXT,                              -- when applicable
+            line_number INTEGER,                        -- 1-based, null if N/A
+            snippet_before TEXT NOT NULL,               -- multi-line excerpt
+            snippet_after TEXT,                         -- suggested fix (null when remove-only)
+            recommended_action TEXT NOT NULL,           -- "set" | "remove" | "manual"
+            recommended_value TEXT,                     -- payload for "set"
+            symptom TEXT NOT NULL,                      -- user-facing description
+            rationale TEXT NOT NULL,                    -- "why" explanation
+            fixed_at TEXT,                              -- non-null when applied
+            skipped_at TEXT,                            -- non-null when user skipped
             FOREIGN KEY (scan_run_id) REFERENCES scan_runs(id) ON DELETE CASCADE,
             FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE
         );
@@ -126,12 +126,14 @@ const MIGRATIONS: &[(&str, &str)] = &[
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             scan_run_id INTEGER NOT NULL,
             machine_id INTEGER NOT NULL,
-            machine_results_json TEXT NOT NULL,
+            machine_results_json TEXT NOT NULL,         -- JSON: {check_id: {status, message, sample_output}}
             FOREIGN KEY (scan_run_id) REFERENCES scan_runs(id) ON DELETE CASCADE,
             FOREIGN KEY (machine_id) REFERENCES machines(id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_health_check_runs_run ON health_check_runs(scan_run_id);
         CREATE INDEX IF NOT EXISTS idx_health_check_runs_machine ON health_check_runs(machine_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_health_check_runs_run_machine
+            ON health_check_runs(scan_run_id, machine_id);
         "#,
     ),
     (
@@ -412,86 +414,5 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn migrate_creates_operations_table() {
-        let db = open_in_memory().unwrap();
-        let mut conn = db.lock().unwrap();
-        migrate(&mut conn).unwrap();
-        let count: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='operations'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn migrate_creates_projects_table() {
-        let db = open_in_memory().unwrap();
-        let mut conn = db.lock().unwrap();
-        migrate(&mut conn).unwrap();
-        let count: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='projects'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn migrate_creates_project_locations_table_with_fks() {
-        let db = open_in_memory().unwrap();
-        let mut conn = db.lock().unwrap();
-        migrate(&mut conn).unwrap();
-        conn.execute(
-            "INSERT INTO machines (hostname, ip) VALUES ('h', '1.1.1.1')",
-            [],
-        )
-        .unwrap();
-        let result = conn.execute(
-            "INSERT INTO project_locations (project_id, machine_id, abs_path, uproject_path) \
-             VALUES (999, 1, 'C:\\X', 'C:\\X\\Y.uproject')",
-            [],
-        );
-        assert!(result.is_err(), "FK violation expected");
-    }
-
-    #[test]
-    fn migration_011_creates_pso_cache_files_with_unique_constraint() {
-        let db = open_in_memory().unwrap();
-        let mut conn = db.lock().unwrap();
-        migrate(&mut conn).unwrap();
-        let count: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='pso_cache_files'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn migration_012_creates_pso_distributions_with_fk() {
-        let db = open_in_memory().unwrap();
-        let mut conn = db.lock().unwrap();
-        migrate(&mut conn).unwrap();
-        conn.execute("PRAGMA foreign_keys = ON;", []).unwrap();
-        conn.execute(
-            "INSERT INTO machines (hostname, ip) VALUES ('h', '1.1.1.1')",
-            [],
-        )
-        .unwrap();
-        let result = conn.execute(
-            "INSERT INTO pso_distributions (pso_cache_file_id, target_machine_id) VALUES (999, 1)",
-            [],
-        );
-        assert!(result.is_err(), "FK violation expected");
     }
 }

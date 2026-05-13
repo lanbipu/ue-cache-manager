@@ -14,8 +14,29 @@ pub struct GpuSignature {
 
 impl GpuSignature {
     pub fn as_string(&self) -> String {
-        format!("{}:{}:{}", self.vendor.to_lowercase(), self.model, self.driver)
+        format!(
+            "{}:{}:{}",
+            normalize_signature_component(&self.vendor),
+            normalize_signature_component(&self.model),
+            normalize_signature_component(&self.driver)
+        )
     }
+}
+
+pub fn normalize_signature_string(value: &str) -> String {
+    value
+        .split(':')
+        .map(normalize_signature_component)
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+fn normalize_signature_component(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -106,8 +127,8 @@ pub fn build_matrix(db: &Db) -> UecmResult<GpuMatrix> {
 pub fn signature_from_gpu(gpu: &GpuInfo) -> GpuSignature {
     GpuSignature {
         vendor: vendor_label(gpu.vendor).into(),
-        model: gpu.gpu_model.clone(),
-        driver: gpu.driver_version.clone(),
+        model: normalize_signature_component(&gpu.gpu_model),
+        driver: normalize_signature_component(&gpu.driver_version),
     }
 }
 
@@ -159,7 +180,7 @@ mod tests {
         seed(&db, "C", "3.3.3.3", "RTX 4090", "560.00");
 
         let matrix = build_matrix(&db).unwrap();
-        assert_eq!(matrix.baseline.unwrap().model, "RTX 3080");
+        assert_eq!(matrix.baseline.unwrap().model, "rtx 3080");
         assert_eq!(
             matrix
                 .cells
@@ -196,5 +217,23 @@ mod tests {
         assert!(matrix.signatures.is_empty());
         assert!(matrix.baseline.is_none());
         assert!(matrix.cells.is_empty());
+    }
+
+    #[test]
+    fn signatures_are_trimmed_and_case_insensitive() {
+        let db = setup();
+        seed(&db, "A", "1.1.1.1", " RTX 3080 ", "535.98 ");
+        seed(&db, "B", "2.2.2.2", "rtx   3080", " 535.98");
+
+        let matrix = build_matrix(&db).unwrap();
+        assert_eq!(matrix.signatures.len(), 1);
+        assert_eq!(
+            matrix.signatures[0].signature.as_string(),
+            "nvidia:rtx 3080:535.98"
+        );
+        assert!(matrix
+            .cells
+            .iter()
+            .all(|cell| cell.status == CellStatus::Match));
     }
 }

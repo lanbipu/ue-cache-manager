@@ -52,6 +52,15 @@ export interface RefreshResult {
   error: string | null;
 }
 
+export interface WinrmBootstrapResult {
+  ok: boolean;
+  method: string;
+  message: string;
+  winrm_ok: boolean;
+  changed: string[];
+  manual_script: string | null;
+}
+
 export type CredentialKind = "winrm" | "share";
 
 export interface CredentialRecord {
@@ -68,92 +77,6 @@ export interface IniKey {
 
 export interface WriteIniResponse {
   backup_path: string;
-}
-
-export interface ScanRun {
-  id: number | null;
-  scan_type: string;
-  started_at: string | null;
-  finished_at: string | null;
-  machine_ids: number[];
-  summary: Record<string, unknown> | null;
-}
-
-export type Severity = "critical" | "warning" | "healthy" | "info";
-
-export interface IniFinding {
-  id: number | null;
-  scan_run_id: number;
-  machine_id: number;
-  rule_id: string;
-  severity: Severity;
-  category: string;
-  file_path: string;
-  section: string | null;
-  key_name: string | null;
-  line_number: number | null;
-  snippet_before: string;
-  snippet_after: string | null;
-  recommended_action: string;
-  recommended_value: string | null;
-  symptom: string;
-  rationale: string;
-  fixed_at: string | null;
-  skipped_at: string | null;
-}
-
-export interface IniScanSummary {
-  scan_run_id: number;
-  critical: number;
-  warning: number;
-  healthy: number;
-  info: number;
-  total_files: number;
-}
-
-export interface ScanInisRequest {
-  machine_ids: number[];
-  credential_alias: string;
-  project_paths: string[];
-  user_profile_path: string | null;
-}
-
-export interface ScanInisResponse {
-  scan_run_id: number;
-  summary: IniScanSummary;
-  findings: IniFinding[];
-}
-
-export interface ApplyFindingResult {
-  backup_path: string | null;
-  message: string;
-}
-
-export type CheckStatus = "healthy" | "warning" | "critical" | "na" | "offline" | "unknown";
-
-export interface CheckOutcome {
-  status: CheckStatus;
-  message: string;
-  sample: string;
-  remediation: string;
-}
-
-export interface HealthCheckRun {
-  id: number | null;
-  scan_run_id: number;
-  machine_id: number;
-  machine_results: Record<string, CheckOutcome>;
-}
-
-export interface RunHealthCheckRequest {
-  machine_ids: number[];
-  credential_alias: string;
-  project_paths: string[];
-}
-
-export interface RunHealthCheckResponse {
-  scan_run_id: number;
-  results: HealthCheckRun[];
 }
 
 export type ShareMode = "open" | "managed";
@@ -331,7 +254,8 @@ export interface PsoCollectFinalizedPayload {
   job_id: string;
   source_machine_id: number;
   project_id: number;
-  files_collected: number;
+  files_collected: number | null;
+  error_message?: string | null;
 }
 
 export interface GpuSignature {
@@ -365,6 +289,126 @@ export interface UecmError {
   message: string;
 }
 
+export function formatUecmError(e: unknown): string {
+  return typeof e === "string"
+    ? e
+    : (e as { message?: string })?.message ?? JSON.stringify(e);
+}
+
+export type Severity = "critical" | "warning" | "healthy" | "info";
+export type Category = "project" | "user" | "engine";
+export type FindingCategory = Category | "PSO";
+export type RecommendedAction = "set" | "remove" | "manual";
+
+export interface IniFinding {
+  id: number | null;
+  scan_run_id: number;
+  machine_id: number;
+  rule_id: string;
+  severity: Severity;
+  category: FindingCategory;
+  file_path: string;
+  section: string | null;
+  key_name: string | null;
+  line_number: number | null;
+  snippet_before: string;
+  snippet_after: string | null;
+  recommended_action: RecommendedAction;
+  recommended_value: string | null;
+  symptom: string;
+  rationale: string;
+  fixed_at: string | null;
+  skipped_at: string | null;
+}
+
+export interface ScanRun {
+  id: number | null;
+  scan_type: "ini" | "health";
+  started_at: string | null;
+  finished_at: string | null;
+  machine_ids: number[];
+  summary: Record<string, number> | null;
+}
+
+export interface ScanRunSummary {
+  scan_run_id: number;
+  critical: number;
+  warning: number;
+  healthy: number;
+}
+
+export interface IniScanSummary {
+  scan_run_id: number;
+  critical: number;
+  warning: number;
+  healthy: number;
+  info: number;
+  total_files: number;
+}
+
+export interface ScanInisRequest {
+  machine_ids: number[];
+  credential_alias: string;
+  project_paths: string[];
+  user_profile_path: string | null;
+}
+
+export interface ScanInisResponse {
+  scan_run_id: number;
+  summary: IniScanSummary;
+  findings: IniFinding[];
+}
+
+export interface ApplyFindingResult {
+  backup_path: string | null;
+  message: string;
+}
+
+export type HealthStatus = "healthy" | "warning" | "critical" | "na" | "offline" | "unknown";
+
+export interface CheckOutcome {
+  status: HealthStatus;
+  message: string;
+  sample: string;
+  remediation?: string;
+}
+
+export interface HealthCheckRow {
+  id?: number | null;
+  scan_run_id: number;
+  machine_id: number;
+  machine_results: Record<string, CheckOutcome>;
+}
+
+export interface HealthRunSummary {
+  scan_run_id: number;
+  healthy: number;
+  warning: number;
+  critical: number;
+  offline: number;
+  total: number;
+}
+
+export type HealthCheckRun = HealthCheckRow;
+
+export interface RunHealthCheckRequest {
+  machine_ids: number[];
+  credential_alias: string;
+  project_paths: string[];
+}
+
+export interface RunHealthCheckResponse {
+  scan_run_id: number;
+  results: HealthCheckRun[];
+}
+
+export interface HealthProgressEvent {
+  scan_run_id: number;
+  machine_id: number;
+  done: boolean;
+  error: string | null;
+}
+
 export const tauriApi = {
   // Machines
   async listMachines(): Promise<Machine[]> {
@@ -392,6 +436,20 @@ export const tauriApi = {
   },
   async refreshMachine(machineId: number): Promise<RefreshResult> {
     return invoke<RefreshResult>("refresh_machine", { machineId });
+  },
+  async bootstrapWinrm(
+    machineId: number,
+    credentialAlias: string,
+    enableLocalAccountRemoteAdmin = false,
+  ): Promise<WinrmBootstrapResult> {
+    return invoke<WinrmBootstrapResult>("bootstrap_winrm", {
+      machineId,
+      credentialAlias,
+      enableLocalAccountRemoteAdmin,
+    });
+  },
+  async getWinrmBootstrapScript(): Promise<string> {
+    return invoke<string>("get_winrm_bootstrap_script");
   },
 
   // Credentials
@@ -494,35 +552,6 @@ export const tauriApi = {
       value,
       credentialAlias,
     });
-  },
-
-  // Diagnostics
-  async scanInis(request: ScanInisRequest): Promise<ScanInisResponse> {
-    return invoke<ScanInisResponse>("scan_inis", { request });
-  },
-  async listScanRuns(scanType: string, limit = 20): Promise<ScanRun[]> {
-    return invoke<ScanRun[]>("list_scan_runs", { scanType, limit });
-  },
-  async listFindings(scanRunId: number): Promise<IniFinding[]> {
-    return invoke<IniFinding[]>("list_findings", { scanRunId });
-  },
-  async getFinding(findingId: number): Promise<IniFinding | null> {
-    return invoke<IniFinding | null>("get_finding", { findingId });
-  },
-  async applyFinding(findingId: number, credentialAlias: string): Promise<ApplyFindingResult> {
-    return invoke<ApplyFindingResult>("apply_finding", { findingId, credentialAlias });
-  },
-  async skipFinding(findingId: number): Promise<void> {
-    return invoke<void>("skip_finding", { findingId });
-  },
-  async runHealthCheck(request: RunHealthCheckRequest): Promise<RunHealthCheckResponse> {
-    return invoke<RunHealthCheckResponse>("run_health_check", { request });
-  },
-  async listHealthCheckRuns(limit = 20): Promise<ScanRun[]> {
-    return invoke<ScanRun[]>("list_health_check_runs", { limit });
-  },
-  async listHealthResultsForRun(scanRunId: number): Promise<HealthCheckRun[]> {
-    return invoke<HealthCheckRun[]>("list_health_results_for_run", { scanRunId });
   },
 
   // Shares
@@ -691,7 +720,57 @@ export const tauriApi = {
     });
   },
 
-  // PSO Cache
+  // System
+  async testPowerShellBridge(message: string): Promise<EchoResult> {
+    return invoke<EchoResult>("test_powershell_bridge", { message });
+  },
+
+  // Diagnostics — INI scanner
+  async scanInis(request: ScanInisRequest): Promise<ScanInisResponse> {
+    return invoke<ScanInisResponse>("scan_inis", { request });
+  },
+  async listFindings(scanRunId: number): Promise<IniFinding[]> {
+    return invoke<IniFinding[]>("list_findings_for_run", { scanRunId });
+  },
+  async listFindingsForRun(scanRunId: number): Promise<IniFinding[]> {
+    return this.listFindings(scanRunId);
+  },
+  async listScanRuns(scanType: string, limit = 20): Promise<ScanRun[]> {
+    if (scanType === "health") {
+      return invoke<ScanRun[]>("list_recent_health_runs", { limit });
+    }
+    return invoke<ScanRun[]>("list_recent_ini_runs", { limit });
+  },
+  async listRecentIniRuns(limit: number): Promise<ScanRun[]> {
+    return this.listScanRuns("ini", limit);
+  },
+  async applyFinding(findingId: number, credentialAlias: string): Promise<ApplyFindingResult> {
+    const backupPath = await invoke<string>("apply_finding", { findingId, credentialAlias });
+    return { backup_path: backupPath, message: "applied" };
+  },
+  async skipFinding(findingId: number): Promise<void> {
+    return invoke<void>("skip_finding", { findingId });
+  },
+
+  // Diagnostics — Health check
+  async runHealthCheck(request: RunHealthCheckRequest): Promise<RunHealthCheckResponse> {
+    const response = await invoke<RunHealthCheckResponse | HealthRunSummary>("run_health_check", {
+      request,
+    });
+    if ("results" in response) {
+      return response;
+    }
+    return {
+      scan_run_id: response.scan_run_id,
+      results: await this.listHealthResultsForRun(response.scan_run_id),
+    };
+  },
+  async listRecentHealthRuns(limit: number): Promise<ScanRun[]> {
+    return this.listScanRuns("health", limit);
+  },
+  async listHealthResultsForRun(scanRunId: number): Promise<HealthCheckRow[]> {
+    return invoke<HealthCheckRow[]>("list_health_results_for_run", { scanRunId });
+  },
   async startPsoCollection(args: {
     sourceMachineId: number;
     projectId: number;
@@ -713,8 +792,15 @@ export const tauriApi = {
       operatorCredentialAlias: args.operatorCredentialAlias,
     });
   },
-  async listPsoCacheFiles(projectId: number): Promise<PsoCacheFile[]> {
-    return invoke<PsoCacheFile[]>("list_pso_cache_files", { projectId });
+  async listPsoCacheFiles(
+    projectId: number,
+    filters?: { sourceMachineId?: number | null; gpuSignature?: string | null },
+  ): Promise<PsoCacheFile[]> {
+    return invoke<PsoCacheFile[]>("list_pso_cache_files", {
+      projectId,
+      sourceMachineId: filters?.sourceMachineId ?? null,
+      gpuSignature: filters?.gpuSignature ?? null,
+    });
   },
   async distributePsoCache(args: {
     fileId: number;
@@ -740,10 +826,5 @@ export const tauriApi = {
   },
   async getGpuConsistencyMatrix(): Promise<GpuMatrix> {
     return invoke<GpuMatrix>("get_gpu_consistency_matrix");
-  },
-
-  // System
-  async testPowerShellBridge(message: string): Promise<EchoResult> {
-    return invoke<EchoResult>("test_powershell_bridge", { message });
   },
 };

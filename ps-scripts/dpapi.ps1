@@ -14,6 +14,8 @@ param(
     [Parameter(Mandatory=$true)] [string]$DataB64
 )
 
+[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
+
 $ErrorActionPreference = 'Stop'
 
 try {

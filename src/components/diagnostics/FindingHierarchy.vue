@@ -15,6 +15,7 @@ const emit = defineEmits<{ select: [finding: IniFinding] }>();
     <button
       v-for="finding in findings"
       :key="finding.id ?? `${finding.machine_id}-${finding.rule_id}-${finding.file_path}`"
+      data-finding-row
       class="block w-full border-b px-4 py-3 text-left hover:bg-accent"
       :class="selectedId === finding.id ? 'bg-accent' : ''"
       @click="emit('select', finding)"

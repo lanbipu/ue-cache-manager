@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { useSharesStore } from "@/stores/shares";
 import { useMachinesStore } from "@/stores/machines";
 
+const { t } = useI18n();
 const shares = useSharesStore();
 const machines = useMachinesStore();
 
@@ -23,6 +25,11 @@ const hostnameById = computed(() => {
   return map;
 });
 
+const shareCountLabel = computed(() => {
+  const count = shares.shares.length;
+  return count === 1 ? t("shares.countOne", { count }) : t("shares.countMany", { count });
+});
+
 function startDelete(id: number) {
   pendingDeleteId.value = id;
   alsoRemoveRemote.value = false;
@@ -40,7 +47,7 @@ async function confirmDelete() {
     await shares.remove(pendingDeleteId.value, alsoRemoveRemote.value);
     pendingDeleteId.value = null;
   } catch (e) {
-    localError.value = (e as { message?: string }).message ?? "delete failed";
+    localError.value = (e as { message?: string }).message ?? t("shares.deleteFailed");
   } finally {
     isDeleting.value = false;
   }
@@ -51,31 +58,31 @@ async function confirmDelete() {
   <div class="h-full space-y-6 overflow-auto p-6">
     <header class="flex items-center justify-between gap-4">
       <div>
-        <p class="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">Shared DDC</p>
-        <h1 class="mt-1 font-display text-3xl font-extrabold">SMB shares</h1>
+        <p class="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">{{ t("shares.eyebrow") }}</p>
+        <h1 class="mt-1 font-display text-3xl font-extrabold">{{ t("shares.title") }}</h1>
       </div>
       <span data-share-count class="rounded-full border bg-card px-3 py-1 text-xs text-muted-foreground">
-        {{ shares.shares.length }} share{{ shares.shares.length === 1 ? "" : "s" }}
+        {{ shareCountLabel }}
       </span>
     </header>
 
-    <p v-if="shares.isLoading" class="text-sm text-muted-foreground">Loading...</p>
+    <p v-if="shares.isLoading" class="text-sm text-muted-foreground">{{ t("common.loading") }}</p>
     <p
       v-else-if="shares.shares.length === 0"
       data-shares-empty
       class="rounded-lg border bg-card p-6 text-sm text-muted-foreground"
     >
-      No shares yet. Create one from the Machines view (Share button).
+      {{ t("shares.empty") }}
     </p>
 
     <table v-else class="w-full overflow-hidden rounded-lg border bg-card text-sm">
       <thead class="bg-muted text-muted-foreground">
         <tr>
-          <th class="text-left px-3 py-1">Host</th>
-          <th class="text-left px-3 py-1">Share</th>
-          <th class="text-left px-3 py-1">UNC</th>
-          <th class="text-left px-3 py-1">Mode</th>
-          <th class="text-left px-3 py-1">Credential</th>
+          <th class="text-left px-3 py-1">{{ t("shares.headerHost") }}</th>
+          <th class="text-left px-3 py-1">{{ t("shares.headerShare") }}</th>
+          <th class="text-left px-3 py-1">{{ t("shares.headerUnc") }}</th>
+          <th class="text-left px-3 py-1">{{ t("shares.headerMode") }}</th>
+          <th class="text-left px-3 py-1">{{ t("shares.headerCredential") }}</th>
           <th class="px-3 py-1"></th>
         </tr>
       </thead>
@@ -105,7 +112,7 @@ async function confirmDelete() {
               class="text-xs text-destructive hover:underline"
               @click="startDelete(s.id!)"
             >
-              Delete
+              {{ t("common.delete") }}
             </button>
           </td>
         </tr>
@@ -117,14 +124,14 @@ async function confirmDelete() {
       data-delete-confirm
       class="rounded-lg border border-destructive/30 bg-destructive/10 p-4"
     >
-      <p class="text-sm mb-2">Confirm delete share #{{ pendingDeleteId }}?</p>
+      <p class="text-sm mb-2">{{ t("shares.confirmDeletePrefix", { id: pendingDeleteId }) }}</p>
       <label class="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
         <input
           data-also-remove-remote
           type="checkbox"
           v-model="alsoRemoveRemote"
         />
-        Also remove the share on the remote host (requires credentials)
+        {{ t("shares.alsoRemoveRemote") }}
       </label>
       <p v-if="localError" class="mb-2 text-xs text-destructive">{{ localError }}</p>
       <div class="flex gap-2">
@@ -134,13 +141,13 @@ async function confirmDelete() {
           class="rounded-md bg-destructive px-3 py-1 text-sm text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
           @click="confirmDelete"
         >
-          {{ isDeleting ? "Deleting..." : "Delete" }}
+          {{ isDeleting ? t("common.deleting") : t("common.delete") }}
         </button>
         <button
           class="rounded-md border px-3 py-1 text-sm hover:bg-accent"
           @click="cancelDelete"
         >
-          Cancel
+          {{ t("common.cancel") }}
         </button>
       </div>
     </div>

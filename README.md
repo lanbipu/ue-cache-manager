@@ -2,7 +2,7 @@
 
 Cross-machine Unreal Engine cache management tool for VP/XR render clusters.
 
-**Status:** v1.0 — feature-complete locally for Plans 1-6. lanPC E2E is deferred until `192.168.10.20` is reachable again. See `docs/superpowers/plans/`.
+**Status:** v1.0 feature-complete locally for Plans 1-6. lanPC E2E remains deferred until `192.168.10.20` is reachable again. See `docs/superpowers/plans/`.
 
 ## What's working
 
@@ -20,14 +20,13 @@ Cross-machine Unreal Engine cache management tool for VP/XR render clusters.
 - **Cluster batch operations**: multi-select machines + apply env var / INI key to all of them; real-time per-machine progress (✓ / ✗ / ↻) via mpsc fan-out + Tauri `batch-progress` events; capped at 8 concurrent.
 - **Project inventory**: discover `*.uproject` files on Windows machines, group them by logical project identity, and maintain per-machine path mappings.
 - **DDC Pak workflow**: generate DDC pak files through a reusable UE runner, verify `.ddp` output, cancel active UE processes, and distribute verified pak files through Robocopy fan-out.
-- **INI Scanner**: project / user / engine INI scan, rule engine R001-R007, persisted findings, one-click apply for auto-fixable findings through the atomic backup write path.
-- **Cluster Health Check**: 11-check matrix with KPI strip, cluster score, derived INI consistency + GPU/driver consistency, and remediation details per cell.
 - **PSO Cache workflow**: verify PSO precaching CVars (R008-R010), collect `*.upipelinecache` / `*.stablepc.csv` through UE `-game` mode, persist collected files, and distribute them with GPU-mismatch guardrails.
 - **GPU/driver consistency matrix**: shared backend module + frontend matrix for PSO safety checks and Health Check #11.
-- **Visual polish baseline**: shared empty/loading/error state block, v1.0 Dashboard KPIs, PSO Cache file explorer, and GPU matrix surface.
-- **Diagnostic primitives**: diff code block, KPI tile, score tile, filter chip, finding hierarchy/detail, and health matrix components.
-- **Diagnostic PowerShell sidecars**: `read-ini-file.ps1` for whole-file INI reads and `health-probes.ps1` for one-round-trip machine probes.
+- **WinRM bootstrap onboarding**: package and run the first-contact bootstrap scripts for workgroup/IP Windows targets, including operator-side TrustedHosts setup.
 - **Hostname rename**: inline editor in the machine detail panel.
+- **INI Scanner (Plan 4)**: cross-machine scan of project / user-level / engine INI files. Pure-Rust rule engine with seven rules (R001-R007) covering hardcoded DDC `Path=`, user-level DDC overrides, mapped-drive paths, deprecated CVars, missing env vars, and the healthy-path baseline. One-click apply with auto-backup that re-uses Plan 2's atomic write. Hierarchy + 3-column diagnostic detail (What / Why / Symptom) + before/after diff via `UecmCodeBlock`.
+- **Cluster Health Check (Plan 4)**: 11-row × N-machine matrix. Eight active probes packaged into one PowerShell round-trip per machine (`smb`, `firewall_445`, `share_reachable`, `ntfs_perm`, `cred_user`, `cred_system`, `env_vars`, `system_write`) plus three derived checks (`ini_consistency` from latest INI scan, `pso_precaching` from project `ConsoleVariables.ini`, `gpu_consistency` pure-Rust aggregator over `machine_gpus`). SYSTEM-cred + SYSTEM-write columns emphasized. Detail panel shows What / Symptom / How-to-fix + last probe output.
+- **Visual polish baseline**: shared empty/loading/error state block, v1.0 Dashboard KPIs, PSO Cache file explorer, and GPU matrix surface.
 - Builds to a single .exe / .dmg / .AppImage.
 
 ## Deferred / not yet implemented

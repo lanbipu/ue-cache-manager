@@ -20,7 +20,7 @@ const cls = computed(() => {
 
 <template>
   <div data-kpi-tile class="min-h-20 bg-card p-4">
-    <div class="font-mono text-[11px] font-bold uppercase text-muted-foreground">{{ label }}</div>
+    <div class="font-mono text-[11px] font-bold uppercase text-muted-foreground">{{ label.toUpperCase() }}</div>
     <div class="mt-2 font-display text-2xl font-extrabold" :class="cls">{{ value }}</div>
   </div>
 </template>

@@ -100,6 +100,10 @@ pub fn enumerate_remote(
     user: Option<&str>,
     pass: Option<&str>,
 ) -> UecmResult<Vec<EnumeratedFile>> {
+    if crate::core::loopback::is_loopback_target(host) {
+        return enumerate_local(project_dir);
+    }
+
     let mut args = vec![
         "-HostName".to_string(),
         host.into(),
@@ -129,6 +133,28 @@ pub fn enumerate_remote(
             size_bytes: item.size.parse().unwrap_or_default(),
         })
         .collect())
+}
+
+fn enumerate_local(project_dir: &str) -> UecmResult<Vec<EnumeratedFile>> {
+    let dir = std::path::Path::new(project_dir)
+        .join("Saved")
+        .join("CollectedPSOs");
+    let mut files = Vec::new();
+    let entries = std::fs::read_dir(&dir).map_err(UecmError::Io)?;
+    for entry in entries {
+        let entry = entry.map_err(UecmError::Io)?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("upipelinecache") {
+            continue;
+        }
+        let metadata = entry.metadata().map_err(UecmError::Io)?;
+        files.push(EnumeratedFile {
+            file_path: path.to_string_lossy().to_string(),
+            file_name: entry.file_name().to_string_lossy().to_string(),
+            size_bytes: metadata.len() as i64,
+        });
+    }
+    Ok(files)
 }
 
 pub fn gpu_signature_for_machine(db: &Db, machine_id: i64) -> UecmResult<String> {
@@ -261,6 +287,6 @@ mod tests {
         .unwrap();
         assert_eq!(ids.len(), 1);
         let files = pso_cache_files::list_by_project(&db, project_id).unwrap();
-        assert_eq!(files[0].gpu_signature, "nvidia:RTX 4090:551.86");
+        assert_eq!(files[0].gpu_signature, "nvidia:rtx 4090:551.86");
     }
 }

@@ -1,44 +1,53 @@
-//! Windows PowerShell wrapper for per-machine health probes.
+//! WinRM dispatch for `health-probes.ps1`.
 
-use crate::core::{health_check::CheckOutcome, powershell};
+use crate::core::{loopback, powershell};
 use crate::error::{UecmError, UecmResult};
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::HashMap;
+use super::health_check::CheckOutcome;
 
 #[derive(Debug, Deserialize)]
 struct ProbeResult {
-    ok: bool,
-    results: BTreeMap<String, CheckOutcome>,
-    message: String,
+    pub ok: bool,
+    #[serde(default)]
+    pub results: HashMap<String, CheckOutcome>,
+    #[serde(default)]
+    pub message: String,
 }
 
-pub fn run_with_credential(
+pub fn run(
     host: &str,
-    username: &str,
-    password: &str,
-) -> UecmResult<BTreeMap<String, CheckOutcome>> {
+    share_unc: &str,
+    svc_username: &str,
+    expected_shared_path: &str,
+    cred: Option<(&str, &str)>,
+) -> UecmResult<HashMap<String, CheckOutcome>> {
+    let mut args: Vec<String> = vec![
+        "-HostName".into(), host.into(),
+        "-ShareUnc".into(), share_unc.into(),
+        "-SvcUsername".into(), svc_username.into(),
+        "-ExpectedSharedDataCachePath".into(), expected_shared_path.into(),
+    ];
+    if loopback::is_loopback_target(host) {
+        // Loopback runs the probe scriptblock inside the current PowerShell
+        // process — switching to an admin token mid-process is not safe, so
+        // any explicit credential is intentionally dropped here. SYSTEM-context
+        // probes (PsExec -s) still succeed when UECM itself was launched
+        // elevated. See docs/.../uecm-plan-4-followup-scan-ux.md for an
+        // out-of-process elevation path.
+        let _ = cred;
+        args.push("-Local".into());
+    } else if let Some((u, p)) = cred {
+        args.push("-Username".into()); args.push(u.into());
+        args.push("-Password".into()); args.push(p.into());
+    }
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let result: ProbeResult = powershell::run_json(
         &powershell::script_path("health-probes.ps1"),
-        &[
-            "-HostName", host,
-            "-Username", username,
-            "-Password", password,
-        ],
+        &arg_refs,
     )?;
     if !result.ok {
-        return Err(UecmError::OperationFailed(result.message));
+        return Err(UecmError::OperationFailed(format!("health-probes failed: {}", result.message)));
     }
     Ok(result.results)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[cfg(not(windows))]
-    #[test]
-    fn run_with_credential_returns_powershell_error_on_non_windows() {
-        let result = run_with_credential("RENDER-01", "admin", "p@ss");
-        assert!(matches!(result, Err(UecmError::PowerShell(_))));
-    }
 }

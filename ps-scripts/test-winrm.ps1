@@ -7,6 +7,8 @@ param(
     [string]$HostName
 )
 
+[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
+
 $ErrorActionPreference = 'Stop'
 $started = Get-Date
 

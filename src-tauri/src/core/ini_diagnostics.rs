@@ -1,18 +1,9 @@
-//! Pure INI diagnostic rules for DDC and runtime-cache related settings.
+//! Pure rule engine. Takes a parsed INI file + env-var state, emits findings.
+//! No Windows-specific calls; runs and tests on every platform.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
-pub const DDC_SECTION: &str = "/Script/UnrealEd.DerivedDataCacheSettings";
-pub const SHARED_DDC_ENV: &str = "UE-SharedDataCachePath";
-pub const DEPRECATED_CVARS: &[&str] = &[
-    "r.SShaderCache",
-    "s.SkipFinalizeCommandList",
-    "r.UseShaderCaching",
-    "r.UseShaderPredraw",
-];
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     Critical,
@@ -22,7 +13,7 @@ pub enum Severity {
 }
 
 impl Severity {
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Severity::Critical => "critical",
             Severity::Warning => "warning",
@@ -32,407 +23,536 @@ impl Severity {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct IniEntry {
-    pub section: String,
-    pub key: String,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Category {
+    Project,
+    User,
+    Engine,
+}
+
+impl Category {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Category::Project => "project",
+            Category::User => "user",
+            Category::Engine => "engine",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedKey {
+    pub name: String,
     pub value: String,
-    pub line_number: i64,
-    pub raw: String,
+    pub line_number: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct IniDocument {
-    pub file_path: String,
-    pub category: String,
-    pub entries: Vec<IniEntry>,
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedSection {
+    pub name: String,
+    pub keys: Vec<ParsedKey>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedFile {
+    pub path: String,
+    pub category: Category,
+    pub sections: Vec<ParsedSection>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EnvVarState {
+    pub shared_data_cache_path: Option<String>,
+    pub local_data_cache_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Finding {
     pub rule_id: String,
     pub severity: Severity,
-    pub category: String,
+    pub category: Category,
     pub file_path: String,
     pub section: Option<String>,
     pub key_name: Option<String>,
     pub line_number: Option<i64>,
     pub snippet_before: String,
     pub snippet_after: Option<String>,
-    pub recommended_action: String,
+    pub recommended_action: RecommendedAction,
     pub recommended_value: Option<String>,
     pub symptom: String,
     pub rationale: String,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct DiagnosticContext {
-    pub env_vars: HashMap<String, Option<String>>,
-    pub path_reachability: HashMap<String, bool>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecommendedAction {
+    Set,
+    Remove,
+    Manual,
 }
 
-pub fn parse_ini(file_path: &str, category: &str, text: &str) -> IniDocument {
-    let mut section = String::new();
-    let mut entries = Vec::new();
-    for (idx, raw) in text.trim_start_matches('\u{feff}').lines().enumerate() {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() || trimmed.starts_with(';') || trimmed.starts_with('#') || trimmed.starts_with("//") {
-            continue;
+impl RecommendedAction {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RecommendedAction::Set => "set",
+            RecommendedAction::Remove => "remove",
+            RecommendedAction::Manual => "manual",
         }
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            section = trimmed.trim_start_matches('[').trim_end_matches(']').to_string();
-            continue;
-        }
-        if let Some(eq) = trimmed.find('=') {
-            entries.push(IniEntry {
-                section: section.clone(),
-                key: trimmed[..eq].trim().to_string(),
-                value: strip_inline_comment(trimmed[eq + 1..].trim()).to_string(),
-                line_number: idx as i64 + 1,
-                raw: raw.to_string(),
-            });
-        }
-    }
-    IniDocument {
-        file_path: file_path.to_string(),
-        category: category.to_string(),
-        entries,
     }
 }
 
-pub fn diagnose(doc: &IniDocument, ctx: &DiagnosticContext) -> Vec<Finding> {
-    let mut findings = Vec::new();
-    let ddc_entries: Vec<_> = doc.entries.iter().filter(|e| same_section(&e.section, DDC_SECTION)).collect();
-    let path_entry = ddc_entries.iter().find(|e| normalized_key(&e.key) == "Path");
-    let env_entry = ddc_entries.iter().find(|e| normalized_key(&e.key) == "EnvPathOverride");
+const DDC_SECTION: &str = "/Script/UnrealEd.DerivedDataCacheSettings";
 
-    if let Some(path) = path_entry {
-        if env_entry.map(|e| e.value.trim().is_empty()).unwrap_or(true) {
-            findings.push(Finding {
-                rule_id: "R001".into(),
-                severity: Severity::Critical,
-                category: doc.category.clone(),
-                file_path: doc.file_path.clone(),
-                section: Some(path.section.clone()),
-                key_name: Some("Path".into()),
-                line_number: Some(path.line_number),
-                snippet_before: path.raw.clone(),
-                snippet_after: Some(format!("EnvPathOverride={}", SHARED_DDC_ENV)),
-                recommended_action: "set_env_override_remove_path".into(),
-                recommended_value: Some(SHARED_DDC_ENV.into()),
-                symptom: "Shared DDC can be bypassed by a hardcoded Path entry.".into(),
-                rationale: "EnvPathOverride keeps cache routing controlled by the machine environment instead of stale INI paths.".into(),
-            });
-        }
-        if is_mapped_drive(&path.value) {
-            findings.push(mapped_drive_finding(doc, path));
-        }
-        if ctx.path_reachability.get(&path.value).copied() == Some(false) {
-            findings.push(Finding {
-                rule_id: "R003".into(),
-                severity: Severity::Critical,
-                category: doc.category.clone(),
-                file_path: doc.file_path.clone(),
-                section: Some(path.section.clone()),
-                key_name: Some(path.key.clone()),
-                line_number: Some(path.line_number),
-                snippet_before: path.raw.clone(),
-                snippet_after: None,
-                recommended_action: "manual".into(),
-                recommended_value: None,
-                symptom: "Configured DDC path is unreachable from this machine.".into(),
-                rationale: "Unreachable cache roots force local fallback and inconsistent derived data.".into(),
-            });
-        }
-    }
+pub const DEPRECATED_CVARS: &[&str] = &[
+    "r.SShaderCache",
+    "r.ShaderCache",
+    "s.SkipFinalizeCommandList",
+    "r.UseShaderCaching",
+];
 
-    if doc.file_path.ends_with("EditorPerProjectUserSettings.ini") && !ddc_entries.is_empty() {
-        let first = ddc_entries[0];
-        findings.push(Finding {
-            rule_id: "R002".into(),
-            severity: Severity::Critical,
-            category: doc.category.clone(),
-            file_path: doc.file_path.clone(),
-            section: Some(first.section.clone()),
-            key_name: None,
-            line_number: Some(first.line_number),
-            snippet_before: ddc_entries.iter().map(|e| e.raw.as_str()).collect::<Vec<_>>().join("\n"),
-            snippet_after: Some("; remove user-level DerivedDataCacheSettings override".into()),
-            recommended_action: "manual".into(),
-            recommended_value: None,
-            symptom: "User-level DDC override can shadow project and engine settings.".into(),
-            rationale: "Per-project user settings should not define shared DDC policy.".into(),
-        });
-    }
-
-    for entry in &doc.entries {
-        let key = normalized_key(&entry.key);
-        if DEPRECATED_CVARS.iter().any(|c| *c == key) {
-            findings.push(Finding {
-                rule_id: "R005".into(),
-                severity: Severity::Warning,
-                category: doc.category.clone(),
-                file_path: doc.file_path.clone(),
-                section: Some(entry.section.clone()),
-                key_name: Some(entry.key.clone()),
-                line_number: Some(entry.line_number),
-                snippet_before: entry.raw.clone(),
-                snippet_after: None,
-                recommended_action: "remove".into(),
-                recommended_value: None,
-                symptom: "Deprecated shader cache CVar may conflict with modern UE cache behavior.".into(),
-                rationale: "These CVars are legacy-era toggles and should not drive current DDC/PSO workflows.".into(),
-            });
-        }
-    }
-
-    diagnose_pso_precaching(doc, &mut findings);
-
-    if let Some(env) = env_entry {
-        let env_name = env.value.trim();
-        let env_value = ctx.env_vars.get(env_name).and_then(|v| v.as_deref()).unwrap_or("");
-        if env_value.is_empty() {
-            findings.push(Finding {
-                rule_id: "R006".into(),
-                severity: Severity::Warning,
-                category: doc.category.clone(),
-                file_path: doc.file_path.clone(),
-                section: Some(env.section.clone()),
-                key_name: Some(env.key.clone()),
-                line_number: Some(env.line_number),
-                snippet_before: env.raw.clone(),
-                snippet_after: None,
-                recommended_action: "manual".into(),
-                recommended_value: Some(env_name.into()),
-                symptom: "INI references an environment variable that is not set on this machine.".into(),
-                rationale: "EnvPathOverride only works when the named machine-level variable resolves to a cache path.".into(),
-            });
-        } else if env_name == SHARED_DDC_ENV && ctx.path_reachability.get(env_value).copied().unwrap_or(true) {
-            findings.push(Finding {
-                rule_id: "R007".into(),
-                severity: Severity::Healthy,
-                category: doc.category.clone(),
-                file_path: doc.file_path.clone(),
-                section: Some(env.section.clone()),
-                key_name: Some(env.key.clone()),
-                line_number: Some(env.line_number),
-                snippet_before: env.raw.clone(),
-                snippet_after: None,
-                recommended_action: "none".into(),
-                recommended_value: Some(env_value.into()),
-                symptom: "Shared DDC is routed through the expected environment variable.".into(),
-                rationale: "The machine has a configured shared cache path and the INI uses EnvPathOverride.".into(),
-            });
-        }
-    }
-
-    findings
-}
-
-fn diagnose_pso_precaching(doc: &IniDocument, findings: &mut Vec<Finding>) {
-    if !doc.file_path.to_lowercase().ends_with("consolevariables.ini") {
-        return;
-    }
-    let entries: Vec<_> = doc
-        .entries
-        .iter()
-        .filter(|entry| same_section(&entry.section, "ConsoleVariables"))
-        .collect();
-    findings.extend(pso_cvar_rule(
-        doc,
-        &entries,
+pub fn run_rules(file: &ParsedFile, env: &EnvVarState) -> Vec<Finding> {
+    let mut out = Vec::new();
+    out.extend(rule_r001(file));
+    out.extend(rule_r002(file));
+    out.extend(rule_r004(file));
+    out.extend(rule_r005(file));
+    out.extend(rule_r006(file, env));
+    out.extend(rule_r007(file, env));
+    out.extend(pso_cvar_rule(
+        file,
         "R008",
         "r.PSOPrecaching",
         Severity::Critical,
         "PSO precaching is disabled or not configured.",
         "Runtime PSO precaching must be enabled before collecting and distributing useful PSO cache files.",
     ));
-    findings.extend(pso_cvar_rule(
-        doc,
-        &entries,
+    out.extend(pso_cvar_rule(
+        file,
         "R009",
         "r.PSOPrecache.Compile",
         Severity::Warning,
         "PSO precache compilation is disabled or not configured.",
         "UE versions and project configs can leave compile behavior disabled unless explicitly set.",
     ));
-    findings.extend(pso_cvar_rule(
-        doc,
-        &entries,
+    out.extend(pso_cvar_rule(
+        file,
         "R010",
         "r.PSOPrecache.GlobalShaders",
         Severity::Warning,
         "Global shader PSO precaching is disabled or not configured.",
-        "Global shader PSOs should be covered so first scene switches do not create avoidable hitches.",
+        "Global shader precaching helps keep runtime PSO cache behavior consistent across the cluster.",
     ));
+    out
+}
+
+fn find_ddc(file: &ParsedFile) -> Option<&ParsedSection> {
+    file.sections.iter().find(|s| s.name == DDC_SECTION)
+}
+
+fn key<'a>(section: &'a ParsedSection, name: &str) -> Option<&'a ParsedKey> {
+    section.keys.iter().find(|k| k.name.eq_ignore_ascii_case(name))
+}
+
+fn rule_r001(file: &ParsedFile) -> Vec<Finding> {
+    let Some(section) = find_ddc(file) else { return vec![]; };
+    let path_key = key(section, "Path");
+    let env_override = key(section, "EnvPathOverride");
+    if path_key.is_some() && env_override.is_none() {
+        let pk = path_key.unwrap();
+        return vec![Finding {
+            rule_id: "R001".into(),
+            severity: Severity::Critical,
+            category: file.category,
+            file_path: file.path.clone(),
+            section: Some(section.name.clone()),
+            key_name: Some(pk.name.clone()),
+            line_number: Some(pk.line_number as i64),
+            snippet_before: format!("Path={}", pk.value),
+            snippet_after: Some("EnvPathOverride=UE-SharedDataCachePath".into()),
+            recommended_action: RecommendedAction::Set,
+            recommended_value: Some("UE-SharedDataCachePath".into()),
+            symptom: "DDC silently uses the hardcoded path; env-var overrides are ignored.".into(),
+            rationale: "When `Path=` is set without `EnvPathOverride`, UE skips the env-var lookup. The cluster cannot share DDC.".into(),
+        }];
+    }
+    vec![]
+}
+
+fn rule_r002(file: &ParsedFile) -> Vec<Finding> {
+    if file.category != Category::User { return vec![]; }
+    let Some(section) = find_ddc(file) else { return vec![]; };
+    if section.keys.is_empty() { return vec![]; }
+    vec![Finding {
+        rule_id: "R002".into(),
+        severity: Severity::Critical,
+        category: file.category,
+        file_path: file.path.clone(),
+        section: Some(section.name.clone()),
+        key_name: None,
+        line_number: section.keys.first().map(|k| k.line_number as i64),
+        snippet_before: section.keys.iter()
+            .map(|k| format!("{}={}", k.name, k.value))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        snippet_after: Some("(remove the entire DDC section from this user-level file)".into()),
+        recommended_action: RecommendedAction::Remove,
+        recommended_value: None,
+        symptom: "User-level DDC override silently overrides project + env-var configs.".into(),
+        rationale: "EditorPerProjectUserSettings.ini is the highest-priority DDC source. Any DDC keys here will mask the cluster setup.".into(),
+    }]
+}
+
+fn rule_r004(file: &ParsedFile) -> Vec<Finding> {
+    let Some(section) = find_ddc(file) else { return vec![]; };
+    let mut out = Vec::new();
+    for k in &section.keys {
+        if !k.name.eq_ignore_ascii_case("Path") { continue; }
+        let v = k.value.trim();
+        let starts_with_drive = v.len() >= 2
+            && v.chars().nth(1) == Some(':')
+            && v.chars().next().map_or(false, |c| c.is_ascii_alphabetic());
+        let is_unc = v.starts_with("\\\\");
+        if starts_with_drive && !is_unc {
+            out.push(Finding {
+                rule_id: "R004".into(),
+                severity: Severity::Warning,
+                category: file.category,
+                file_path: file.path.clone(),
+                section: Some(section.name.clone()),
+                key_name: Some(k.name.clone()),
+                line_number: Some(k.line_number as i64),
+                snippet_before: format!("Path={}", v),
+                snippet_after: Some("Path=\\\\HOST\\Share\\...".into()),
+                recommended_action: RecommendedAction::Manual,
+                recommended_value: None,
+                symptom: "Mapped drive letters are not visible to Windows Services (e.g. RenderStream).".into(),
+                rationale: "Use UNC paths so SYSTEM-context processes can resolve the share.".into(),
+            });
+        }
+    }
+    out
+}
+
+fn rule_r005(file: &ParsedFile) -> Vec<Finding> {
+    let mut out = Vec::new();
+    for s in &file.sections {
+        for k in &s.keys {
+            if DEPRECATED_CVARS.iter().any(|d| d.eq_ignore_ascii_case(&k.name)) {
+                out.push(Finding {
+                    rule_id: "R005".into(),
+                    severity: Severity::Warning,
+                    category: file.category,
+                    file_path: file.path.clone(),
+                    section: Some(s.name.clone()),
+                    key_name: Some(k.name.clone()),
+                    line_number: Some(k.line_number as i64),
+                    snippet_before: format!("{}={}", k.name, k.value),
+                    snippet_after: Some("(remove this line)".into()),
+                    recommended_action: RecommendedAction::Remove,
+                    recommended_value: None,
+                    symptom: "Deprecated CVar that no longer functions in UE 5.x.".into(),
+                    rationale: format!("`{}` was removed; keeping it adds confusion at no benefit.", k.name),
+                });
+            }
+        }
+    }
+    out
+}
+
+fn rule_r006(file: &ParsedFile, env: &EnvVarState) -> Vec<Finding> {
+    let Some(section) = find_ddc(file) else { return vec![]; };
+    let Some(envk) = key(section, "EnvPathOverride") else { return vec![]; };
+    let v = envk.value.trim();
+    let referenced_present = match v {
+        "UE-SharedDataCachePath" => env.shared_data_cache_path.as_ref().is_some(),
+        "UE-LocalDataCachePath" => env.local_data_cache_path.as_ref().is_some(),
+        _ => true,
+    };
+    if !referenced_present {
+        return vec![Finding {
+            rule_id: "R006".into(),
+            severity: Severity::Warning,
+            category: file.category,
+            file_path: file.path.clone(),
+            section: Some(section.name.clone()),
+            key_name: Some(envk.name.clone()),
+            line_number: Some(envk.line_number as i64),
+            snippet_before: format!("EnvPathOverride={}", v),
+            snippet_after: Some(format!("(set environment variable `{}` on this machine)", v)),
+            recommended_action: RecommendedAction::Manual,
+            recommended_value: None,
+            symptom: "INI references an env var that is not set; DDC falls back to local.".into(),
+            rationale: format!("`{}` is not present on this machine. Use UECM env-var modal to set it.", v),
+        }];
+    }
+    vec![]
+}
+
+fn rule_r007(file: &ParsedFile, env: &EnvVarState) -> Vec<Finding> {
+    let Some(section) = find_ddc(file) else { return vec![]; };
+    let Some(envk) = key(section, "EnvPathOverride") else { return vec![]; };
+    let referenced_present = match envk.value.trim() {
+        "UE-SharedDataCachePath" => env.shared_data_cache_path.is_some(),
+        "UE-LocalDataCachePath" => env.local_data_cache_path.is_some(),
+        _ => false,
+    };
+    if !referenced_present { return vec![]; }
+    vec![Finding {
+        rule_id: "R007".into(),
+        severity: Severity::Healthy,
+        category: file.category,
+        file_path: file.path.clone(),
+        section: Some(section.name.clone()),
+        key_name: Some(envk.name.clone()),
+        line_number: Some(envk.line_number as i64),
+        snippet_before: format!("EnvPathOverride={}", envk.value),
+        snippet_after: None,
+        recommended_action: RecommendedAction::Manual,
+        recommended_value: None,
+        symptom: "Configured correctly. Tracked for healthy-count summary.".into(),
+        rationale: "EnvPathOverride references a populated env var on this machine.".into(),
+    }]
 }
 
 fn pso_cvar_rule(
-    doc: &IniDocument,
-    entries: &[&IniEntry],
+    file: &ParsedFile,
     rule_id: &str,
     key_name: &str,
     severity: Severity,
     symptom: &str,
     rationale: &str,
-) -> Option<Finding> {
-    let found = entries
-        .iter()
-        .find(|entry| normalized_key(&entry.key).eq_ignore_ascii_case(key_name));
-    if found.map(|entry| truthy(&entry.value)).unwrap_or(false) {
-        return None;
+) -> Vec<Finding> {
+    if !file
+        .path
+        .to_ascii_lowercase()
+        .ends_with("consolevariables.ini")
+    {
+        return vec![];
     }
-    Some(Finding {
+
+    let Some(section) = file
+        .sections
+        .iter()
+        .find(|section| section.name.eq_ignore_ascii_case("ConsoleVariables"))
+    else {
+        return vec![pso_missing_finding(
+            file, rule_id, key_name, severity, symptom, rationale, None,
+        )];
+    };
+
+    match key(section, key_name) {
+        Some(entry) if entry.value.trim() == "1" => vec![],
+        Some(entry) => vec![Finding {
+            rule_id: rule_id.into(),
+            severity,
+            category: file.category,
+            file_path: file.path.clone(),
+            section: Some(section.name.clone()),
+            key_name: Some(entry.name.clone()),
+            line_number: Some(entry.line_number as i64),
+            snippet_before: format!("{}={}", entry.name, entry.value),
+            snippet_after: Some(format!("{}=1", key_name)),
+            recommended_action: RecommendedAction::Set,
+            recommended_value: Some("1".into()),
+            symptom: symptom.into(),
+            rationale: rationale.into(),
+        }],
+        None => vec![pso_missing_finding(
+            file,
+            rule_id,
+            key_name,
+            severity,
+            symptom,
+            rationale,
+            Some(section.name.clone()),
+        )],
+    }
+}
+
+fn pso_missing_finding(
+    file: &ParsedFile,
+    rule_id: &str,
+    key_name: &str,
+    severity: Severity,
+    symptom: &str,
+    rationale: &str,
+    section: Option<String>,
+) -> Finding {
+    Finding {
         rule_id: rule_id.into(),
         severity,
-        category: doc.category.clone(),
-        file_path: doc.file_path.clone(),
-        section: Some("ConsoleVariables".into()),
+        category: file.category,
+        file_path: file.path.clone(),
+        section: section.or_else(|| Some("ConsoleVariables".into())),
         key_name: Some(key_name.into()),
-        line_number: found.map(|entry| entry.line_number),
-        snippet_before: found
-            .map(|entry| entry.raw.clone())
-            .unwrap_or_else(|| "[ConsoleVariables]".into()),
+        line_number: None,
+        snippet_before: "(missing)".into(),
         snippet_after: Some(format!("{}=1", key_name)),
-        recommended_action: "set".into(),
+        recommended_action: RecommendedAction::Set,
         recommended_value: Some("1".into()),
         symptom: symptom.into(),
         rationale: rationale.into(),
-    })
-}
-
-fn mapped_drive_finding(doc: &IniDocument, entry: &IniEntry) -> Finding {
-    Finding {
-        rule_id: "R004".into(),
-        severity: Severity::Warning,
-        category: doc.category.clone(),
-        file_path: doc.file_path.clone(),
-        section: Some(entry.section.clone()),
-        key_name: Some(entry.key.clone()),
-        line_number: Some(entry.line_number),
-        snippet_before: entry.raw.clone(),
-        snippet_after: None,
-        recommended_action: "manual".into(),
-        recommended_value: None,
-        symptom: "Mapped drive paths are user-session specific and may not exist under SYSTEM or services.".into(),
-        rationale: "Use UNC paths for cross-machine cache paths.".into(),
     }
-}
-
-fn same_section(left: &str, right: &str) -> bool {
-    left.trim_matches(&['[', ']'][..]).eq_ignore_ascii_case(right)
-}
-
-pub fn normalized_key(key: &str) -> &str {
-    key.trim_start_matches(['+', '-', '!'])
-}
-
-fn is_mapped_drive(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    bytes.len() >= 3 && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/') && bytes[0].is_ascii_alphabetic()
-}
-
-fn strip_inline_comment(value: &str) -> &str {
-    for token in [" ;", " //"] {
-        if let Some(pos) = value.find(token) {
-            return value[..pos].trim();
-        }
-    }
-    value
-}
-
-fn truthy(value: &str) -> bool {
-    matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn ctx_with_env(value: Option<&str>) -> DiagnosticContext {
-        let mut ctx = DiagnosticContext::default();
-        ctx.env_vars.insert(SHARED_DDC_ENV.into(), value.map(str::to_string));
-        ctx
+    fn ddc_section(keys: &[(&str, &str)]) -> ParsedSection {
+        ParsedSection {
+            name: "/Script/UnrealEd.DerivedDataCacheSettings".into(),
+            keys: keys.iter().map(|(k, v)| ParsedKey {
+                name: k.to_string(),
+                value: v.to_string(),
+                line_number: 0,
+            }).collect(),
+        }
     }
 
     #[test]
-    fn r001_detects_hardcoded_path_without_env_override() {
-        let doc = parse_ini("DefaultEngine.ini", "project", "[/Script/UnrealEd.DerivedDataCacheSettings]\nPath=D:\\Old");
-        let findings = diagnose(&doc, &DiagnosticContext::default());
+    fn r001_critical_when_path_set_without_envpathoverride() {
+        let file = ParsedFile {
+            path: "C:\\Project\\Config\\DefaultEngine.ini".into(),
+            category: Category::Project,
+            sections: vec![ddc_section(&[("Path", "D:\\OldDDC")])],
+        };
+        let env_state = EnvVarState::default();
+        let findings = run_rules(&file, &env_state);
         assert!(findings.iter().any(|f| f.rule_id == "R001" && f.severity == Severity::Critical));
     }
 
     #[test]
-    fn r002_detects_user_level_ddc_override() {
-        let doc = parse_ini("EditorPerProjectUserSettings.ini", "user", "[/Script/UnrealEd.DerivedDataCacheSettings]\nPath=C:\\local");
-        assert!(diagnose(&doc, &DiagnosticContext::default()).iter().any(|f| f.rule_id == "R002"));
+    fn r001_healthy_when_envpathoverride_set_and_envvar_present() {
+        let file = ParsedFile {
+            path: "C:\\Project\\Config\\DefaultEngine.ini".into(),
+            category: Category::Project,
+            sections: vec![ddc_section(&[("EnvPathOverride", "UE-SharedDataCachePath")])],
+        };
+        let mut env_state = EnvVarState::default();
+        env_state.shared_data_cache_path = Some("\\\\HOST\\DDC".into());
+        let findings = run_rules(&file, &env_state);
+        assert!(findings.iter().any(|f| f.rule_id == "R007" && f.severity == Severity::Healthy));
     }
 
     #[test]
-    fn r004_detects_mapped_drive_path() {
-        let doc = parse_ini("DefaultEngine.ini", "project", "[/Script/UnrealEd.DerivedDataCacheSettings]\nPath=Z:\\DDC");
-        assert!(diagnose(&doc, &DiagnosticContext::default()).iter().any(|f| f.rule_id == "R004"));
+    fn r002_critical_when_user_level_file_has_ddc_section() {
+        let file = ParsedFile {
+            path: "C:\\Users\\X\\AppData\\Local\\UnrealEngine\\5.4\\Saved\\Config\\WindowsEditor\\EditorPerProjectUserSettings.ini".into(),
+            category: Category::User,
+            sections: vec![ddc_section(&[("Path", "C:\\local")])],
+        };
+        let findings = run_rules(&file, &EnvVarState::default());
+        assert!(findings.iter().any(|f| f.rule_id == "R002" && f.severity == Severity::Critical));
     }
 
     #[test]
-    fn r005_detects_deprecated_cvar() {
-        let doc = parse_ini("ConsoleVariables.ini", "project", "[Startup]\nr.SShaderCache=1");
-        assert!(diagnose(&doc, &DiagnosticContext::default()).iter().any(|f| f.rule_id == "R005"));
+    fn r004_warning_when_path_uses_drive_letter() {
+        let file = ParsedFile {
+            path: "C:\\Project\\Config\\DefaultEngine.ini".into(),
+            category: Category::Project,
+            sections: vec![ddc_section(&[("Path", "Z:\\DDC")])],
+        };
+        let findings = run_rules(&file, &EnvVarState::default());
+        assert!(findings.iter().any(|f| f.rule_id == "R004" && f.severity == Severity::Warning));
     }
 
     #[test]
-    fn r006_detects_missing_env_var() {
-        let doc = parse_ini("DefaultEngine.ini", "project", "[/Script/UnrealEd.DerivedDataCacheSettings]\nEnvPathOverride=UE-SharedDataCachePath");
-        assert!(diagnose(&doc, &DiagnosticContext::default()).iter().any(|f| f.rule_id == "R006"));
+    fn r005_warning_when_deprecated_cvar_present() {
+        let file = ParsedFile {
+            path: "C:\\Project\\Config\\ConsoleVariables.ini".into(),
+            category: Category::Project,
+            sections: vec![ParsedSection {
+                name: "Startup".into(),
+                keys: vec![ParsedKey {
+                    name: "r.SShaderCache".into(),
+                    value: "1".into(),
+                    line_number: 12,
+                }],
+            }],
+        };
+        let findings = run_rules(&file, &EnvVarState::default());
+        assert!(findings.iter().any(|f| f.rule_id == "R005" && f.severity == Severity::Warning));
     }
 
     #[test]
-    fn r007_reports_healthy_env_override() {
-        let doc = parse_ini("DefaultEngine.ini", "project", "[/Script/UnrealEd.DerivedDataCacheSettings]\nEnvPathOverride=UE-SharedDataCachePath");
-        assert!(diagnose(&doc, &ctx_with_env(Some("\\\\HOST\\DDC"))).iter().any(|f| f.rule_id == "R007"));
+    fn r006_warning_when_envoverride_set_but_envvar_empty() {
+        let file = ParsedFile {
+            path: "C:\\Project\\Config\\DefaultEngine.ini".into(),
+            category: Category::Project,
+            sections: vec![ddc_section(&[("EnvPathOverride", "UE-SharedDataCachePath")])],
+        };
+        let env_state = EnvVarState::default();
+        let findings = run_rules(&file, &env_state);
+        assert!(findings.iter().any(|f| f.rule_id == "R006" && f.severity == Severity::Warning));
+    }
+
+    fn console_variables(keys: &[(&str, &str)]) -> ParsedFile {
+        ParsedFile {
+            path: "C:\\Project\\Config\\ConsoleVariables.ini".into(),
+            category: Category::Project,
+            sections: vec![ParsedSection {
+                name: "ConsoleVariables".into(),
+                keys: keys
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, (k, v))| ParsedKey {
+                        name: k.to_string(),
+                        value: v.to_string(),
+                        line_number: idx + 1,
+                    })
+                    .collect(),
+            }],
+        }
     }
 
     #[test]
     fn r008_reports_critical_when_pso_precaching_is_missing() {
-        let doc = parse_ini(
-            "C:\\Project\\Config\\ConsoleVariables.ini",
-            "project",
-            "[ConsoleVariables]\nr.PSOPrecache.Compile=1\nr.PSOPrecache.GlobalShaders=1",
-        );
-        let findings = diagnose(&doc, &DiagnosticContext::default());
-        assert!(findings.iter().any(|finding| finding.rule_id == "R008" && finding.severity == Severity::Critical));
+        let file = console_variables(&[
+            ("r.PSOPrecache.Compile", "1"),
+            ("r.PSOPrecache.GlobalShaders", "1"),
+        ]);
+        let findings = run_rules(&file, &EnvVarState::default());
+        assert!(findings
+            .iter()
+            .any(|f| f.rule_id == "R008" && f.severity == Severity::Critical));
     }
 
     #[test]
     fn r009_reports_warning_when_pso_compile_is_off() {
-        let doc = parse_ini(
-            "C:\\Project\\Config\\ConsoleVariables.ini",
-            "project",
-            "[ConsoleVariables]\nr.PSOPrecaching=1\nr.PSOPrecache.Compile=0\nr.PSOPrecache.GlobalShaders=1",
-        );
-        let findings = diagnose(&doc, &DiagnosticContext::default());
-        assert!(findings.iter().any(|finding| finding.rule_id == "R009" && finding.recommended_action == "set"));
+        let file = console_variables(&[
+            ("r.PSOPrecaching", "1"),
+            ("r.PSOPrecache.Compile", "0"),
+            ("r.PSOPrecache.GlobalShaders", "1"),
+        ]);
+        let findings = run_rules(&file, &EnvVarState::default());
+        assert!(findings
+            .iter()
+            .any(|f| f.rule_id == "R009" && f.recommended_action == RecommendedAction::Set));
     }
 
     #[test]
-    fn r010_reports_warning_when_global_shader_precache_is_missing() {
-        let doc = parse_ini(
-            "C:\\Project\\Config\\ConsoleVariables.ini",
-            "project",
-            "[ConsoleVariables]\nr.PSOPrecaching=1\nr.PSOPrecache.Compile=1",
-        );
-        let findings = diagnose(&doc, &DiagnosticContext::default());
-        assert!(findings.iter().any(|finding| finding.rule_id == "R010" && finding.recommended_value.as_deref() == Some("1")));
+    fn r010_reports_warning_when_global_shader_pso_is_missing() {
+        let file = console_variables(&[
+            ("r.PSOPrecaching", "1"),
+            ("r.PSOPrecache.Compile", "1"),
+        ]);
+        let findings = run_rules(&file, &EnvVarState::default());
+        assert!(findings
+            .iter()
+            .any(|f| f.rule_id == "R010" && f.recommended_value.as_deref() == Some("1")));
     }
 
     #[test]
     fn pso_rules_are_clean_when_all_required_cvars_are_enabled() {
-        let doc = parse_ini(
-            "C:\\Project\\Config\\ConsoleVariables.ini",
-            "project",
-            "[ConsoleVariables]\nr.PSOPrecaching=1\nr.PSOPrecache.Compile=1\nr.PSOPrecache.GlobalShaders=1",
-        );
-        let findings = diagnose(&doc, &DiagnosticContext::default());
-        assert!(!findings.iter().any(|finding| matches!(finding.rule_id.as_str(), "R008" | "R009" | "R010")));
+        let file = console_variables(&[
+            ("r.PSOPrecaching", "1"),
+            ("r.PSOPrecache.Compile", "1"),
+            ("r.PSOPrecache.GlobalShaders", "1"),
+        ]);
+        let findings = run_rules(&file, &EnvVarState::default());
+        assert!(!findings
+            .iter()
+            .any(|f| matches!(f.rule_id.as_str(), "R008" | "R009" | "R010")));
     }
 }

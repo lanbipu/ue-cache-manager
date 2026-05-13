@@ -43,7 +43,7 @@ const machineGpuMap = computed(() => {
     out.set(
       cell.machine_id,
       cell.signature
-        ? `${cell.signature.vendor}:${cell.signature.model}:${cell.signature.driver}`
+        ? normalizeGpuSignature(`${cell.signature.vendor}:${cell.signature.model}:${cell.signature.driver}`)
         : null,
     );
   }
@@ -61,7 +61,7 @@ const candidateMachines = computed(() => {
         hostname: machine.hostname,
         ip: machine.ip,
         signature,
-        matches: signature === props.file?.gpu_signature,
+        matches: signature === normalizeGpuSignature(props.file?.gpu_signature ?? ""),
       };
     });
 });
@@ -116,6 +116,13 @@ async function run() {
   } finally {
     isSubmitting.value = false;
   }
+}
+
+function normalizeGpuSignature(value: string) {
+  return value
+    .split(":")
+    .map((part) => part.trim().replace(/\s+/g, " ").toLowerCase())
+    .join(":");
 }
 </script>
 

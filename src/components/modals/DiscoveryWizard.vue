@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import BaseModal from "./BaseModal.vue";
 import { useDiscoveryStore } from "@/stores/discovery";
 import { useMachinesStore } from "@/stores/machines";
@@ -7,6 +8,7 @@ import { useMachinesStore } from "@/stores/machines";
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<{ (e: "close"): void }>();
 
+const { t } = useI18n();
 const discovery = useDiscoveryStore();
 const machines = useMachinesStore();
 const cidrInput = ref(discovery.cidr);
@@ -28,9 +30,9 @@ async function onAdd(ip: string) {
 </script>
 
 <template>
-  <BaseModal :open="props.open" title="Scan network" @close="emit('close')">
+  <BaseModal :open="props.open" :title="t('modal.discovery.title')" @close="emit('close')">
     <div>
-      <label class="block text-sm mb-1">CIDR (max 1024 hosts)</label>
+      <label class="block text-sm mb-1">{{ t("modal.discovery.cidrLabel") }}</label>
       <div class="flex gap-2">
         <input
           data-cidr-input
@@ -44,7 +46,7 @@ async function onAdd(ip: string) {
           class="px-3 py-1 text-sm bg-gray-200 rounded hover:bg-gray-300 disabled:opacity-50"
           @click="onScan"
         >
-          {{ discovery.isScanning ? "Scanning..." : "Scan" }}
+          {{ discovery.isScanning ? t("common.scanning") : t("machines.scan") }}
         </button>
       </div>
 
@@ -54,14 +56,14 @@ async function onAdd(ip: string) {
 
       <div class="mt-4">
         <p v-if="!discovery.isScanning && discovery.probed.length === 0" class="text-sm text-gray-500">
-          No hosts probed yet, or last scan returned no reachable hosts.
+          {{ t("modal.discovery.noHosts") }}
         </p>
         <table v-else class="w-full text-sm border">
           <thead class="bg-gray-50">
             <tr>
-              <th class="text-left px-2 py-1">IP</th>
-              <th class="text-left px-2 py-1">WinRM</th>
-              <th class="text-left px-2 py-1">SMB</th>
+              <th class="text-left px-2 py-1">{{ t("modal.discovery.headerIp") }}</th>
+              <th class="text-left px-2 py-1">{{ t("modal.discovery.headerWinrm") }}</th>
+              <th class="text-left px-2 py-1">{{ t("modal.discovery.headerSmb") }}</th>
               <th class="px-2 py-1"></th>
             </tr>
           </thead>
@@ -81,7 +83,7 @@ async function onAdd(ip: string) {
                   class="text-xs px-2 py-0.5 border rounded hover:bg-gray-100"
                   @click="onAdd(host.ip)"
                 >
-                  Add
+                  {{ t("common.add") }}
                 </button>
               </td>
             </tr>
@@ -91,7 +93,7 @@ async function onAdd(ip: string) {
     </div>
     <template #footer>
       <button class="px-3 py-1 text-sm border rounded hover:bg-gray-100" @click="emit('close')">
-        Done
+        {{ t("common.done") }}
       </button>
     </template>
   </BaseModal>

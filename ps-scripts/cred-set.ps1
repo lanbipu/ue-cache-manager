@@ -8,6 +8,8 @@ param(
     [Parameter(Mandatory=$true)] [string]$Password
 )
 
+[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
+
 $ErrorActionPreference = 'Stop'
 
 try {

@@ -1,5 +1,8 @@
 <script setup lang="ts">
+import { useI18n } from "vue-i18n";
 import type { BatchEvent, Machine } from "@/services/tauri";
+
+const { t } = useI18n();
 
 defineProps<{
   machines: Machine[];
@@ -26,8 +29,8 @@ function statusClass(status: string | undefined): string {
     <thead class="bg-gray-50">
       <tr>
         <th class="text-left px-2 py-1 w-8"></th>
-        <th class="text-left px-2 py-1">Machine</th>
-        <th class="text-left px-2 py-1">Message</th>
+        <th class="text-left px-2 py-1">{{ t("batchTable.headerMachine") }}</th>
+        <th class="text-left px-2 py-1">{{ t("batchTable.headerMessage") }}</th>
       </tr>
     </thead>
     <tbody>
