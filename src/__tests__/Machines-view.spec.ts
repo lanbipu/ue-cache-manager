@@ -9,6 +9,9 @@ const { mockApi } = vi.hoisted(() => ({
     deleteMachine: vi.fn(),
     getMachineDetail: vi.fn(),
     refreshMachine: vi.fn(),
+    bootstrapWinrm: vi.fn(),
+    getWinrmBootstrapScript: vi.fn(),
+    listCredentials: vi.fn(),
     scanNetwork: vi.fn(),
     addDiscoveredMachine: vi.fn(),
   },
@@ -24,6 +27,7 @@ describe("Machines view", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     Object.values(mockApi).forEach((m: any) => m.mockReset());
+    mockApi.listCredentials.mockResolvedValue([]);
   });
 
   it("shows empty state when no machines", async () => {

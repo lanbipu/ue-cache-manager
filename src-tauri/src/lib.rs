@@ -40,6 +40,8 @@ pub fn run() {
             commands::machines::delete_machine,
             commands::machines::rename_machine,
             commands::machines::get_machine_detail,
+            commands::bootstrap::bootstrap_winrm,
+            commands::bootstrap::get_winrm_bootstrap_script,
             commands::discovery::scan_network,
             commands::discovery::add_discovered_machine,
             commands::discovery::refresh_machine,

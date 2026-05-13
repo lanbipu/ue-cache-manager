@@ -1,4 +1,5 @@
 pub mod batch;
+pub mod bootstrap;
 pub mod credentials;
 pub mod ddc_pak;
 pub mod discovery;
