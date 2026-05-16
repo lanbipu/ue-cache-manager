@@ -111,8 +111,12 @@ pub enum WinrmAction {
         host: String,
         #[arg(long)]
         user: String,
-        #[arg(long)]
-        pass: String,
+        /// Password (leaks into shell history; prefer --pass-stdin).
+        #[arg(long, group = "bootstrap_secret", conflicts_with = "pass_stdin")]
+        pass: Option<String>,
+        /// Read password from stdin (one line).
+        #[arg(long, group = "bootstrap_secret", conflicts_with = "pass")]
+        pass_stdin: bool,
         #[arg(long)]
         enable_local_admin: bool,
     },

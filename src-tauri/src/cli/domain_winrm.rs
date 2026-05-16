@@ -19,10 +19,28 @@ pub fn handle(ctx: &mut Ctx<'_>, action: WinrmAction) -> UecmResult<()> {
     match action {
         WinrmAction::Probe { host } => probe(ctx, &host),
         WinrmAction::BootstrapScript { output } => bootstrap_script(ctx, output),
-        WinrmAction::Bootstrap { host, user, pass, enable_local_admin } => {
-            bootstrap_remote(ctx, &host, &user, &pass, enable_local_admin)
+        WinrmAction::Bootstrap { host, user, pass, pass_stdin, enable_local_admin } => {
+            let password = read_bootstrap_password(pass.as_deref(), pass_stdin)?;
+            bootstrap_remote(ctx, &host, &user, &password, enable_local_admin)
         }
     }
+}
+
+fn read_bootstrap_password(pass_inline: Option<&str>, pass_stdin: bool) -> UecmResult<String> {
+    use std::io::{self, BufRead};
+    if let Some(p) = pass_inline {
+        return Ok(p.to_string());
+    }
+    if pass_stdin {
+        let mut line = String::new();
+        io::stdin().lock().read_line(&mut line).map_err(|e| {
+            UecmError::InvalidInput(format!("read password from stdin: {}", e))
+        })?;
+        return Ok(line.trim_end_matches(['\r', '\n']).to_string());
+    }
+    Err(UecmError::InvalidInput(
+        "winrm bootstrap requires --pass or --pass-stdin".into(),
+    ))
 }
 
 fn probe(ctx: &mut Ctx<'_>, host: &str) -> UecmResult<()> {
