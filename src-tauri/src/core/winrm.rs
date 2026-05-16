@@ -68,7 +68,7 @@ pub fn invoke(host: &str, script_body: &str) -> UecmResult<String> {
         .map_err(|e| UecmError::PowerShell(format!("wait failed: {}", e)))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let stderr = powershell::decode_subprocess_output(&output.stderr);
         return Err(UecmError::PowerShell(format!(
             "remote invoke failed (exit {}): {}",
             output.status.code().unwrap_or(-1),
@@ -76,7 +76,7 @@ pub fn invoke(host: &str, script_body: &str) -> UecmResult<String> {
         )));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(powershell::decode_subprocess_output(&output.stdout))
 }
 
 #[cfg(not(windows))]
@@ -141,7 +141,7 @@ pub fn invoke_with_credential(
         .map_err(|e| UecmError::PowerShell(format!("wait failed: {}", e)))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let stderr = powershell::decode_subprocess_output(&output.stderr);
         return Err(UecmError::PowerShell(format!(
             "remote invoke failed (exit {}): {}",
             output.status.code().unwrap_or(-1),
@@ -149,7 +149,7 @@ pub fn invoke_with_credential(
         )));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(powershell::decode_subprocess_output(&output.stdout))
 }
 
 #[cfg(not(windows))]
@@ -198,7 +198,7 @@ fn invoke_local(script_body: &str) -> UecmResult<String> {
         .map_err(|e| UecmError::PowerShell(format!("wait failed: {}", e)))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let stderr = powershell::decode_subprocess_output(&output.stderr);
         return Err(UecmError::PowerShell(format!(
             "local invoke failed (exit {}): {}",
             output.status.code().unwrap_or(-1),
@@ -206,7 +206,7 @@ fn invoke_local(script_body: &str) -> UecmResult<String> {
         )));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(powershell::decode_subprocess_output(&output.stdout))
 }
 
 /// Invoke a remote script and parse stdout as JSON of type T.

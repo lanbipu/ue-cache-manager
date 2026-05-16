@@ -297,8 +297,8 @@ fn run_local_robocopy(
             .output()
             .map_err(UecmError::Io)?;
         let code = output.status.code().unwrap_or(-1);
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let stdout = powershell::decode_subprocess_output(&output.stdout);
+        let stderr = powershell::decode_subprocess_output(&output.stderr);
         let stdout_tail = stdout
             .lines()
             .rev()
