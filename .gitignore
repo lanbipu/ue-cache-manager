@@ -52,6 +52,7 @@ coverage/
 # Local Claude worktrees + runtime
 .claude/worktrees/
 .claire/worktrees/
+.worktrees/
 .claude/scheduled_tasks.lock
 
 # Tauri build output
