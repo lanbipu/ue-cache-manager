@@ -58,14 +58,20 @@ fn migrate_db(ctx: &mut Ctx<'_>) -> UecmResult<()> {
     Ok(())
 }
 
-fn echo(_ctx: &mut Ctx<'_>, _message: &str) -> UecmResult<()> {
-    // Implemented in Task 2.3.
-    Err(crate::error::UecmError::OperationFailed("echo: pending Task 2.3".into()))
+fn echo(ctx: &mut Ctx<'_>, message: &str) -> UecmResult<()> {
+    let result: serde_json::Value = crate::core::powershell::run_json(
+        &crate::core::powershell::script_path("test-echo.ps1"),
+        &["-Message", message],
+    )?;
+    ctx.emitter.emit_value(&result).ok();
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::output::{Emitter, NdjsonEmitter};
+    use crate::data::open_in_memory;
 
     #[test]
     fn test_version_info() {
@@ -82,5 +88,25 @@ mod tests {
         let info = PathInfo { path: "/some/path".to_string() };
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["path"], "/some/path");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn echo_returns_powershell_error_on_non_windows() {
+        let db = open_in_memory().unwrap();
+        {
+            let mut conn = db.lock().unwrap();
+            crate::data::schema::migrate(&mut conn).unwrap();
+        }
+        let mut buf: Vec<u8> = Vec::new();
+        let emitter: Box<dyn Emitter> = Box::new(NdjsonEmitter::new(&mut buf));
+        let mut ctx = Ctx {
+            db: Some(db),
+            db_path: std::path::PathBuf::from(":memory:"),
+            emitter,
+            json_mode: true,
+        };
+        let result = echo(&mut ctx, "hello");
+        assert!(matches!(result, Err(crate::error::UecmError::PowerShell(_))));
     }
 }
