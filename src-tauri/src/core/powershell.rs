@@ -35,28 +35,12 @@ pub(crate) fn decode_subprocess_output(bytes: &[u8]) -> String {
     }
 }
 
-/// Resolve a sidecar script name to its on-disk path. Searches in this order:
+/// Resolve a sidecar script name to its on-disk path.
+/// Respects `UECM_PS_DIR` env override, then searches:
 ///   1. `<exe-dir>/ps-scripts/<name>` — production install (Tauri bundle.resources)
-///   2. `<ancestor>/ps-scripts/<name>` walking up from the exe — `cargo build` /
-///      `cargo test` / `tauri dev` (exe lives under `target/{debug,release,...}`)
-///   3. `..\ps-scripts\<name>` relative to cwd — fallback for unusual launchers
-///      where `current_exe()` is unavailable
+///   2. `<repo-root>/ps-scripts/<name>` — dev builds via `CARGO_MANIFEST_DIR`
 pub fn script_path(name: &str) -> PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            let bundled = exe_dir.join("ps-scripts").join(name);
-            if bundled.exists() {
-                return bundled;
-            }
-            for ancestor in exe_dir.ancestors().take(8) {
-                let candidate = ancestor.join("ps-scripts").join(name);
-                if candidate.exists() {
-                    return candidate;
-                }
-            }
-        }
-    }
-    Path::new("..").join("ps-scripts").join(name)
+    crate::startup::resolve_ps_script_dir().join(name)
 }
 
 /// Load a sidecar script's text. Used when the script body is forwarded over
@@ -65,24 +49,27 @@ pub fn read_script(name: &str) -> UecmResult<String> {
     Ok(fs::read_to_string(script_path(name))?)
 }
 
-/// Resolve a vendored binary's on-disk path (e.g. `PsExec64.exe`). Mirrors the
-/// `script_path` lookup chain but searches `vendor/` instead of `ps-scripts/`.
+/// Resolve a vendored binary's on-disk path (e.g. `PsExec64.exe`).
+/// Respects `UECM_VENDOR_DIR` env override, then searches:
+///   1. `<exe-dir>/vendor/<name>` — production install
+///   2. `<repo-root>/vendor/<name>` — dev builds via `CARGO_MANIFEST_DIR`
 pub fn vendor_path(name: &str) -> PathBuf {
+    if let Ok(over) = std::env::var("UECM_VENDOR_DIR") {
+        return PathBuf::from(over).join(name);
+    }
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            let bundled = exe_dir.join("vendor").join(name);
-            if bundled.exists() {
-                return bundled;
-            }
-            for ancestor in exe_dir.ancestors().take(8) {
-                let candidate = ancestor.join("vendor").join(name);
-                if candidate.exists() {
-                    return candidate;
-                }
+        if let Some(parent) = exe.parent() {
+            let candidate = parent.join("vendor").join(name);
+            if candidate.exists() {
+                return candidate;
             }
         }
     }
-    Path::new("..").join("vendor").join(name)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("vendor")
+        .join(name)
 }
 
 #[derive(Debug)]
@@ -159,8 +146,12 @@ pub fn run_json<T: DeserializeOwned>(script_path: &Path, args: &[&str]) -> UecmR
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     #[cfg(windows)]
     use serde::Deserialize;
+
+    /// Mutex to serialize env var tests to prevent parallel execution race conditions.
+    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[cfg(windows)]
     #[derive(Debug, Deserialize)]
@@ -213,5 +204,14 @@ mod tests {
         let decoded = decode_subprocess_output(gbk_bytes);
         assert_eq!(decoded, "无法找到文件");
         assert!(!decoded.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn script_path_respects_env_override() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        std::env::set_var("UECM_PS_DIR", "/tmp/test-ps-override");
+        let p = script_path("foo.ps1");
+        assert_eq!(p, std::path::PathBuf::from("/tmp/test-ps-override/foo.ps1"));
+        std::env::remove_var("UECM_PS_DIR");
     }
 }
