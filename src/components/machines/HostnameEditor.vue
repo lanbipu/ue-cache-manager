@@ -47,7 +47,7 @@ function commit() {
     ref="inputEl"
     v-model="draft"
     data-hostname-input
-    class="text-xl font-semibold border rounded px-2 py-0.5"
+    class="rounded border border-input bg-transparent px-2 py-0.5 text-xl font-semibold text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     @keyup.enter="commit"
     @keyup.escape="cancel"
     @blur="commit"

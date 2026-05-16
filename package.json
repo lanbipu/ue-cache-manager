@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "vue-tsc -b --noEmit"
+    "typecheck": "vue-tsc -b --noEmit",
+    "deploy:lanpc": "bash scripts/deploy-lanpc.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

@@ -53,7 +53,7 @@ async function onDelete(a: string) {
   <BaseModal :open="props.open" :title="t('modal.credential.title')" @close="emit('close')">
     <section>
       <h3 class="text-sm font-medium mb-2">{{ t("modal.credential.stored") }}</h3>
-      <p v-if="store.credentials.length === 0" class="text-sm text-gray-500">
+      <p v-if="store.credentials.length === 0" class="text-sm text-muted-foreground">
         {{ t("modal.credential.empty") }}
       </p>
       <table v-else class="w-full border-collapse text-sm">

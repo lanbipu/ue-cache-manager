@@ -38,32 +38,32 @@ async function onAdd(ip: string) {
           data-cidr-input
           v-model="cidrInput"
           placeholder="192.168.10.0/24"
-          class="flex-1 border rounded px-2 py-1 text-sm"
+          class="flex-1 rounded border border-input bg-transparent px-2 py-1 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />
         <button
           data-scan-btn
           :disabled="discovery.isScanning"
-          class="px-3 py-1 text-sm bg-gray-200 rounded hover:bg-gray-300 disabled:opacity-50"
+          class="rounded bg-primary px-3 py-1 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           @click="onScan"
         >
           {{ discovery.isScanning ? t("common.scanning") : t("machines.scan") }}
         </button>
       </div>
 
-      <p v-if="discovery.error" class="mt-2 text-xs text-red-600">
+      <p v-if="discovery.error" class="mt-2 text-xs text-destructive">
         {{ discovery.error.message }}
       </p>
 
       <div class="mt-4">
-        <p v-if="!discovery.isScanning && discovery.probed.length === 0" class="text-sm text-gray-500">
+        <p v-if="!discovery.isScanning && discovery.probed.length === 0" class="text-sm text-muted-foreground">
           {{ t("modal.discovery.noHosts") }}
         </p>
         <table v-else class="w-full text-sm border">
-          <thead class="bg-gray-50">
+          <thead class="bg-muted/40 text-muted-foreground">
             <tr>
-              <th class="text-left px-2 py-1">{{ t("modal.discovery.headerIp") }}</th>
-              <th class="text-left px-2 py-1">{{ t("modal.discovery.headerWinrm") }}</th>
-              <th class="text-left px-2 py-1">{{ t("modal.discovery.headerSmb") }}</th>
+              <th class="text-left px-2 py-1 font-medium">{{ t("modal.discovery.headerIp") }}</th>
+              <th class="text-left px-2 py-1 font-medium">{{ t("modal.discovery.headerWinrm") }}</th>
+              <th class="text-left px-2 py-1 font-medium">{{ t("modal.discovery.headerSmb") }}</th>
               <th class="px-2 py-1"></th>
             </tr>
           </thead>
@@ -80,7 +80,7 @@ async function onAdd(ip: string) {
               <td class="px-2 py-1 text-right">
                 <button
                   data-add-btn
-                  class="text-xs px-2 py-0.5 border rounded hover:bg-gray-100"
+                  class="rounded border border-input px-2 py-0.5 text-xs hover:bg-accent hover:text-accent-foreground"
                   @click="onAdd(host.ip)"
                 >
                   {{ t("common.add") }}
@@ -92,7 +92,7 @@ async function onAdd(ip: string) {
       </div>
     </div>
     <template #footer>
-      <button class="px-3 py-1 text-sm border rounded hover:bg-gray-100" @click="emit('close')">
+      <button class="rounded border border-input px-3 py-1 text-sm hover:bg-accent hover:text-accent-foreground" @click="emit('close')">
         {{ t("common.done") }}
       </button>
     </template>

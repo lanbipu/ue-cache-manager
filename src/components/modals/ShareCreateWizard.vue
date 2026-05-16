@@ -130,7 +130,7 @@ async function onCreate() {
           />
           <span>
             <span class="font-medium">{{ t("modal.shareWizard.modeOpenTitle") }}</span>
-            <span class="block text-xs text-gray-500">
+            <span class="block text-xs text-muted-foreground">
               {{ t("modal.shareWizard.modeOpenHint") }}
             </span>
           </span>
@@ -145,7 +145,7 @@ async function onCreate() {
           />
           <span>
             <span class="font-medium">{{ t("modal.shareWizard.modeManagedTitle") }}</span>
-            <span class="block text-xs text-gray-500">
+            <span class="block text-xs text-muted-foreground">
               {{ t("modal.shareWizard.modeManagedHint") }}
             </span>
           </span>
@@ -157,7 +157,7 @@ async function onCreate() {
         <select
           data-host-select
           :value="hostMachineId ?? ''"
-          class="w-full border rounded px-2 py-1 text-sm"
+          class="w-full rounded border border-input bg-transparent px-2 py-1 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           @change="onHostChange"
         >
           <option value="" disabled>{{ t("modal.shareWizard.selectMachinePlaceholder") }}</option>
@@ -165,7 +165,7 @@ async function onCreate() {
             {{ m.hostname }} ({{ m.ip }})
           </option>
         </select>
-        <p v-if="machines.machines.length === 0" class="mt-2 text-xs text-gray-500">
+        <p v-if="machines.machines.length === 0" class="mt-2 text-xs text-muted-foreground">
           {{ t("modal.shareWizard.noMachinesHint") }}
         </p>
       </div>
@@ -175,27 +175,27 @@ async function onCreate() {
         <input
           data-share-name-input
           v-model="shareName"
-          class="w-full border rounded px-2 py-1 text-sm mb-3"
+          class="mb-3 w-full rounded border border-input bg-transparent px-2 py-1 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />
         <label class="block text-sm mb-1">{{ t("modal.shareWizard.localPath") }}</label>
         <input
           data-local-path-input
           v-model="localPath"
-          class="w-full border rounded px-2 py-1 text-sm mb-3"
+          class="mb-3 w-full rounded border border-input bg-transparent px-2 py-1 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />
         <template v-if="mode === 'managed'">
           <label class="block text-sm mb-1">{{ t("modal.shareWizard.svcUsername") }}</label>
           <input
             data-svc-user-input
             v-model="svcUsername"
-            class="w-full border rounded px-2 py-1 text-sm mb-3"
+            class="mb-3 w-full rounded border border-input bg-transparent px-2 py-1 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
         </template>
         <label class="block text-sm mb-1">{{ t("modal.shareWizard.operatorCredential") }}</label>
         <select
           data-operator-cred-select
           v-model="operatorAlias"
-          class="w-full border rounded px-2 py-1 text-sm"
+          class="w-full rounded border border-input bg-transparent px-2 py-1 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <option :value="null">{{ t("modal.shareWizard.operatorPlaceholder") }}</option>
           <option
@@ -206,7 +206,7 @@ async function onCreate() {
             {{ c.alias }} ({{ c.username }})
           </option>
         </select>
-        <p class="mt-1 text-xs text-gray-500">
+        <p class="mt-1 text-xs text-muted-foreground">
           {{ t("modal.shareWizard.operatorOnlyWinrm") }}
         </p>
       </div>
@@ -215,15 +215,15 @@ async function onCreate() {
         <p class="text-sm mb-2">{{ t("modal.shareWizard.previewHint") }}</p>
         <pre
           data-preview
-          class="text-xs bg-gray-100 rounded p-2 whitespace-pre-wrap font-mono"
+          class="whitespace-pre-wrap rounded bg-muted/40 p-2 font-mono text-xs text-foreground"
         >{{ previewLines.join("\n") }}</pre>
-        <p v-if="submitError" data-submit-error class="mt-2 text-xs text-red-600">
+        <p v-if="submitError" data-submit-error class="mt-2 text-xs text-destructive">
           {{ submitError }}
         </p>
         <p
           v-if="successUnc"
           data-submit-success
-          class="mt-2 text-xs text-green-600"
+          class="mt-2 text-xs text-emerald-600 dark:text-emerald-400"
         >
           {{ t("modal.shareWizard.createdPrefix") }}{{ successUnc }}
         </p>
@@ -233,7 +233,7 @@ async function onCreate() {
     <template #footer>
       <button
         v-if="step > 1 && !successUnc"
-        class="px-3 py-1 text-sm border rounded hover:bg-gray-100"
+        class="rounded border border-input px-3 py-1 text-sm hover:bg-accent hover:text-accent-foreground"
         @click="back"
       >
         {{ t("common.back") }}
@@ -242,7 +242,7 @@ async function onCreate() {
         v-if="step < 4"
         data-next-btn
         :disabled="!canAdvanceFrom"
-        class="px-3 py-1 text-sm bg-gray-200 rounded hover:bg-gray-300 disabled:opacity-50"
+        class="rounded bg-secondary px-3 py-1 text-sm font-medium text-secondary-foreground hover:bg-secondary/80 disabled:opacity-50"
         @click="next"
       >
         {{ t("common.next") }}
@@ -251,13 +251,13 @@ async function onCreate() {
         v-if="step === 4 && !successUnc"
         data-create-btn
         :disabled="isSubmitting"
-        class="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+        class="rounded bg-primary px-3 py-1 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
         @click="onCreate"
       >
         {{ isSubmitting ? t("common.creating") : t("common.create") }}
       </button>
       <button
-        class="px-3 py-1 text-sm border rounded hover:bg-gray-100"
+        class="rounded border border-input px-3 py-1 text-sm hover:bg-accent hover:text-accent-foreground"
         @click="emit('close')"
       >
         {{ successUnc ? t("common.done") : t("common.cancel") }}

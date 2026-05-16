@@ -103,7 +103,7 @@ describe("MachineDetail", () => {
     const badge = wrapper.find("[data-status-badge]");
     expect(badge.exists()).toBe(true);
     expect(badge.text()).toBe("online");
-    expect(badge.classes()).toContain("bg-green-500");
+    expect(badge.classes()).toContain("bg-emerald-500");
     expect(badge.classes()).toContain("text-white");
   });
 
@@ -127,7 +127,7 @@ describe("MachineDetail", () => {
     const badge = wrapper.find("[data-status-badge]");
     expect(badge.exists()).toBe(true);
     expect(badge.text()).toBe("offline");
-    expect(badge.classes()).toContain("bg-red-500");
+    expect(badge.classes()).toContain("bg-rose-500");
     expect(badge.classes()).toContain("text-white");
   });
 
@@ -151,8 +151,8 @@ describe("MachineDetail", () => {
     const badge = wrapper.find("[data-status-badge]");
     expect(badge.exists()).toBe(true);
     expect(badge.text()).toBe("unknown");
-    expect(badge.classes()).toContain("bg-gray-400");
-    expect(badge.classes()).toContain("text-white");
+    expect(badge.classes()).toContain("bg-muted");
+    expect(badge.classes()).toContain("text-muted-foreground");
   });
 
   it("clicking refresh button calls store.refreshSelected", async () => {

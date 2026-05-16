@@ -70,26 +70,26 @@ async function onApply() {
 <template>
   <BaseModal :open="props.open" :title="t('modal.batchEnv.title')" @close="emit('close')">
     <div data-batch-env-modal>
-      <p class="text-sm mb-2 text-gray-600">
+      <p class="text-sm mb-2 text-muted-foreground">
         {{ applyToLabel }}
       </p>
       <label class="block text-sm mb-1">{{ t("modal.batchEnv.varName") }}</label>
       <input
         data-env-name
         v-model="name"
-        class="w-full border rounded px-2 py-1 text-sm mb-3"
+        class="mb-3 w-full rounded border border-input bg-transparent px-2 py-1 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
       <label class="block text-sm mb-1">{{ t("modal.batchEnv.value") }}</label>
       <input
         data-env-value
         v-model="value"
-        class="w-full border rounded px-2 py-1 text-sm mb-3"
+        class="mb-3 w-full rounded border border-input bg-transparent px-2 py-1 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
       <label class="block text-sm mb-1">{{ t("modal.batchEnv.credentialAlias") }}</label>
       <select
         data-env-cred
         v-model="credentialAlias"
-        class="w-full border rounded px-2 py-1 text-sm mb-3"
+        class="mb-3 w-full rounded border border-input bg-transparent px-2 py-1 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <option value="" disabled>{{ t("modal.batchEnv.selectCredentialPlaceholder") }}</option>
         <option v-for="c in credentials.credentials" :key="c.id ?? c.alias" :value="c.alias">
@@ -99,7 +99,7 @@ async function onApply() {
 
       <BatchProgressTable :machines="targetMachines" :by-machine="batch.byMachine" />
 
-      <p v-if="submitError" data-batch-error class="mt-2 text-xs text-red-600">
+      <p v-if="submitError" data-batch-error class="mt-2 text-xs text-destructive">
         {{ submitError }}
       </p>
     </div>
@@ -108,12 +108,12 @@ async function onApply() {
       <button
         data-batch-apply-btn
         :disabled="!canApply"
-        class="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+        class="rounded bg-primary px-3 py-1 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
         @click="onApply"
       >
         {{ batch.isRunning ? t("common.running") : t("common.apply") }}
       </button>
-      <button class="px-3 py-1 text-sm border rounded hover:bg-gray-100" @click="emit('close')">
+      <button class="rounded border border-input px-3 py-1 text-sm hover:bg-accent hover:text-accent-foreground" @click="emit('close')">
         {{ t("common.close") }}
       </button>
     </template>

@@ -17,20 +17,20 @@ function statusGlyph(status: string | undefined): string {
 }
 
 function statusClass(status: string | undefined): string {
-  if (status === "ok") return "text-green-600";
-  if (status === "err") return "text-red-600";
-  if (status === "running") return "text-blue-600";
-  return "text-gray-400";
+  if (status === "ok") return "text-emerald-600 dark:text-emerald-400";
+  if (status === "err") return "text-destructive";
+  if (status === "running") return "text-primary";
+  return "text-muted-foreground";
 }
 </script>
 
 <template>
   <table data-batch-progress class="w-full text-sm border">
-    <thead class="bg-gray-50">
+    <thead class="bg-muted/40 text-muted-foreground">
       <tr>
         <th class="text-left px-2 py-1 w-8"></th>
-        <th class="text-left px-2 py-1">{{ t("batchTable.headerMachine") }}</th>
-        <th class="text-left px-2 py-1">{{ t("batchTable.headerMessage") }}</th>
+        <th class="text-left px-2 py-1 font-medium">{{ t("batchTable.headerMachine") }}</th>
+        <th class="text-left px-2 py-1 font-medium">{{ t("batchTable.headerMessage") }}</th>
       </tr>
     </thead>
     <tbody>
@@ -48,9 +48,9 @@ function statusClass(status: string | undefined): string {
         </td>
         <td class="px-2 py-1">
           {{ m.hostname }}
-          <span class="text-xs text-gray-500 ml-1">{{ m.ip }}</span>
+          <span class="text-xs text-muted-foreground ml-1">{{ m.ip }}</span>
         </td>
-        <td class="px-2 py-1 text-xs text-gray-600 truncate max-w-xs">
+        <td class="px-2 py-1 text-xs text-muted-foreground truncate max-w-xs">
           {{ m.id != null ? (byMachine.get(m.id)?.message ?? "") : "" }}
         </td>
       </tr>

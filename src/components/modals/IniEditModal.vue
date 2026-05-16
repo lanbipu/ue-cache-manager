@@ -76,7 +76,7 @@ async function onApply() {
 <template>
   <BaseModal :open="props.open" :title="t('modal.iniEdit.title')" @close="emit('close')">
     <div>
-      <p class="text-xs text-gray-500 mb-2">
+      <p class="text-xs text-muted-foreground mb-2">
         {{ t("modal.iniEdit.hint") }}
       </p>
 
@@ -85,7 +85,7 @@ async function onApply() {
         data-ini-path
         v-model="filePath"
         placeholder="C:\\Path\\To\\Project\\Config\\DefaultEngine.ini"
-        class="w-full border rounded px-2 py-1 text-sm font-mono mb-2"
+        class="mb-2 w-full rounded border border-input bg-transparent px-2 py-1 font-mono text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
 
       <label class="block text-sm mb-1">{{ t("modal.iniEdit.sectionLabel") }}</label>
@@ -93,13 +93,13 @@ async function onApply() {
         data-ini-section
         v-model="section"
         placeholder="Core.System"
-        class="w-full border rounded px-2 py-1 text-sm font-mono mb-2"
+        class="mb-2 w-full rounded border border-input bg-transparent px-2 py-1 font-mono text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
 
       <button
         data-ini-read-btn
         :disabled="reading"
-        class="px-3 py-1 text-sm border rounded hover:bg-gray-100 disabled:opacity-50 mb-3"
+        class="mb-3 rounded border border-input px-3 py-1 text-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
         @click="onRead"
       >
         {{ reading ? t("common.reading") : t("modal.iniEdit.readSection") }}
@@ -108,8 +108,8 @@ async function onApply() {
       <div v-if="loadedKeys.length > 0" class="mb-3">
         <p class="text-sm font-medium mb-1">{{ t("modal.iniEdit.existingKeys") }}</p>
         <table class="w-full text-xs border">
-          <thead class="bg-gray-50">
-            <tr><th class="text-left px-2 py-1">{{ t("modal.iniEdit.headerName") }}</th><th class="text-left px-2 py-1">{{ t("modal.iniEdit.headerValue") }}</th></tr>
+          <thead class="bg-muted/40 text-muted-foreground">
+            <tr><th class="text-left px-2 py-1 font-medium">{{ t("modal.iniEdit.headerName") }}</th><th class="text-left px-2 py-1 font-medium">{{ t("modal.iniEdit.headerValue") }}</th></tr>
           </thead>
           <tbody>
             <tr v-for="k in loadedKeys" :key="k.name" data-ini-row class="border-t">
@@ -120,14 +120,14 @@ async function onApply() {
         </table>
       </div>
 
-      <hr class="my-3" />
+      <hr class="my-3 border-border" />
 
       <label class="block text-sm mb-1">{{ t("modal.iniEdit.keyName") }}</label>
       <input
         data-ini-key
         v-model="keyName"
         placeholder="DDCStrategy"
-        class="w-full border rounded px-2 py-1 text-sm font-mono mb-2"
+        class="mb-2 w-full rounded border border-input bg-transparent px-2 py-1 font-mono text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
 
       <label class="block text-sm mb-1">{{ t("modal.iniEdit.newValue") }}</label>
@@ -135,22 +135,22 @@ async function onApply() {
         data-ini-value
         v-model="keyValue"
         placeholder="Filesystem"
-        class="w-full border rounded px-2 py-1 text-sm font-mono mb-2"
+        class="mb-2 w-full rounded border border-input bg-transparent px-2 py-1 font-mono text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
 
-      <p v-if="lastBackup" class="text-xs text-green-700">
+      <p v-if="lastBackup" class="text-xs text-emerald-600 dark:text-emerald-400">
         {{ t("modal.iniEdit.backupSavedPrefix") }}<span class="font-mono">{{ lastBackup }}</span>
       </p>
-      <p v-if="error" class="text-xs text-red-600">{{ error.message }}</p>
+      <p v-if="error" class="text-xs text-destructive">{{ error.message }}</p>
     </div>
     <template #footer>
-      <button class="px-3 py-1 text-sm border rounded hover:bg-gray-100" @click="emit('close')">
+      <button class="rounded border border-input px-3 py-1 text-sm hover:bg-accent hover:text-accent-foreground" @click="emit('close')">
         {{ t("common.cancel") }}
       </button>
       <button
         data-ini-apply-btn
         :disabled="applying"
-        class="px-3 py-1 text-sm bg-gray-200 rounded hover:bg-gray-300 disabled:opacity-50"
+        class="rounded bg-primary px-3 py-1 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
         @click="onApply"
       >
         {{ applying ? t("common.applying") : t("common.apply") }}

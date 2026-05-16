@@ -38,9 +38,9 @@ const emit = defineEmits<{
 }>();
 
 function statusBadgeClass(status: string): string {
-  if (status === "online") return "bg-green-500 text-white";
-  if (status === "offline") return "bg-red-500 text-white";
-  return "bg-gray-400 text-white";
+  if (status === "online") return "bg-emerald-500 text-white dark:bg-emerald-600";
+  if (status === "offline") return "bg-rose-500 text-white dark:bg-rose-600";
+  return "bg-muted text-muted-foreground";
 }
 
 function runBootstrap() {
@@ -51,7 +51,7 @@ function runBootstrap() {
 
 <template>
   <div class="h-full flex flex-col">
-    <div v-if="!store.selectedDetail" class="p-6 text-sm text-gray-500">
+    <div v-if="!store.selectedDetail" class="p-6 text-sm text-muted-foreground">
       {{ t("machineDetail.selectHint") }}
     </div>
 
@@ -73,31 +73,31 @@ function runBootstrap() {
               {{ store.selectedDetail.machine.status }}
             </span>
           </div>
-          <p class="text-sm text-gray-500">{{ store.selectedDetail.machine.ip }}</p>
+          <p class="text-sm text-muted-foreground">{{ store.selectedDetail.machine.ip }}</p>
         </div>
         <div class="flex gap-2">
           <button
             data-refresh-btn
             :disabled="store.isRefreshing"
-            class="px-3 py-1 text-sm border rounded hover:bg-gray-100 disabled:opacity-50"
+            class="rounded border border-input px-3 py-1 text-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
             @click="store.refreshSelected()"
           >
             {{ store.isRefreshing ? t("common.refreshing") : t("common.refresh") }}
           </button>
           <button
-            class="px-3 py-1 text-sm border rounded hover:bg-gray-100"
+            class="rounded border border-input px-3 py-1 text-sm hover:bg-accent hover:text-accent-foreground"
             @click="emit('openCredentialModal')"
           >
             {{ t("machineDetail.credentials") }}
           </button>
           <button
-            class="px-3 py-1 text-sm border rounded hover:bg-gray-100"
+            class="rounded border border-input px-3 py-1 text-sm hover:bg-accent hover:text-accent-foreground"
             @click="emit('openEnvVarModal')"
           >
             {{ t("machineDetail.envVars") }}
           </button>
           <button
-            class="px-3 py-1 text-sm border rounded hover:bg-gray-100"
+            class="rounded border border-input px-3 py-1 text-sm hover:bg-accent hover:text-accent-foreground"
             @click="emit('openIniEditModal')"
           >
             {{ t("machineDetail.editIni") }}
@@ -109,9 +109,9 @@ function runBootstrap() {
         <h3 class="font-medium mb-2">{{ t("machineDetail.basics") }}</h3>
         <table class="text-sm w-full">
           <tbody>
-            <tr><td class="py-1 text-gray-500 w-32">{{ t("machineDetail.role") }}</td><td>{{ store.selectedDetail.machine.role }}</td></tr>
-            <tr><td class="py-1 text-gray-500">{{ t("machineDetail.status") }}</td><td>{{ store.selectedDetail.machine.status }}</td></tr>
-            <tr><td class="py-1 text-gray-500">{{ t("machineDetail.lastSeen") }}</td><td>{{ store.selectedDetail.machine.last_seen_at ?? "—" }}</td></tr>
+            <tr><td class="py-1 text-muted-foreground w-32">{{ t("machineDetail.role") }}</td><td>{{ store.selectedDetail.machine.role }}</td></tr>
+            <tr><td class="py-1 text-muted-foreground">{{ t("machineDetail.status") }}</td><td>{{ store.selectedDetail.machine.status }}</td></tr>
+            <tr><td class="py-1 text-muted-foreground">{{ t("machineDetail.lastSeen") }}</td><td>{{ store.selectedDetail.machine.last_seen_at ?? "—" }}</td></tr>
           </tbody>
         </table>
       </section>
@@ -124,13 +124,13 @@ function runBootstrap() {
         <div class="flex flex-wrap items-start justify-between gap-3">
           <div class="min-w-0">
             <h3 class="font-medium">{{ t("machineDetail.bootstrapTitle") }}</h3>
-            <p class="mt-1 max-w-3xl text-sm text-gray-500">
+            <p class="mt-1 max-w-3xl text-sm text-muted-foreground">
               {{ t("machineDetail.bootstrapHint") }}
             </p>
           </div>
           <button
             data-load-bootstrap-script
-            class="px-3 py-1 text-sm border rounded hover:bg-gray-100 disabled:opacity-50"
+            class="rounded border border-input px-3 py-1 text-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
             :disabled="store.isLoadingBootstrapScript"
             @click="store.loadBootstrapScript()"
           >
@@ -142,7 +142,7 @@ function runBootstrap() {
           <select
             v-model="bootstrapCredentialAlias"
             data-bootstrap-cred
-            class="h-8 min-w-64 rounded border bg-background px-2 text-sm"
+            class="h-8 min-w-64 rounded border border-input bg-transparent px-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <option value="">{{ t("machineDetail.selectWinrmCredential") }}</option>
             <option v-for="cred in winrmCredentials" :key="cred.alias" :value="cred.alias">
@@ -151,7 +151,7 @@ function runBootstrap() {
           </select>
           <button
             data-bootstrap-btn
-            class="px-3 py-1 text-sm border rounded hover:bg-gray-100 disabled:opacity-50"
+            class="rounded border border-input px-3 py-1 text-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
             :disabled="store.isBootstrapping || !bootstrapCredentialAlias"
             @click="runBootstrap"
           >
@@ -159,14 +159,14 @@ function runBootstrap() {
           </button>
           <button
             v-if="winrmCredentials.length === 0"
-            class="px-3 py-1 text-sm border rounded hover:bg-gray-100"
+            class="rounded border border-input px-3 py-1 text-sm hover:bg-accent hover:text-accent-foreground"
             @click="emit('openCredentialModal')"
           >
             {{ t("machineDetail.addCredential") }}
           </button>
         </div>
 
-        <label class="mt-2 flex items-center gap-2 text-xs text-gray-500">
+        <label class="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
           <input
             v-model="enableLocalAccountRemoteAdmin"
             data-bootstrap-local-admin
@@ -175,29 +175,29 @@ function runBootstrap() {
           {{ t("machineDetail.enableLocalAccountRemoteAdmin") }}
         </label>
 
-        <p v-if="store.bootstrapResult" class="mt-2 text-sm" :class="store.bootstrapResult.ok ? 'text-green-600' : 'text-amber-700'">
+        <p v-if="store.bootstrapResult" class="mt-2 text-sm" :class="store.bootstrapResult.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'">
           {{ store.bootstrapResult.message }}
         </p>
-        <p v-if="store.bootstrapError" class="mt-2 text-sm text-red-600">
+        <p v-if="store.bootstrapError" class="mt-2 text-sm text-destructive">
           {{ store.bootstrapError }}
         </p>
         <pre
           v-if="store.bootstrapScript"
           data-bootstrap-script
-          class="mt-3 max-h-72 overflow-auto rounded border bg-gray-950 p-3 text-xs text-gray-100"
+          class="mt-3 max-h-72 overflow-auto rounded border bg-zinc-950 p-3 text-xs text-zinc-100"
         >{{ store.bootstrapScript }}</pre>
       </section>
 
       <section class="mt-6">
         <h3 class="font-medium mb-2">{{ t("machineDetail.ueInstalls") }}</h3>
-        <p v-if="store.selectedDetail.ue_installs.length === 0" class="text-sm text-gray-500">
+        <p v-if="store.selectedDetail.ue_installs.length === 0" class="text-sm text-muted-foreground">
           {{ t("machineDetail.noUeInstalls") }}
         </p>
         <table v-else class="text-sm w-full border">
-          <thead class="bg-gray-50">
+          <thead class="bg-muted/40 text-muted-foreground">
             <tr>
-              <th class="text-left px-3 py-1">{{ t("machineDetail.headerVersion") }}</th>
-              <th class="text-left px-3 py-1">{{ t("machineDetail.headerInstallPath") }}</th>
+              <th class="text-left px-3 py-1 font-medium">{{ t("machineDetail.headerVersion") }}</th>
+              <th class="text-left px-3 py-1 font-medium">{{ t("machineDetail.headerInstallPath") }}</th>
             </tr>
           </thead>
           <tbody>
@@ -215,15 +215,15 @@ function runBootstrap() {
 
       <section class="mt-6">
         <h3 class="font-medium mb-2">{{ t("machineDetail.gpus") }}</h3>
-        <p v-if="store.selectedDetail.gpus.length === 0" class="text-sm text-gray-500">
+        <p v-if="store.selectedDetail.gpus.length === 0" class="text-sm text-muted-foreground">
           {{ t("machineDetail.noGpus") }}
         </p>
         <table v-else class="text-sm w-full border">
-          <thead class="bg-gray-50">
+          <thead class="bg-muted/40 text-muted-foreground">
             <tr>
-              <th class="text-left px-3 py-1">{{ t("machineDetail.headerModel") }}</th>
-              <th class="text-left px-3 py-1">{{ t("machineDetail.headerDriver") }}</th>
-              <th class="text-left px-3 py-1">{{ t("machineDetail.headerVram") }}</th>
+              <th class="text-left px-3 py-1 font-medium">{{ t("machineDetail.headerModel") }}</th>
+              <th class="text-left px-3 py-1 font-medium">{{ t("machineDetail.headerDriver") }}</th>
+              <th class="text-left px-3 py-1 font-medium">{{ t("machineDetail.headerVram") }}</th>
             </tr>
           </thead>
           <tbody>
@@ -240,7 +240,7 @@ function runBootstrap() {
         </table>
       </section>
 
-      <section v-if="store.refreshError" class="mt-4 text-sm text-red-600">
+      <section v-if="store.refreshError" class="mt-4 text-sm text-destructive">
         {{ t("machineDetail.refreshFailed", { message: store.refreshError }) }}
       </section>
     </div>

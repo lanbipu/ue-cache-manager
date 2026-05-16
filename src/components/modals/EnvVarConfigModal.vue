@@ -57,12 +57,12 @@ async function onApply() {
 <template>
   <BaseModal :open="props.open" :title="t('modal.envVar.title', { name: props.varName })" @close="emit('close')">
     <div>
-      <p class="text-xs text-gray-500 mb-2">
+      <p class="text-xs text-muted-foreground mb-2">
         {{ t("modal.envVar.hint") }}
       </p>
 
       <p class="text-sm mb-1">{{ t("modal.envVar.currentValue") }}</p>
-      <p data-current-value class="text-sm font-mono bg-gray-50 border rounded px-2 py-1 mb-3 break-all">
+      <p data-current-value class="mb-3 break-all rounded border border-border bg-muted/40 px-2 py-1 font-mono text-sm">
         <span v-if="loading">{{ t("common.loading") }}</span>
         <span v-else>{{ currentValue ?? t("common.notSet") }}</span>
       </p>
@@ -72,20 +72,20 @@ async function onApply() {
         data-new-value
         v-model="newValue"
         placeholder="\\HOST\DDC"
-        class="w-full border rounded px-2 py-1 text-sm font-mono"
+        class="w-full rounded border border-input bg-transparent px-2 py-1 font-mono text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       />
 
-      <p v-if="error" class="mt-2 text-xs text-red-600">{{ error.message }}</p>
-      <p v-if="applied" class="mt-2 text-xs text-green-700">{{ t("modal.envVar.appliedVerified") }}</p>
+      <p v-if="error" class="mt-2 text-xs text-destructive">{{ error.message }}</p>
+      <p v-if="applied" class="mt-2 text-xs text-emerald-600 dark:text-emerald-400">{{ t("modal.envVar.appliedVerified") }}</p>
     </div>
     <template #footer>
-      <button class="px-3 py-1 text-sm border rounded hover:bg-gray-100" @click="emit('close')">
+      <button class="rounded border border-input px-3 py-1 text-sm hover:bg-accent hover:text-accent-foreground" @click="emit('close')">
         {{ t("common.cancel") }}
       </button>
       <button
         data-apply-btn
         :disabled="applying || loading"
-        class="px-3 py-1 text-sm bg-gray-200 rounded hover:bg-gray-300 disabled:opacity-50"
+        class="rounded bg-primary px-3 py-1 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
         @click="onApply"
       >
         {{ applying ? t("common.applying") : t("common.apply") }}

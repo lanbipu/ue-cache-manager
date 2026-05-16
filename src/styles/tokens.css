@@ -1,4 +1,9 @@
-/* UECM design tokens - light + dark, oklch-based. */
+/* UECM design tokens - light + dark, oklch-based.
+ *
+ * Tokens are stored as bare OKLCH components (L C H) so Tailwind can
+ * compose them with an alpha channel via `oklch(var(--xxx) / <alpha-value>)`.
+ * That enables alpha modifiers like `bg-muted/40`, `hover:bg-primary/90`.
+ * Direct CSS users must wrap in `oklch(...)` explicitly. */
 
 @font-face {
   font-family: "Manrope";
@@ -17,38 +22,39 @@
 }
 
 :root {
-  --background: oklch(0.985 0.002 240);
-  --foreground: oklch(0.22 0.01 240);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.22 0.01 240);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.22 0.01 240);
-  --primary: oklch(0.58 0.13 210);
-  --primary-foreground: oklch(0.99 0 0);
-  --secondary: oklch(0.95 0.005 240);
-  --secondary-foreground: oklch(0.22 0.01 240);
-  --muted: oklch(0.955 0.005 240);
-  --muted-foreground: oklch(0.5 0.01 240);
-  --accent: oklch(0.93 0.008 220);
-  --accent-foreground: oklch(0.22 0.01 240);
-  --destructive: oklch(0.55 0.22 25);
-  --destructive-foreground: oklch(0.99 0 0);
-  --border: oklch(0.9 0.005 240);
-  --input: oklch(0.9 0.005 240);
-  --ring: oklch(0.58 0.13 210);
-  --status-healthy: oklch(0.55 0.15 152);
-  --status-warning: oklch(0.65 0.16 75);
-  --status-critical: oklch(0.55 0.22 25);
-  --status-info: oklch(0.58 0.13 210);
-  --status-offline: oklch(0.65 0.005 240);
-  --status-unknown: oklch(0.7 0.008 240);
-  --sidebar: oklch(0.97 0.005 240);
-  --sidebar-foreground: oklch(0.25 0.01 240);
-  --sidebar-primary: oklch(0.58 0.13 210);
-  --sidebar-primary-foreground: oklch(0.99 0 0);
-  --sidebar-accent: oklch(0.93 0.008 220);
-  --sidebar-accent-foreground: oklch(0.22 0.01 240);
-  --sidebar-border: oklch(0.9 0.005 240);
+  color-scheme: light;
+  --background: 0.985 0.002 240;
+  --foreground: 0.22 0.01 240;
+  --card: 1 0 0;
+  --card-foreground: 0.22 0.01 240;
+  --popover: 1 0 0;
+  --popover-foreground: 0.22 0.01 240;
+  --primary: 0.58 0.13 210;
+  --primary-foreground: 0.99 0 0;
+  --secondary: 0.95 0.005 240;
+  --secondary-foreground: 0.22 0.01 240;
+  --muted: 0.955 0.005 240;
+  --muted-foreground: 0.5 0.01 240;
+  --accent: 0.93 0.008 220;
+  --accent-foreground: 0.22 0.01 240;
+  --destructive: 0.55 0.22 25;
+  --destructive-foreground: 0.99 0 0;
+  --border: 0.9 0.005 240;
+  --input: 0.9 0.005 240;
+  --ring: 0.58 0.13 210;
+  --status-healthy: 0.55 0.15 152;
+  --status-warning: 0.65 0.16 75;
+  --status-critical: 0.55 0.22 25;
+  --status-info: 0.58 0.13 210;
+  --status-offline: 0.65 0.005 240;
+  --status-unknown: 0.7 0.008 240;
+  --sidebar: 0.97 0.005 240;
+  --sidebar-foreground: 0.25 0.01 240;
+  --sidebar-primary: 0.58 0.13 210;
+  --sidebar-primary-foreground: 0.99 0 0;
+  --sidebar-accent: 0.93 0.008 220;
+  --sidebar-accent-foreground: 0.22 0.01 240;
+  --sidebar-border: 0.9 0.005 240;
   --radius: 0.5rem;
   --font-sans: "Inter", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-display: "Manrope", "Inter", "Helvetica Neue", Helvetica, sans-serif;
@@ -56,44 +62,45 @@
 }
 
 .dark {
-  --background: oklch(0.16 0.005 240);
-  --foreground: oklch(0.96 0 0);
-  --card: oklch(0.195 0.005 240);
-  --card-foreground: oklch(0.96 0 0);
-  --popover: oklch(0.205 0.005 240);
-  --popover-foreground: oklch(0.96 0 0);
-  --primary: oklch(0.78 0.13 200);
-  --primary-foreground: oklch(0.16 0.005 240);
-  --secondary: oklch(0.245 0.005 240);
-  --secondary-foreground: oklch(0.96 0 0);
-  --muted: oklch(0.235 0.005 240);
-  --muted-foreground: oklch(0.68 0.01 240);
-  --accent: oklch(0.27 0.005 240);
-  --accent-foreground: oklch(0.96 0 0);
-  --destructive: oklch(0.62 0.22 25);
-  --destructive-foreground: oklch(0.98 0 0);
-  --border: oklch(0.27 0.005 240);
-  --input: oklch(0.27 0.005 240);
-  --ring: oklch(0.78 0.13 200);
-  --status-healthy: oklch(0.72 0.16 152);
-  --status-warning: oklch(0.78 0.16 75);
-  --status-critical: oklch(0.65 0.22 25);
-  --status-info: oklch(0.78 0.13 200);
-  --status-offline: oklch(0.5 0.005 240);
-  --status-unknown: oklch(0.6 0.01 240);
-  --sidebar: oklch(0.175 0.005 240);
-  --sidebar-foreground: oklch(0.92 0 0);
-  --sidebar-primary: oklch(0.78 0.13 200);
-  --sidebar-primary-foreground: oklch(0.16 0.005 240);
-  --sidebar-accent: oklch(0.245 0.005 240);
-  --sidebar-accent-foreground: oklch(0.96 0 0);
-  --sidebar-border: oklch(0.25 0.005 240);
+  color-scheme: dark;
+  --background: 0.16 0.005 240;
+  --foreground: 0.96 0 0;
+  --card: 0.195 0.005 240;
+  --card-foreground: 0.96 0 0;
+  --popover: 0.205 0.005 240;
+  --popover-foreground: 0.96 0 0;
+  --primary: 0.78 0.13 200;
+  --primary-foreground: 0.16 0.005 240;
+  --secondary: 0.245 0.005 240;
+  --secondary-foreground: 0.96 0 0;
+  --muted: 0.235 0.005 240;
+  --muted-foreground: 0.68 0.01 240;
+  --accent: 0.27 0.005 240;
+  --accent-foreground: 0.96 0 0;
+  --destructive: 0.62 0.22 25;
+  --destructive-foreground: 0.98 0 0;
+  --border: 0.27 0.005 240;
+  --input: 0.27 0.005 240;
+  --ring: 0.78 0.13 200;
+  --status-healthy: 0.72 0.16 152;
+  --status-warning: 0.78 0.16 75;
+  --status-critical: 0.65 0.22 25;
+  --status-info: 0.78 0.13 200;
+  --status-offline: 0.5 0.005 240;
+  --status-unknown: 0.6 0.01 240;
+  --sidebar: 0.175 0.005 240;
+  --sidebar-foreground: 0.92 0 0;
+  --sidebar-primary: 0.78 0.13 200;
+  --sidebar-primary-foreground: 0.16 0.005 240;
+  --sidebar-accent: 0.245 0.005 240;
+  --sidebar-accent-foreground: 0.96 0 0;
+  --sidebar-border: 0.25 0.005 240;
 }
 
 html,
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: oklch(var(--background));
+  color: oklch(var(--foreground));
   font-family: var(--font-sans);
   font-feature-settings: "cv11", "ss01", "ss03";
   -webkit-font-smoothing: antialiased;
@@ -108,10 +115,35 @@ body {
   font-family: var(--font-mono);
 }
 
+/* Native form controls: keep them readable in both themes.
+   Inputs without explicit Tailwind bg/color classes would otherwise
+   fall back to browser defaults (white bg + black text), which becomes
+   unreadable on the dark popover surface.
+   Wrapped in :where() so specificity is 0 — any Tailwind utility class
+   (bg-background, bg-card, text-foreground, ...) still wins. */
+:where(
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="image"]):not([type="submit"]):not([type="reset"]):not([type="button"]),
+  select,
+  textarea
+) {
+  background-color: transparent;
+  color: oklch(var(--foreground));
+}
+
+:where(input, textarea)::placeholder {
+  color: oklch(var(--muted-foreground));
+  opacity: 1;
+}
+
+select option {
+  background-color: oklch(var(--popover));
+  color: oklch(var(--popover-foreground));
+}
+
 .bg-hatched {
   background-image: repeating-linear-gradient(
     45deg,
-    color-mix(in oklch, var(--muted-foreground) 25%, transparent) 0 2px,
+    color-mix(in oklch, oklch(var(--muted-foreground)) 25%, transparent) 0 2px,
     transparent 2px 6px
   );
 }
