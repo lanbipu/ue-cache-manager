@@ -76,21 +76,31 @@ pub enum Event {
 }
 
 /// Map `UecmError` to a stable string code for the `error` event.
+///
+/// Database / IO failures map to `environment_error` (same family as
+/// Configuration) so automation can tell environment problems apart from
+/// regular operation failures.
 pub fn error_code(err: &UecmError) -> &'static str {
     match err {
         UecmError::InvalidInput(_) => "invalid_input",
         UecmError::OperationFailed(_) => "operation_failed",
         UecmError::PowerShell(_) => "powershell_failed",
-        UecmError::Configuration(_) => "configuration_error",
+        UecmError::Configuration(_) | UecmError::Database(_) | UecmError::Io(_) => {
+            "environment_error"
+        }
         _ => "internal_error",
     }
 }
 
 /// Process exit code mapping (§6.3 of spec).
+///
+/// `Database` and `Io` errors share the exit code (3 = environment failure)
+/// with `Configuration` — DB unwritable, ps-scripts missing, and similar I/O
+/// issues are all "user needs to fix their environment" cases.
 pub fn exit_code_for(err: &UecmError) -> i32 {
     match err {
         UecmError::InvalidInput(_) => 2,
-        UecmError::Configuration(_) => 3,
+        UecmError::Configuration(_) | UecmError::Database(_) | UecmError::Io(_) => 3,
         UecmError::PowerShell(_) => 4,
         _ => 1,
     }

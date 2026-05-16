@@ -39,8 +39,21 @@ pub fn resolve_db_path() -> UecmResult<PathBuf> {
 }
 
 /// Opens the DB (WAL mode is set inside `data::open`) and runs idempotent
-/// migrations. Both binaries call this.
+/// migrations. Both binaries call this. Creates the parent directory if it
+/// does not exist — important for `UECM_DB_PATH` overrides that point at a
+/// fresh location.
 pub fn open_and_migrate_db(path: &Path) -> UecmResult<Db> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                UecmError::Configuration(format!(
+                    "create DB parent dir {}: {}",
+                    parent.display(),
+                    e
+                ))
+            })?;
+        }
+    }
     let db = data::open(path)?;
     {
         let mut conn = db.lock().unwrap();
