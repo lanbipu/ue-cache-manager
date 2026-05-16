@@ -41,13 +41,17 @@ impl<'a> Ctx<'a> {
 /// remain runnable even when the data directory is unwritable or the DB file
 /// is broken. Per Codex review feedback on Task 1.4 / 2.1.
 fn needs_db(cmd: &Domain) -> bool {
-    use crate::cli::args::{SystemAction, WinrmAction};
+    use crate::cli::args::{MachineAction, SystemAction};
     match cmd {
-        Domain::Machine { .. } => true,
-        // `system echo` only round-trips a PS script; it should still work
-        // when the DB is broken so users can isolate sidecar problems.
+        // `machine scan` is a stateless network probe — no DB writes.
+        // Everything else in the Machine domain reads or writes tables.
+        Domain::Machine { action } => !matches!(action, MachineAction::Scan { .. }),
+        // `system echo` and the path-printing variants don't open DB;
+        // only `migrate-db` does.
         Domain::System { action } => matches!(action, SystemAction::MigrateDb),
-        Domain::Winrm { action } => !matches!(action, WinrmAction::BootstrapScript { .. }),
+        // None of the WinRM commands touch SQLite — they all talk PowerShell
+        // sidecar or print text.
+        Domain::Winrm { .. } => false,
     }
 }
 

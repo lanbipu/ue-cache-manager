@@ -27,19 +27,23 @@ pub fn handle(ctx: &mut Ctx<'_>, action: WinrmAction) -> UecmResult<()> {
 
 fn probe(ctx: &mut Ctx<'_>, host: &str) -> UecmResult<()> {
     let result = winrm::probe(host)?;
-    let out = ProbeOut {
-        host: host.into(),
-        ok: result.ok,
-        message: result.message.clone(),
-        latency_ms: result.latency_ms,
-    };
-    ctx.emitter.emit_result(&out).ok();
     if !result.ok {
+        // Failure: don't emit a separate result payload first — the run()
+        // dispatcher will emit a single `error` event with the script's
+        // message embedded, which keeps `--json` consumers parsing exactly
+        // one value per invocation.
         return Err(UecmError::PowerShell(format!(
             "winrm probe of {} reported failure: {}",
             host, result.message
         )));
     }
+    let out = ProbeOut {
+        host: host.into(),
+        ok: result.ok,
+        message: result.message,
+        latency_ms: result.latency_ms,
+    };
+    ctx.emitter.emit_result(&out).ok();
     Ok(())
 }
 
