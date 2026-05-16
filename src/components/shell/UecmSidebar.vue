@@ -11,16 +11,17 @@ const cluster = useClusterStore();
 const { t } = useI18n();
 
 const navItems = computed(() => [
-  { to: "/", label: t("nav.dashboard"), icon: "layout-dashboard" },
   { to: "/machines", label: t("nav.machines"), icon: "server" },
-  { to: "/projects", label: t("nav.projects"), icon: "folder-git-2" },
-  { to: "/ddc-pak", label: t("nav.ddcPak"), icon: "package" },
-  { to: "/pso-cache", label: t("nav.psoCache"), icon: "database" },
-  { to: "/ini-scanner", label: t("nav.iniScanner"), icon: "file-search" },
-  { to: "/health-check", label: t("nav.healthCheck"), icon: "heart-pulse" },
 ]);
 
 const activePath = computed(() => route.path);
+
+function isItemActive(itemPath: string) {
+  if (itemPath === "/machines") {
+    return activePath.value === "/" || activePath.value.startsWith("/machines");
+  }
+  return activePath.value === itemPath;
+}
 </script>
 
 <template>
@@ -40,7 +41,7 @@ const activePath = computed(() => route.path);
         data-nav-item
         :to="item.to"
         class="flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-        :class="activePath === item.to ? 'bg-sidebar-accent text-sidebar-accent-foreground' : ''"
+        :class="isItemActive(item.to) ? 'bg-sidebar-accent text-sidebar-accent-foreground' : ''"
       >
         <UecmIcon :name="item.icon" size="17" />
         <span>{{ item.label }}</span>

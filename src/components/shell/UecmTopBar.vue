@@ -32,7 +32,13 @@ const { t } = useI18n();
       </div>
       <UecmLanguageToggle />
       <UecmThemeToggle />
-      <Button variant="ghost" size="icon-sm" :aria-pressed="logOpen" @click="emit('toggleLog')">
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        :aria-pressed="logOpen"
+        :aria-label="t('shell.activityLog')"
+        @click="emit('toggleLog')"
+      >
         <UecmIcon :name="logOpen ? 'panel-bottom-close' : 'terminal'" />
       </Button>
     </div>
