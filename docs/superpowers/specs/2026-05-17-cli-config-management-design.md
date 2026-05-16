@@ -91,10 +91,37 @@ src-tauri/src/cli/
 | 命令 | 对应底层 |
 |---|---|
 | `cred list` | `data::credentials::list_all(db)` → 返回 `Vec<CredentialRecord>` |
-| `cred save --alias <a> --user <u> [--pass <p> \| --pass-stdin]` | `core::credentials::store + store_password`；`data::credentials::insert` |
-| `cred delete <alias>` | `core::credentials::delete + delete_password`；`data::credentials::delete` |
+| `cred save --alias <a> --user <u> [--pass <p> \| --pass-stdin]` | 见下面 §5.1.1（必须 mirror UI 的 transactional sequence） |
+| `cred delete <alias>` | 见下面 §5.1.2（必须 mirror UI 的 best-effort cleanup） |
 
 **`--pass-stdin`** 从 stdin 读一行（trim `\r\n`），作为密码。避免密码进 shell history 或 process argv。
+
+#### 5.1.1 `cred save` transactional invariants（必须实现）
+
+CLI handler **MUST** 复现 `commands/credentials.rs::save_credential` 的完整 sequence——半步成功会留下 split-brain（DPAPI 有 password 但 SQLite 没 metadata，导致下游 `--cred-alias` 报"DPAPI entry 找不到 username"）。完整 sequence：
+
+1. `let username = core::credentials::normalize_username_for_storage(&user)` — 去 `.\\` / `./` 前缀
+2. `core::credentials::store(&alias, &username, &password)?` — Credential Manager（cmdkey）先写。失败直接 `return Err(e)`
+3. `core::credentials::store_password(&alias, &password)` — DPAPI 写 `%LOCALAPPDATA%\UECM\creds.bin`
+   - 失败时**必须先 rollback cmdkey**：`let _ = core::credentials::delete(&alias)`；rollback 自身失败只 `tracing::warn!`，不掩盖原 DPAPI 错误
+   - 然后 `return Err(dpapi_err)`
+4. `data::credentials::find_by_alias(db, &alias)?` — 检查是否同名 alias 已在 SQLite。如果在，先 `data::credentials::delete_by_alias(db, &alias)?` 删旧 row，否则下一步会被 UNIQUE 约束拦
+5. `data::credentials::insert(db, &CredentialRecord { id: None, alias, kind, username })`
+
+handler 写完成事件 `{kind:"completed", summary:{id, alias}}`。
+
+**测试要求**：unit test 至少覆盖
+- `save_overwrites_existing_alias` — 同 alias 第二次 save 应当走 step 4 删旧、step 5 重 insert，DB 行数 +0
+- 在非 Windows 上 `save_returns_powershell_error_when_cmdkey_unavailable` — step 2 fail，step 3-5 不该被调
+
+#### 5.1.2 `cred delete` cleanup order（必须实现）
+
+CLI handler 复现 `commands/credentials.rs::delete_credential` 的"best-effort + canonical error"语义：
+
+1. `let cm_result = core::credentials::delete(&alias);` — cmdkey 先删，**保留 Result 不立刻 propagate**
+2. `data::credentials::delete_by_alias(db, &alias)?` — SQLite 行删（这步如果 fail 是 environment error，propagate）
+3. `if let Err(e) = core::credentials::delete_password(&alias) { tracing::warn!(...) }` — DPAPI best-effort，orphan key 无害
+4. `cm_result.map(|_| ())` — 返回原始 cmdkey 结果。这样 UI/CLI 不会显示"幻影 alias"（SQLite 已清）但 cmdkey fail 仍能告诉用户去手工清
 
 ### 5.2 `env`
 
@@ -117,8 +144,12 @@ src-tauri/src/cli/
 |---|---|
 | `share list` | `data::share_configs::list_all` |
 | `share create --mode a\|b --host <h> --share <n> --local-path <p>` + cred | Mode A: `create_mode_a`；Mode B: `generate_svc_password` + `create_mode_b` + `core::credentials::store_password` 把 svc cred 也存 DPAPI |
-| `share delete <id> --yes` | `data::share_configs::delete`。**注意**：当前 UI 的 `commands::shares::delete_share` 也只删 SQLite row，远端 SMB share 和 cmdkey alias 由 Plan-4 follow-up 用 `ps-scripts/remove-share.ps1` 处理；Plan 2 保持相同语义 |
+| `share forget <id> --yes` | **只删本地 inventory**（`data::share_configs::delete`）。**不动远端 SMB share、不清 cmdkey、不删 ddc-svc 本地账号**。命名是故意的——`forget` 让 user 知道这是 inventory-level 操作。`commands::shares::delete_share` 现在也是同语义。 |
 | `share inject-system-cred --client-host <h> --target-host <h> [--svc-user <u>]` + cred | `core::psexec::inject_system_credential` |
+
+**为什么没有 `share delete`**：destructive 动词暗示远端也清理（`Remove-SmbShare` + Mode B 的 `Remove-LocalUser` + cmdkey delete），但相应的 ps-scripts 还没写，UI 也没做。Plan 2 不引入这个名字以免误导 user 以为远端共享被关。`share remove`（含远端清理）作为 future 命令的预留名，spec §15 列入 future work，本 plan 不实现。
+
+`share forget` 完成后远端 share 仍然 active；user 要真停服必须手工 ssh 进 NAS 跑 `Remove-SmbShare -Name <n>`（Mode B 还要 `Remove-LocalUser ddc-svc` 和 `cmdkey /delete:<unc>`）。这个不便我们接受，因为现状 UI 也是相同语义，CLI 不该悄悄改变契约。
 
 ---
 
@@ -228,7 +259,7 @@ clap 用 `group = "target"` 让 `--host` 和 `--hosts` 互斥。`require_one()` 
 `env set --hosts a,b,c --name X --value Y --json` 输出：
 
 ```
-{"kind":"started","task_type":"env_set","metadata":{"hosts":3,"name":"X","value":"Y"}}
+{"kind":"started","task_type":"env_set","metadata":{"hosts":3,"name":"X","value_len":5}}
 {"kind":"item_started","item_id":"a","index":0,"total":3}
 {"kind":"item_completed","item_id":"a","index":0,"ok":true}
 {"kind":"item_started","item_id":"b","index":1,"total":3}
@@ -237,6 +268,17 @@ clap 用 `group = "target"` 让 `--host` 和 `--hosts` 互斥。`require_one()` 
 {"kind":"item_completed","item_id":"c","index":2,"ok":true}
 {"kind":"completed","summary":{"hosts":3,"ok":2,"failed":1}}
 ```
+
+**Redaction contract (MUST)**：`env set` / `ini set` 写的 value 可能是 token / password / license key / 含凭据的 UNC（如 `\\user:pass@nas\share`）。NDJSON 是 durable telemetry，会落 CI 日志和 AI client transcript。因此：
+
+- **`metadata` 永远不放 raw `value`**。最多放 `name` + `value_len` (字符长度，方便 debug "我设的是不是空串") + `value_sha256_prefix`（前 8 hex，让 user 能比对两次 set 的 value 是否一致而不暴露内容）
+- `item_started` / `item_completed` / `progress` 同样不放 value
+- `ini` 的 section / key 名字可以放（这是结构信息，不是敏感数据）
+- error `message` 字段：如果远端 PS 脚本在错误信息里 echo 了 value（unlikely，但 `setx` 的错误可能含），CLI 层做**简单 substring 替换**——把 user 传入的 value 在 message 里替换成 `[REDACTED:8chars]`。这是 belt-and-suspenders，不替代远端 script 的 redaction 责任
+
+`env get` 是另一个故事：它的输出**就是 value**，user 主动要查的。`env get` 终态用 `emit_result(&{name, value})` 走单次 JSON，**不**作为 NDJSON 事件 metadata 出现。`env get` 永远不进 batch（spec 不支持 `env get --hosts`）。
+
+人类输出（无 `--json`）同样遵守 redaction：`env set` 的 progress 行只打 `→ setting <name> on <host>...`，不打 value。
 
 实现：
 
@@ -378,7 +420,9 @@ Plan 2 验收通过的条件：
 7. 所有需要凭据的 subcommand 都接受 `--cred-alias` / `--user --pass` / `--user --pass-stdin` 三通道
 8. 批量 `--hosts` 至少在 `env set` / `ini set` / `ini remove` 上工作
 9. `env set --hosts a,b,c --json` 输出严格符合 §8 NDJSON 协议
-10. 退出码符合 §9 表格
+10. **Redaction 验收**：`env set --host h --name X --value SECRET-TOKEN-12345 --json` 的 NDJSON 流和 stderr 都 grep 不到字符串 `SECRET-TOKEN-12345`；`ini set` 同理
+11. **cred save 事务性验收**：同 alias 第二次 save 应当原地替换（SQLite 行数 +0），DPAPI 文件中的密文也被更新；DPAPI step fail 时 cmdkey alias 被回滚（在 lanPC 上 manual 注入 DPAPI 失败模拟）
+12. 退出码符合 §9 表格
 
 ---
 
@@ -391,6 +435,8 @@ Plan 2 验收通过的条件：
 - batch operation 中间失败后 rollback
 - `cred save` 交互式 prompt
 - shell completion
+- **`share remove`** — 真正的远端清理（`Remove-SmbShare` + Mode B 的 `Remove-LocalUser ddc-svc` + `cmdkey /delete:<unc>`）。Plan 2 的 `share forget` 只删本地 inventory；远端清理需要新的 ps-scripts，留 Plan 4 follow-up
+- **`--unsafe-log-values`** flag 让 env set / ini set 在 NDJSON 里 echo value — 设计上不引入这个 escape hatch，因为多数 user 不会区分 "我现在传的是 nas path 还是 license token"，默认隐藏比较安全。debug 时 user 用 `env get` / `ini read` 单独查回 value
 
 ---
 
@@ -413,7 +459,8 @@ echo "$ADMIN_PASS" | uecm-cli cred save \
 HOSTS=$(uecm-cli machine list --json | \
   jq -r '.[] | select(.status=="online") | .hostname' | paste -sd, -)
 
-# 3. 批量设环境变量
+# 3. 批量设环境变量(注意：NDJSON 流不含 value 本身，符合 §8 redaction
+#    contract。tee 到 ndjson 文件留底是安全的——日志里只有 name + 长度。)
 uecm-cli env set --hosts "$HOSTS" \
   --name UE-SharedDataCachePath \
   --value '\\nas\ddc-share' \
