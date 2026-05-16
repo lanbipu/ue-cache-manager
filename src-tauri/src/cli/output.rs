@@ -164,6 +164,90 @@ impl<W: Write> Emitter for NdjsonEmitter<W> {
     }
 }
 
+pub struct HumanEmitter<W: Write, E: Write> {
+    pub stdout: W,
+    pub stderr: E,
+    pub use_color: bool,
+}
+
+impl<W: Write, E: Write> HumanEmitter<W, E> {
+    pub fn new(stdout: W, stderr: E, use_color: bool) -> Self {
+        Self { stdout, stderr, use_color }
+    }
+}
+
+impl<W: Write, E: Write> Emitter for HumanEmitter<W, E> {
+    fn emit_event(&mut self, event: &Event) -> io::Result<()> {
+        match event {
+            Event::Started { task_type, .. } => {
+                writeln!(self.stderr, "→ starting {}", task_type)?;
+            }
+            Event::HostProbe { ip, winrm_open, smb_open } => {
+                let badges = format!(
+                    "winrm={} smb={}",
+                    if *winrm_open { "✓" } else { "✗" },
+                    if *smb_open { "✓" } else { "✗" }
+                );
+                writeln!(self.stdout, "  {}  {}", ip, badges)?;
+            }
+            Event::Spawned { pid, log_path } => {
+                writeln!(self.stderr, "→ spawned pid={} log={}", pid, log_path)?;
+            }
+            Event::LogLine { text, .. } => {
+                writeln!(self.stderr, "  | {}", text)?;
+            }
+            Event::Progress { pct, label, current, total, .. } => {
+                let suffix = match (current, total) {
+                    (Some(c), Some(t)) => format!(" ({}/{})", c, t),
+                    _ => String::new(),
+                };
+                match pct {
+                    Some(p) => writeln!(self.stderr, "→ [{:>5.1}%] {}{}", p * 100.0, label, suffix)?,
+                    None => writeln!(self.stderr, "→ {}{}", label, suffix)?,
+                }
+            }
+            Event::ItemStarted { item_id, index, total } => {
+                writeln!(self.stderr, "→ [{}/{}] {}", index + 1, total, item_id)?;
+            }
+            Event::ItemCompleted { item_id, ok, message, .. } => {
+                let mark = if *ok { "✓" } else { "✗" };
+                let suffix = message.as_deref().unwrap_or("");
+                writeln!(self.stderr, "  {} {} {}", mark, item_id, suffix)?;
+            }
+            Event::Finding { rule_id, severity, file_path, section, key } => {
+                writeln!(
+                    self.stdout,
+                    "  [{}] {} {} :: {} {}",
+                    severity, rule_id, file_path,
+                    section.as_deref().unwrap_or("-"),
+                    key.as_deref().unwrap_or("-"),
+                )?;
+            }
+            Event::Cancelled { reason } => {
+                writeln!(self.stderr, "✗ cancelled: {}", reason)?;
+            }
+            Event::Error { code, message, .. } => {
+                writeln!(self.stderr, "✗ error ({}): {}", code, message)?;
+            }
+            Event::Completed { summary } => {
+                writeln!(self.stderr, "✓ done {}", summary)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_value(&mut self, value: &serde_json::Value) -> io::Result<()> {
+        // Default human rendering of arbitrary value: pretty JSON to stdout.
+        // Individual handlers can take over with custom table rendering.
+        let s = serde_json::to_string_pretty(value).unwrap_or_else(|_| "<unserializable>".into());
+        writeln!(self.stdout, "{}", s)
+    }
+
+    fn emit_error(&mut self, err: &UecmError) {
+        let _ = writeln!(self.stderr, "✗ error: {}", err);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,5 +301,25 @@ mod tests {
         let err = UecmError::InvalidInput("bad".into());
         assert_eq!(error_code(&err), "invalid_input");
         assert_eq!(exit_code_for(&err), 2);
+    }
+
+    #[test]
+    fn human_emits_host_probe_with_badges() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        {
+            let mut emitter = HumanEmitter::new(&mut stdout, &mut stderr, false);
+            emitter
+                .emit_event(&Event::HostProbe {
+                    ip: "192.168.10.20".into(),
+                    winrm_open: true,
+                    smb_open: false,
+                })
+                .unwrap();
+        }
+        let s = String::from_utf8(stdout).unwrap();
+        assert!(s.contains("192.168.10.20"));
+        assert!(s.contains("winrm=✓"));
+        assert!(s.contains("smb=✗"));
     }
 }
