@@ -1,6 +1,7 @@
 //! CLI implementation for `uecm-cli`. Bypasses Tauri runtime; calls core/data directly.
 
 pub mod args;
+pub mod credential_args;
 pub mod output;
 pub mod run;
 pub mod domain_system;
