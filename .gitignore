@@ -60,3 +60,8 @@ src-tauri/target/
 # Per-user editor configs
 .history/
 !src-tauri/Cargo.lock
+
+# Local agent skill installs (impeccable etc.) — not part of the shipped app
+.agents/
+.claude/skills/
+skills-lock.json
