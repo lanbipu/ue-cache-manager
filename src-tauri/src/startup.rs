@@ -38,13 +38,12 @@ pub fn resolve_db_path() -> UecmResult<PathBuf> {
     Ok(data_dir.join("uecm.sqlite"))
 }
 
-/// Opens the DB, sets WAL mode, runs idempotent migrations. Both binaries call this.
+/// Opens the DB (WAL mode is set inside `data::open`) and runs idempotent
+/// migrations. Both binaries call this.
 pub fn open_and_migrate_db(path: &Path) -> UecmResult<Db> {
     let db = data::open(path)?;
     {
         let mut conn = db.lock().unwrap();
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(|e| UecmError::Configuration(format!("set WAL mode: {}", e)))?;
         data::schema::migrate(&mut conn)?;
     }
     Ok(db)
