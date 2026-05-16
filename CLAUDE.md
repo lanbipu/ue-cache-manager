@@ -1,5 +1,17 @@
 # CLAUDE.md
 
+## Figma → 代码任务
+
+接到任何「实现 Figma 设计」「把这个 Figma 文件做成代码」「按设计稿写组件」类任务时，**先读 `.claude/rules/figma-design-system.md`**——里面定义了：
+
+- Figma MCP 工具调用顺序（`get_design_context` → `get_screenshot` → 实现）
+- 组件三层结构（`primitives/Uecm*` / `ui/` / `feature 域`）放在哪儿
+- 设计 token 用法（OKLCH 制式，全部走 Tailwind class，不能硬编码颜色）
+- CVA + `cn()` 变体模式
+- `@/*` 路径别名 / vue-i18n / dark mode 处理 / status tone 语义
+
+不读直接动手大概率会写出违反约定的代码。
+
 <!-- DOCSMITH:KNOWLEDGE:BEGIN -->
 ## Knowledge Base (Managed by Docsmith)
 
