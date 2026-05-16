@@ -2,6 +2,7 @@
 
 pub mod args;
 pub mod credential_args;
+pub mod host_args;
 pub mod output;
 pub mod run;
 pub mod domain_system;
