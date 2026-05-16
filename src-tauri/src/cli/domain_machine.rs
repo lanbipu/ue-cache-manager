@@ -140,19 +140,21 @@ fn scan(ctx: &mut Ctx<'_>, cidr: &str, timeout_ms: u64) -> UecmResult<()> {
 }
 
 fn refresh(ctx: &mut Ctx<'_>, id: i64) -> UecmResult<()> {
-    // Fetch machine and extract hostname before we start emitting
-    let host = {
+    // Fetch machine, grab IP (canonical connect target — matches the UI's
+    // `commands::discovery::refresh_machine`). Hostname can drift if the user
+    // renames the row, so IP is the only reliable WinRM target.
+    let (host, hostname_for_log) = {
         let db = ctx.require_db()?;
         let machine = machines::find_by_id(db, id)?
             .ok_or_else(|| UecmError::InvalidInput(format!("machine id={} not found", id)))?;
-        machine.hostname.clone()
+        (machine.ip.clone(), machine.hostname.clone())
     };
 
     ctx.emitter
         .emit_event(&Event::Started {
             task_type: "machine_refresh".into(),
             task_id: Some(format!("machine:{}", id)),
-            metadata: serde_json::json!({ "host": host }),
+            metadata: serde_json::json!({ "ip": host, "hostname": hostname_for_log }),
         })
         .ok();
 
@@ -194,7 +196,10 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64) -> UecmResult<()> {
         }
     };
 
-    // 2. Detect UE installs
+    // 2. Detect UE installs + persist FIRST (partial-failure tolerance —
+    // mirrors `commands::discovery::refresh_machine`). If a later step
+    // (e.g. GPU detect) blows up we still keep the UE list we already saved
+    // rather than discarding it.
     ctx.emitter
         .emit_event(&Event::Progress {
             pct: None,
@@ -204,23 +209,8 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64) -> UecmResult<()> {
         })
         .ok();
     let detected_ue = crate::core::discovery::detect_ue_versions(&host)?;
-
-    // 3. Detect GPUs
-    ctx.emitter
-        .emit_event(&Event::Progress {
-            pct: None,
-            label: "detect gpus".into(),
-            current: None,
-            total: None,
-        })
-        .ok();
-    let detected_gpus = crate::core::discovery::detect_gpus(&host)?;
-
-    // 4. Persist
     {
         let db = ctx.require_db()?;
-
-        // Convert DetectedUe → UeInstall (first is primary)
         machine_ue_installs::delete_for_machine(db, id)?;
         for (idx, detected) in detected_ue.iter().enumerate() {
             let install = machine_ue_installs::UeInstall {
@@ -232,7 +222,20 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64) -> UecmResult<()> {
             };
             machine_ue_installs::upsert(db, &install)?;
         }
+    }
 
+    // 3. Detect GPUs + persist
+    ctx.emitter
+        .emit_event(&Event::Progress {
+            pct: None,
+            label: "detect gpus".into(),
+            current: None,
+            total: None,
+        })
+        .ok();
+    let detected_gpus = crate::core::discovery::detect_gpus(&host)?;
+    {
+        let db = ctx.require_db()?;
         // Convert DetectedGpu → GpuInfo
         let gpu_infos: Vec<machine_gpus::GpuInfo> = detected_gpus
             .iter()
