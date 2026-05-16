@@ -56,8 +56,16 @@ fn bootstrap_script(ctx: &mut Ctx<'_>, output_path: Option<String>) -> UecmResul
                 .ok();
         }
         None => {
-            // Print raw script to stdout (no JSON wrapping — caller redirects to .ps1)
-            print!("{}", body);
+            if ctx.json_mode {
+                // --json: wrap the script body in a structured payload so the
+                // caller doesn't have to switch parsers.
+                ctx.emitter
+                    .emit_result(&serde_json::json!({ "script": body }))
+                    .ok();
+            } else {
+                // Human: dump raw script to stdout so `... > setup.ps1` works.
+                print!("{}", body);
+            }
         }
     }
     Ok(())
