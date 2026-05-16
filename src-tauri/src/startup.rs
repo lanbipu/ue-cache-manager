@@ -114,7 +114,13 @@ mod tests {
             s,
             APP_IDENTIFIER
         );
-        assert!(path.parent().unwrap().is_dir());
+        // Don't assert parent.is_dir() — resolve_db_path is side-effect-free
+        // now (post-Task-2.3 fix); the parent only materializes when
+        // open_and_migrate_db actually opens the DB.
+        assert!(
+            path.parent().is_some(),
+            "DB path must have a parent component"
+        );
     }
 
     #[test]

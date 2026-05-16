@@ -4,7 +4,7 @@ use crate::cli::args::WinrmAction;
 use crate::cli::run::Ctx;
 use crate::cli::EmitSerialize;
 use crate::core::{bootstrap, winrm};
-use crate::error::UecmResult;
+use crate::error::{UecmError, UecmResult};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -30,10 +30,16 @@ fn probe(ctx: &mut Ctx<'_>, host: &str) -> UecmResult<()> {
     let out = ProbeOut {
         host: host.into(),
         ok: result.ok,
-        message: result.message,
+        message: result.message.clone(),
         latency_ms: result.latency_ms,
     };
     ctx.emitter.emit_result(&out).ok();
+    if !result.ok {
+        return Err(UecmError::PowerShell(format!(
+            "winrm probe of {} reported failure: {}",
+            host, result.message
+        )));
+    }
     Ok(())
 }
 
@@ -65,6 +71,14 @@ fn bootstrap_remote(
     enable_local_admin: bool,
 ) -> UecmResult<()> {
     let result = bootstrap::enable_winrm_with_psexec(host, user, pass, enable_local_admin)?;
+    let bootstrap_ok = result.ok;
+    let message = result.message.clone();
     ctx.emitter.emit_result(&result).ok();
+    if !bootstrap_ok {
+        return Err(UecmError::OperationFailed(format!(
+            "winrm bootstrap of {} reported failure: {}",
+            host, message
+        )));
+    }
     Ok(())
 }
