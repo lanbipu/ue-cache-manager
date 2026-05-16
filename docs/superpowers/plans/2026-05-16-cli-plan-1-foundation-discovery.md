@@ -117,21 +117,34 @@ git commit -m "feat(cli): add uecm-cli binary skeleton and dependencies"
 
 use crate::data::{self, Db};
 use crate::error::{UecmError, UecmResult};
-use directories::ProjectDirs;
+use directories::BaseDirs;
 use std::env;
 use std::path::{Path, PathBuf};
 
+/// Bundle identifier that mirrors `src-tauri/tauri.conf.json::identifier`.
+/// MUST stay in sync with that file, otherwise CLI and UI will open different
+/// SQLite files and the UI/CLI shared-state guarantee breaks.
+///
+/// Tauri 2's `app.path().app_data_dir()` resolves to `<system data dir>/<identifier>`
+/// on all three platforms; mirroring that path keeps both binaries on the same DB.
+pub const APP_IDENTIFIER: &str = "com.lanbipu.uecm";
+
 /// Resolves the SQLite DB path. Same location for UI and CLI so both share state.
 /// Override with `UECM_DB_PATH` env var (used in tests and ad-hoc debug sessions).
+///
+/// Resolution mirrors Tauri 2 `app_data_dir()`:
+/// - Windows: `%APPDATA%\com.lanbipu.uecm\uecm.sqlite`
+/// - macOS:   `~/Library/Application Support/com.lanbipu.uecm/uecm.sqlite`
+/// - Linux:   `$XDG_DATA_HOME/com.lanbipu.uecm/uecm.sqlite` (or `~/.local/share/...`)
 pub fn resolve_db_path() -> UecmResult<PathBuf> {
     if let Ok(override_path) = env::var("UECM_DB_PATH") {
         return Ok(PathBuf::from(override_path));
     }
-    let dirs = ProjectDirs::from("com", "uecm", "app").ok_or_else(|| {
-        UecmError::Configuration("failed to resolve application data directory".into())
+    let base = BaseDirs::new().ok_or_else(|| {
+        UecmError::Configuration("failed to resolve user base directories".into())
     })?;
-    let data_dir = dirs.data_dir();
-    std::fs::create_dir_all(data_dir).map_err(|e| {
+    let data_dir = base.data_dir().join(APP_IDENTIFIER);
+    std::fs::create_dir_all(&data_dir).map_err(|e| {
         UecmError::Configuration(format!("create data dir {}: {}", data_dir.display(), e))
     })?;
     Ok(data_dir.join("uecm.sqlite"))
@@ -186,10 +199,18 @@ mod tests {
     }
 
     #[test]
-    fn resolve_db_path_falls_back_to_project_dirs() {
+    fn resolve_db_path_uses_tauri_identifier_subdir() {
         env::remove_var("UECM_DB_PATH");
         let path = resolve_db_path().unwrap();
         assert!(path.ends_with("uecm.sqlite"));
+        // Path must include the Tauri identifier so UI and CLI converge on the same DB.
+        let s = path.to_string_lossy().into_owned();
+        assert!(
+            s.contains(APP_IDENTIFIER),
+            "DB path {} must contain identifier {}",
+            s,
+            APP_IDENTIFIER
+        );
         assert!(path.parent().unwrap().is_dir());
     }
 
@@ -441,6 +462,10 @@ pub mod run;
 pub mod domain_system;
 pub mod domain_machine;
 pub mod domain_winrm;
+
+// Re-export the emitter trait + the generic extension trait so domain handlers
+// can `use crate::cli::{Emitter, EmitSerialize}` in one line.
+pub use output::{Emitter, EmitSerialize};
 ```
 
 - [ ] **Step 3: Create `src-tauri/src/cli/args.rs`** with the top-level + every Plan 1 subcommand
@@ -524,15 +549,14 @@ pub enum MachineAction {
         hostname: Option<String>,
     },
     /// Refresh a machine: WinRM probe + detect UE installs + GPUs.
+    ///
+    /// Plan 1 inherits the UI's no-credential semantics: WinRM runs in the
+    /// caller's Kerberos/NTLM context. Credential flags are deferred until
+    /// `core::winrm::probe_with_credential` and `core::discovery::*_with_credential`
+    /// land (future plan).
     Refresh {
         /// Machine row id.
         id: i64,
-        #[arg(long, group = "cred")]
-        cred_alias: Option<String>,
-        #[arg(long, group = "cred")]
-        user: Option<String>,
-        #[arg(long, requires = "user")]
-        pass: Option<String>,
     },
     /// Show machine detail (UE installs, GPUs, last-seen).
     Detail { id: i64 },
@@ -594,33 +618,21 @@ mod tests {
     }
 
     #[test]
-    fn parses_machine_refresh_with_cred_alias() {
-        let cli = Cli::try_parse_from([
-            "uecm-cli", "machine", "refresh", "3", "--cred-alias", "winrm-admin",
-        ])
-        .unwrap();
+    fn parses_machine_refresh_by_id() {
+        let cli = Cli::try_parse_from(["uecm-cli", "machine", "refresh", "3"]).unwrap();
         match cli.command {
-            Domain::Machine { action: MachineAction::Refresh { id, cred_alias, user, pass } } => {
+            Domain::Machine { action: MachineAction::Refresh { id } } => {
                 assert_eq!(id, 3);
-                assert_eq!(cred_alias.as_deref(), Some("winrm-admin"));
-                assert!(user.is_none());
-                assert!(pass.is_none());
             }
             _ => panic!("wrong variant"),
         }
     }
 
     #[test]
-    fn rejects_pass_without_user() {
-        let res = Cli::try_parse_from(["uecm-cli", "machine", "refresh", "3", "--pass", "p"]);
-        assert!(res.is_err());
-    }
-
-    #[test]
-    fn rejects_user_with_cred_alias() {
+    fn refresh_rejects_unknown_flag() {
+        // Confirms we removed the credential flags in Plan 1 — extra flags must error.
         let res = Cli::try_parse_from([
-            "uecm-cli", "machine", "refresh", "3",
-            "--cred-alias", "a", "--user", "u",
+            "uecm-cli", "machine", "refresh", "3", "--cred-alias", "winrm-admin",
         ]);
         assert!(res.is_err());
     }
@@ -630,7 +642,7 @@ mod tests {
 - [ ] **Step 4: Run tests**
 
 Run: `cd src-tauri && cargo test --lib cli::args::`
-Expected: 5 tests pass.
+Expected: 4 tests pass.
 
 - [ ] **Step 5: Commit**
 
@@ -751,11 +763,30 @@ pub fn exit_code_for(err: &UecmError) -> i32 {
     }
 }
 
+/// Object-safe emitter trait.
+///
+/// `emit_value` takes an already-serialized `serde_json::Value` so the trait
+/// remains object-safe — generic methods cannot live on the trait directly or
+/// `Box<dyn Emitter>` would not compile. Handlers should call `emit_result`
+/// from the `EmitSerialize` extension trait below, which serializes for them.
 pub trait Emitter {
     fn emit_event(&mut self, event: &Event) -> io::Result<()>;
-    fn emit_result<T: Serialize>(&mut self, value: &T) -> io::Result<()>;
+    fn emit_value(&mut self, value: &serde_json::Value) -> io::Result<()>;
     fn emit_error(&mut self, err: &UecmError);
 }
+
+/// Convenience generic method available on every `Emitter`, including
+/// `Box<dyn Emitter>`. Provided as an extension trait with a blanket impl so
+/// the underlying `Emitter` trait stays object-safe.
+pub trait EmitSerialize: Emitter {
+    fn emit_result<T: Serialize>(&mut self, value: &T) -> io::Result<()> {
+        let v = serde_json::to_value(value)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        self.emit_value(&v)
+    }
+}
+
+impl<E: Emitter + ?Sized> EmitSerialize for E {}
 
 pub struct NdjsonEmitter<W: Write> {
     pub writer: W,
@@ -774,7 +805,7 @@ impl<W: Write> Emitter for NdjsonEmitter<W> {
         self.writer.flush()
     }
 
-    fn emit_result<T: Serialize>(&mut self, value: &T) -> io::Result<()> {
+    fn emit_value(&mut self, value: &serde_json::Value) -> io::Result<()> {
         serde_json::to_writer(&mut self.writer, value)?;
         self.writer.write_all(b"\n")?;
         self.writer.flush()
@@ -947,7 +978,7 @@ impl<W: Write, E: Write> Emitter for HumanEmitter<W, E> {
         Ok(())
     }
 
-    fn emit_result<T: Serialize>(&mut self, value: &T) -> io::Result<()> {
+    fn emit_value(&mut self, value: &serde_json::Value) -> io::Result<()> {
         // Default human rendering of arbitrary value: pretty JSON to stdout.
         // Individual handlers can take over with custom table rendering.
         let s = serde_json::to_string_pretty(value).unwrap_or_else(|_| "<unserializable>".into());
@@ -1018,9 +1049,14 @@ use crate::data::Db;
 use crate::error::{UecmError, UecmResult};
 use crate::startup;
 use std::io::{self, Write};
+use std::path::PathBuf;
 
 pub struct Ctx<'a> {
     pub db: &'a Db,
+    /// The DB path actually opened by `run()`. Handlers MUST use this rather
+    /// than re-resolving via `startup::resolve_db_path()`, otherwise CLI-level
+    /// `--db-path` overrides become inconsistent between commands.
+    pub db_path: PathBuf,
     pub emitter: Box<dyn Emitter + 'a>,
     pub json_mode: bool,
 }
@@ -1036,7 +1072,7 @@ pub fn run(cli: Cli) -> i32 {
 
     // DB
     let db_path = match cli.db_path.clone() {
-        Some(p) => std::path::PathBuf::from(p),
+        Some(p) => PathBuf::from(p),
         None => match startup::resolve_db_path() {
             Ok(p) => p,
             Err(e) => return finish_error(&e, cli.json),
@@ -1058,7 +1094,7 @@ pub fn run(cli: Cli) -> i32 {
         Box::new(HumanEmitter::new(stdout.lock(), stderr.lock(), color))
     };
 
-    let mut ctx = Ctx { db: &db, emitter, json_mode };
+    let mut ctx = Ctx { db: &db, db_path: db_path.clone(), emitter, json_mode };
 
     let result = match cli.command {
         Domain::System { action } => domain_system::handle(&mut ctx, action),
@@ -1164,6 +1200,7 @@ Replace stub `src-tauri/src/cli/domain_system.rs` body with the dispatch shell +
 use crate::cli::args::SystemAction;
 use crate::cli::output::Event;
 use crate::cli::run::Ctx;
+use crate::cli::EmitSerialize;   // brings emit_result(&T) into scope on dyn Emitter
 use crate::error::UecmResult;
 use crate::startup;
 use serde::Serialize;
@@ -1196,8 +1233,8 @@ fn version(ctx: &mut Ctx<'_>) -> UecmResult<()> {
 }
 
 fn db_path(ctx: &mut Ctx<'_>) -> UecmResult<()> {
-    let path = startup::resolve_db_path()?;
-    let info = PathInfo { path: path.to_string_lossy().into() };
+    // Report the path the CLI actually opened, respecting `--db-path` / `UECM_DB_PATH`.
+    let info = PathInfo { path: ctx.db_path.to_string_lossy().into() };
     ctx.emitter.emit_result(&info).ok();
     Ok(())
 }
@@ -1210,10 +1247,10 @@ fn ps_dir(ctx: &mut Ctx<'_>) -> UecmResult<()> {
 }
 
 fn migrate_db(ctx: &mut Ctx<'_>) -> UecmResult<()> {
-    // open_and_migrate_db at startup already ran; running again is a no-op.
-    let path = startup::resolve_db_path()?;
-    let _ = startup::open_and_migrate_db(&path)?;
-    let summary = serde_json::json!({ "migrated": true, "path": path.to_string_lossy() });
+    // Re-runs migration on the SAME DB the CLI opened (no path re-resolution).
+    // open_and_migrate_db is idempotent so running here is a no-op if startup already ran.
+    let _ = startup::open_and_migrate_db(&ctx.db_path)?;
+    let summary = serde_json::json!({ "migrated": true, "path": ctx.db_path.to_string_lossy() });
     ctx.emitter.emit_event(&Event::Completed { summary }).ok();
     Ok(())
 }
@@ -1302,7 +1339,7 @@ mod tests {
 
     fn make_ctx<'a>(buf: &'a mut Vec<u8>, db: &'a crate::data::Db) -> Ctx<'a> {
         let emitter: Box<dyn Emitter> = Box::new(NdjsonEmitter::new(buf));
-        Ctx { db, emitter, json_mode: true }
+        Ctx { db, db_path: std::path::PathBuf::from(":memory:"), emitter, json_mode: true }
     }
 
     #[test]
@@ -1385,6 +1422,7 @@ git commit -m "feat(cli): system echo via PowerShell bridge"
 
 use crate::cli::args::WinrmAction;
 use crate::cli::run::Ctx;
+use crate::cli::EmitSerialize;   // brings emit_result(&T) into scope on dyn Emitter
 use crate::core::{bootstrap, winrm};
 use crate::error::UecmResult;
 use serde::Serialize;
@@ -1459,6 +1497,7 @@ fn bootstrap_remote(
 
 use crate::cli::args::MachineAction;
 use crate::cli::run::Ctx;
+use crate::cli::EmitSerialize;   // brings emit_result(&T) into scope on dyn Emitter
 use crate::data::machines;
 use crate::error::{UecmError, UecmResult};
 
@@ -1610,7 +1649,7 @@ mod tests {
         }
         let mut buf: Vec<u8> = Vec::new();
         let emitter: Box<dyn Emitter> = Box::new(NdjsonEmitter::new(&mut buf));
-        let mut ctx = Ctx { db: &db, emitter, json_mode: true };
+        let mut ctx = Ctx { db: &db, db_path: std::path::PathBuf::from(":memory:"), emitter, json_mode: true };
 
         add(&mut ctx, "10.0.0.5", Some("render-01")).unwrap();
         list(&mut ctx).unwrap();
@@ -1620,7 +1659,7 @@ mod tests {
         let id = rows[0].id.unwrap();
         let mut buf2: Vec<u8> = Vec::new();
         let emitter2: Box<dyn Emitter> = Box::new(NdjsonEmitter::new(&mut buf2));
-        let mut ctx = Ctx { db: &db, emitter: emitter2, json_mode: true };
+        let mut ctx = Ctx { db: &db, db_path: std::path::PathBuf::from(":memory:"), emitter: emitter2, json_mode: true };
         detail(&mut ctx, id).unwrap();
         rename(&mut ctx, id, "render-renamed").unwrap();
         delete(&mut ctx, id, true).unwrap();
@@ -1644,7 +1683,7 @@ mod tests {
         }
         let mut buf: Vec<u8> = Vec::new();
         let emitter: Box<dyn Emitter> = Box::new(NdjsonEmitter::new(&mut buf));
-        let mut ctx = Ctx { db: &db, emitter, json_mode: true };
+        let mut ctx = Ctx { db: &db, db_path: std::path::PathBuf::from(":memory:"), emitter, json_mode: true };
         let result = delete(&mut ctx, 999, false);
         assert!(matches!(result, Err(UecmError::InvalidInput(_))));
     }
@@ -1740,7 +1779,7 @@ fn scan_emits_started_and_completed_events_for_unreachable_cidr() {
     }
     let mut buf: Vec<u8> = Vec::new();
     let emitter: Box<dyn Emitter> = Box::new(NdjsonEmitter::new(&mut buf));
-    let mut ctx = Ctx { db: &db, emitter, json_mode: true };
+    let mut ctx = Ctx { db: &db, db_path: std::path::PathBuf::from(":memory:"), emitter, json_mode: true };
     // TEST-NET-3 /30 = 2 usable hosts; per-port timeout 200ms → completes in well under 2s.
     scan(&mut ctx, "203.0.113.0/30", 200).unwrap();
     let s = String::from_utf8(buf).unwrap();
@@ -1782,49 +1821,22 @@ git commit -m "feat(cli): machine scan with NDJSON streaming"
 **Files:**
 - Modify: `src-tauri/src/cli/domain_machine.rs`
 
-- [ ] **Step 1: Add credential resolution helper**
+Plan 1 inherits the UI's no-credential refresh semantics — `winrm::probe`,
+`detect_ue_versions`, and `detect_gpus` are all host-only. Credential-aware
+refresh requires `core` API additions (`probe_with_credential`,
+`detect_*_with_credential`) and is deferred to a future plan along with the
+`env` / `ini` / `share` domains that already need credentials end-to-end.
 
-At the bottom of `domain_machine.rs` (above `mod tests`), add:
+- [ ] **Step 1: Replace the `Refresh` arm + add handler**
 
 ```rust
-fn resolve_credential(
-    cred_alias: Option<&str>,
-    user: Option<&str>,
-    pass: Option<&str>,
-) -> UecmResult<Option<(String, String)>> {
-    if let Some(alias) = cred_alias {
-        let pw = crate::core::credentials::resolve_password(alias)?;
-        let display_user = crate::data::credentials::find_username_by_alias(/* db lookup */)
-            .unwrap_or_else(|| alias.to_string());
-        return Ok(Some((display_user, pw)));
-    }
-    if let (Some(u), Some(p)) = (user, pass) {
-        return Ok(Some((u.to_string(), p.to_string())));
-    }
-    Ok(None)
-}
+MachineAction::Refresh { id } => refresh(ctx, id),
 ```
 
-If `data::credentials::find_username_by_alias` does not exist, replace that call with a placeholder of `alias.to_string()` (the resolved username is informational here). Adjust based on actual data API.
-
-- [ ] **Step 2: Replace the `Refresh` arm + add handler**
+Add the function (place above `mod tests`):
 
 ```rust
-MachineAction::Refresh { id, cred_alias, user, pass } => {
-    refresh(ctx, id, cred_alias.as_deref(), user.as_deref(), pass.as_deref())
-}
-```
-
-Add the function:
-
-```rust
-fn refresh(
-    ctx: &mut Ctx<'_>,
-    id: i64,
-    cred_alias: Option<&str>,
-    user: Option<&str>,
-    pass: Option<&str>,
-) -> UecmResult<()> {
+fn refresh(ctx: &mut Ctx<'_>, id: i64) -> UecmResult<()> {
     use crate::cli::output::Event;
     let machine = machines::find_by_id(ctx.db, id)?
         .ok_or_else(|| UecmError::NotFound(format!("machine id={}", id)))?;
@@ -1837,10 +1849,6 @@ fn refresh(
             metadata: serde_json::json!({ "host": host }),
         })
         .ok();
-
-    let _cred = resolve_credential(cred_alias, user, pass)?;
-    // Note: detect_ue_versions / detect_gpus currently do not take credentials.
-    // If they grow `_with_credential` variants, use them here.
 
     ctx.emitter
         .emit_event(&Event::Progress {
@@ -1896,7 +1904,7 @@ fn refresh(
 
 Function names like `replace_all` / `touch_last_seen` may not exist verbatim. Open `src-tauri/src/data/machine_ue_installs.rs`, `machine_gpus.rs`, and `machines.rs` and use the actual names. The pattern is: refresh wipes any existing rows for `machine_id` then inserts the freshly detected ones. If only `insert` + `delete_for_machine` exist, do those two calls. Do not add new fns.
 
-- [ ] **Step 3: Build, then E2E on macOS**
+- [ ] **Step 2: Build, then E2E on macOS**
 
 Run: `cd src-tauri && cargo build --bin uecm-cli`
 Expected: clean build.
@@ -1911,7 +1919,7 @@ UECM_DB_PATH="$TMP_DB" cargo run --bin uecm-cli -- --json machine refresh 1
 ```
 Expected: `started` event, then error event with `code: "powershell_failed"`, exit code 4. This proves the dispatch + event emission + error mapping.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add src-tauri/src/cli/domain_machine.rs
@@ -2121,11 +2129,28 @@ C:\Tools\UECM\uecm-cli.exe --json machine detail 1
 
 Expected: JSON object with `machine`, `ue_installs` (≥ 1 entry), `gpus` (≥ 1 entry showing RTX GPU + correct VRAM in the 10240 range).
 
-- [ ] **Step 4: Verify DB sharing with UI**
+- [ ] **Step 4: Confirm CLI and UI resolve to the SAME SQLite path**
+
+The most failure-prone assumption in Plan 1 is that `BaseDirs::data_dir().join(APP_IDENTIFIER)` returns the same path Tauri's `app.path().app_data_dir()` uses. Verify directly on lanPC:
+
+```powershell
+# 1. Ask the CLI
+C:\Tools\UECM\uecm-cli.exe --json system db-path
+# Note the "path" field.
+
+# 2. Compute the expected Tauri path independently
+$tauri = (Get-Content C:\Tools\UECM\tauri.conf.json | ConvertFrom-Json).identifier
+$expected = Join-Path $env:APPDATA $tauri | Join-Path -ChildPath "uecm.sqlite"
+$expected
+```
+
+Expected: the two paths are identical. If they differ, STOP — the CLI is writing to a different DB than the UI, and the shared-state guarantee is broken. Investigate `APP_IDENTIFIER` const and `BaseDirs::data_dir()` behavior on this OS before continuing.
+
+- [ ] **Step 5: Verify DB sharing with UI**
 
 Launch the UECM UI (`C:\Tools\UECM\uecm.exe`). The machines view should show `lanPC` with the same UE installs / GPU info written by the CLI in step 2.
 
-- [ ] **Step 5: Verify the four-spec verification criteria from §12**
+- [ ] **Step 6: Verify the four-spec verification criteria from §12**
 
 Walk through the validation criteria from the spec §12 and tick:
 - ✓ macOS + Windows build clean
@@ -2133,10 +2158,11 @@ Walk through the validation criteria from the spec §12 and tick:
 - ✓ `machine scan` NDJSON correct
 - ✓ `machine refresh` returns UE + GPU info with correct VRAM
 - ✓ UI sees CLI-written rows
+- ✓ CLI-resolved DB path == UI-resolved DB path (step 4 above)
 
 PSO / DDC / config-management criteria from §12 are out of Plan 1 scope — they're covered by Plan 2 / 3.
 
-- [ ] **Step 6: Final commit (release notes)**
+- [ ] **Step 7: Final commit (release notes)**
 
 Create `docs/superpowers/changelog/2026-05-16-cli-plan-1.md`:
 
@@ -2204,7 +2230,14 @@ git commit -m "docs: CLI Plan 1 changelog"
 - Batch `--hosts` flag handling (depends on `core::batch`)
 - SIGINT / Ctrl-C graceful cancel (spec §8.4) — Plan 1 emits no long-running UE work yet; `machine scan` is sub-second
 - Exit code 10 (post-error NDJSON) and 130 (SIGINT) — placeholder in `exit_code_for`; full enforcement when long-running domains land
+- **Credential-aware `machine refresh`** — `core::winrm::probe` and `core::discovery::detect_*` are host-only today. Plan 1 inherits the UI's no-credential refresh semantics; CLI flags for cred/user/pass on `machine refresh` are deferred until the underlying `core` APIs grow `_with_credential` variants (planned for the same plan that brings the `env` / `ini` / `share` domains with full credential coverage)
 
 ## Known assumptions
 
-Several handlers (Task 3.2 / 3.4) call into `data::machines`, `data::machine_ue_installs`, `data::machine_gpus`, `data::credentials` with function names like `find_by_id` / `list_all` / `replace_all` / `touch_last_seen` / `find_username_by_alias`. Plan author did not full-read every data module; **implementing agent must grep the actual files first** and substitute the real function names. The behavior contract (insert / list / find / delete) is stable; only the names may need adjustment. Do not add new data functions — use what exists.
+Several handlers (Task 3.2 / 3.4) call into `data::machines`, `data::machine_ue_installs`, `data::machine_gpus` with function names like `find_by_id` / `list_all` / `replace_all` / `touch_last_seen`. Plan author did not full-read every data module; **implementing agent must grep the actual files first** and substitute the real function names. The behavior contract (insert / list / find / delete) is stable; only the names may need adjustment. Do not add new data functions — use what exists.
+
+## DB path compatibility
+
+`startup::resolve_db_path` mirrors Tauri 2's `app_data_dir()` resolution by joining `BaseDirs::data_dir()` with the const `APP_IDENTIFIER` = `"com.lanbipu.uecm"` (matches `src-tauri/tauri.conf.json::identifier`). This is intentional so a freshly installed CLI opens the same SQLite file the UI has been writing to.
+
+If `tauri.conf.json::identifier` ever changes, `APP_IDENTIFIER` in `startup.rs` must be updated in the same commit. Task 4.2 includes an explicit "compare UI-resolved path vs CLI-resolved path" check to catch this in CI before regression hits users.
