@@ -32,6 +32,21 @@ fn add(ctx: &mut Ctx<'_>, ip: String, hostname: Option<String>) -> UecmResult<()
     let db = ctx.require_db()?;
     let hostname = hostname.unwrap_or_else(|| ip.clone());
 
+    // Idempotent: same IP twice doesn't trip the UNIQUE constraint. Matches the
+    // UI's `add_discovered_machine` behavior so `scan → add` automation can
+    // safely re-run without manually deduping.
+    if let Some(existing) = machines::find_by_ip(db, &ip)? {
+        let id = existing.id.expect("found machine must have an id");
+        let summary = json!({
+            "id": id,
+            "ip": ip,
+            "hostname": existing.hostname,
+            "already_present": true,
+        });
+        ctx.emitter.emit_event(&Event::Completed { summary }).ok();
+        return Ok(());
+    }
+
     let machine = Machine::new(&hostname, &ip);
     let id = machines::insert(db, &machine)?;
 
@@ -141,7 +156,9 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64) -> UecmResult<()> {
         })
         .ok();
 
-    // 1. WinRM probe
+    // 1. WinRM probe — mirror commands::discovery::refresh_machine so the UI
+    // and CLI write the SAME `online` / `offline` status values. Otherwise a
+    // CLI-refresh'd machine vanishes from the Dashboard's online count.
     ctx.emitter
         .emit_event(&Event::Progress {
             pct: None,
@@ -150,13 +167,32 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64) -> UecmResult<()> {
             total: None,
         })
         .ok();
-    let probe = crate::core::winrm::probe(&host)?;
-    if !probe.ok {
-        return Err(UecmError::PowerShell(format!(
-            "winrm probe failed: {}",
-            probe.message
-        )));
-    }
+    let probe = match crate::core::winrm::probe(&host) {
+        Ok(p) if p.ok => {
+            {
+                let db = ctx.require_db()?;
+                machines::mark_seen(db, id, "online")?;
+            }
+            p
+        }
+        Ok(p) => {
+            {
+                let db = ctx.require_db()?;
+                machines::mark_seen(db, id, "offline")?;
+            }
+            return Err(UecmError::PowerShell(format!(
+                "winrm probe failed: {}",
+                p.message
+            )));
+        }
+        Err(e) => {
+            {
+                let db = ctx.require_db()?;
+                machines::mark_seen(db, id, "offline")?;
+            }
+            return Err(e);
+        }
+    };
 
     // 2. Detect UE installs
     ctx.emitter
@@ -210,9 +246,9 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64) -> UecmResult<()> {
             })
             .collect();
         machine_gpus::replace_for_machine(db, id, &gpu_infos)?;
-
-        // Touch last_seen
-        machines::mark_seen(db, id, "ok")?;
+        // last_seen + status were already updated by the probe branch above —
+        // no extra mark_seen here (avoids overwriting the canonical
+        // online/offline tokens with anything else).
     }
 
     let summary = json!({
