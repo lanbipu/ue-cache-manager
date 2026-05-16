@@ -66,3 +66,6 @@ src-tauri/target/
 .agents/
 .claude/skills/
 skills-lock.json
+
+# Impeccable live mode session artifacts
+.impeccable/

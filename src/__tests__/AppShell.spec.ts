@@ -10,12 +10,12 @@ describe("AppShell", () => {
     setActivePinia(createPinia());
   });
 
-  it("renders the sidebar with 7 nav items", async () => {
+  it("renders only the machines nav item in the sidebar", async () => {
     const router = createRouter({
       history: createMemoryHistory(),
       routes,
     });
-    await router.push("/");
+    await router.push("/machines");
     await router.isReady();
 
     const wrapper = mount(AppShell, {
@@ -23,7 +23,8 @@ describe("AppShell", () => {
     });
 
     const navItems = wrapper.findAll("[data-nav-item]");
-    expect(navItems).toHaveLength(7);
+    expect(navItems).toHaveLength(1);
+    expect(navItems[0].attributes("href")).toContain("/machines");
   });
 
   it("renders the current route's component in the slot", async () => {

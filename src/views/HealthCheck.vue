@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { RouterLink } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import UecmPageHeader from "@/components/primitives/UecmPageHeader.vue";
 import UecmIcon from "@/components/primitives/UecmIcon.vue";
 import UecmKpiTile from "@/components/primitives/UecmKpiTile.vue";
@@ -15,13 +15,40 @@ import { HEALTH_CHECKS, type HealthCheckDefinition } from "@/lib/healthChecks";
 import { useGpuConsistencyStore } from "@/stores/gpuConsistency";
 import { useHealthCheckStore } from "@/stores/healthCheck";
 import { useMachinesStore } from "@/stores/machines";
+import { tauriApi, type EchoResult, type UecmError } from "@/services/tauri";
 
 const { t } = useI18n();
 const machines = useMachinesStore();
 const health = useHealthCheckStore();
 const gpuStore = useGpuConsistencyStore();
+const route = useRoute();
+const router = useRouter();
+
+function gotoTab(tab: string, extra: Record<string, string> = {}) {
+  router.push({
+    path: "/machines",
+    query: { ...route.query, ...extra, tab },
+  });
+}
 const showWizard = ref(false);
 const selected = ref<{ machineId: number; checkId: string } | null>(null);
+
+const bridgeResult = ref<EchoResult | null>(null);
+const bridgeError = ref<UecmError | null>(null);
+const bridgeLoading = ref(false);
+
+async function runBridgeTest() {
+  bridgeResult.value = null;
+  bridgeError.value = null;
+  bridgeLoading.value = true;
+  try {
+    bridgeResult.value = await tauriApi.testPowerShellBridge("hello from UECM");
+  } catch (e) {
+    bridgeError.value = e as UecmError;
+  } finally {
+    bridgeLoading.value = false;
+  }
+}
 
 onMounted(() => {
   void Promise.all([machines.loadMachines(), gpuStore.load()]);
@@ -54,11 +81,34 @@ const selectedDetail = computed(() => {
     <div class="space-y-4 p-6">
       <UecmPageHeader :title="t('healthCheck.title')" :eyebrow="t('healthCheck.eyebrow')" :description="t('healthCheck.description')">
         <template #actions>
+          <Button
+            variant="outline"
+            data-bridge-test-btn
+            :disabled="bridgeLoading"
+            @click="runBridgeTest"
+          >
+            <UecmIcon name="terminal" />
+            {{ bridgeLoading ? t("dashboard.runningBridgeTest") : t("dashboard.runBridgeTest") }}
+          </Button>
           <Button data-open-health-wizard-btn @click="showWizard = true">
             <UecmIcon name="play" /> {{ t("healthCheck.runFullCheck") }}
           </Button>
         </template>
       </UecmPageHeader>
+
+      <div
+        v-if="bridgeResult || bridgeError"
+        data-bridge-result
+        class="rounded-md border bg-card p-3 text-xs"
+      >
+        <pre
+          v-if="bridgeResult"
+          class="overflow-auto font-mono text-muted-foreground"
+        >{{ JSON.stringify(bridgeResult, null, 2) }}</pre>
+        <p v-if="bridgeError" class="text-destructive">
+          {{ bridgeError.code }}: {{ bridgeError.message }}
+        </p>
+      </div>
       <section class="grid grid-cols-5 gap-px overflow-hidden rounded-lg border bg-border">
         <UecmScoreTile :label="t('healthCheck.kpiClusterScore')" :score="score" :tone="tone" :verdict="verdict" />
         <UecmKpiTile :label="t('healthCheck.kpiHealthy')" :value="health.summary.healthy" tone="healthy" />
@@ -92,14 +142,22 @@ const selectedDetail = computed(() => {
             </div>
           </header>
           <div v-if="selectedDetail.def?.id === 'pso_precaching'" class="rounded-md border bg-card p-3">
-            <RouterLink class="text-sm font-bold text-primary hover:underline" to="/ini-scanner?finding=R008">
+            <button
+              type="button"
+              class="text-sm font-bold text-primary hover:underline"
+              @click="gotoTab('ini', { finding: 'R008' })"
+            >
               {{ t("healthCheck.openIniScannerLink") }}
-            </RouterLink>
+            </button>
           </div>
           <div v-else-if="selectedDetail.def?.id === 'gpu_consistency'" class="rounded-md border bg-card p-3">
-            <RouterLink class="text-sm font-bold text-primary hover:underline" to="/health-check?gpu=true">
+            <button
+              type="button"
+              class="text-sm font-bold text-primary hover:underline"
+              @click="gotoTab('health', { gpu: 'true' })"
+            >
               {{ t("healthCheck.openGpuMatrixLink") }}
-            </RouterLink>
+            </button>
           </div>
           <div class="rounded-md border bg-card p-3">
             <div class="font-mono text-[11px] font-bold uppercase text-muted-foreground">{{ t("healthCheck.detailWhatChecks") }}</div>
