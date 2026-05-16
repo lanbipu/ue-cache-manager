@@ -134,6 +134,44 @@
     margin-top:8px;letter-spacing:-0.02em;color:var(--foreground)}
   .stat__detail{font-size:11.5px;color:var(--muted-foreground);margin-top:4px;line-height:1.6}
 
+  /* ===== Glossary strip (key terms) ===== */
+  .glossary{
+    margin-top:32px;padding:20px 22px;
+    background:var(--card);border:1px solid var(--border);border-radius:8px;
+    box-shadow:0 1px 2px color-mix(in oklch,var(--foreground) 4%,transparent);
+  }
+  .glossary__head{
+    display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;
+    margin-bottom:14px;padding-bottom:12px;border-bottom:1px dashed var(--border);
+  }
+  .glossary__title{
+    font-family:var(--font-display);font-weight:800;font-size:14px;
+    letter-spacing:-0.005em;color:var(--foreground);
+  }
+  .glossary__sub{font-size:12px;color:var(--muted-foreground);line-height:1.5}
+  .glossary__list{
+    display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 28px;
+    margin:0;padding:0;
+  }
+  @media(max-width:680px){.glossary__list{grid-template-columns:1fr}}
+  .gloss{
+    display:grid;grid-template-columns:84px 1fr;gap:10px;align-items:baseline;
+    padding:4px 0;
+  }
+  .gloss dt{
+    font-family:var(--font-mono);font-size:11px;font-weight:700;letter-spacing:0.02em;
+    color:var(--primary);
+  }
+  .gloss dd{
+    font-size:12.5px;line-height:1.55;margin:0;
+    color:color-mix(in oklch,var(--foreground) 82%,var(--muted-foreground));
+  }
+  .gloss dd code{
+    font-family:var(--font-mono);font-size:11px;
+    background:var(--muted);color:var(--foreground);
+    padding:0 4px;border-radius:3px;border:1px solid var(--border);
+  }
+
   /* ===== Quick Start path (KEY) ===== */
   .quickpath{
     margin-top:48px;padding:24px 24px 28px;
@@ -577,10 +615,30 @@
 
   <!-- Stats -->
   <section class="stats reveal" data-d="2">
-    <div class="stat"><div class="stat__label">Plans Shipped</div><div class="stat__value">6 / 6</div><div class="stat__detail">从 Foundation 到 PSO Cache，一个没落</div></div>
-    <div class="stat"><div class="stat__label">Surfaces</div><div class="stat__value">8</div><div class="stat__detail">Dashboard / Machines / Projects / DDC / PSO / Shares / INI / Health</div></div>
-    <div class="stat"><div class="stat__label">PowerShell Sidecars</div><div class="stat__value">30</div><div class="stat__detail">凭据 / GPU / UE / DDC / PSO / Health / Bootstrap 全覆盖</div></div>
-    <div class="stat"><div class="stat__label">Probes / Round-trip</div><div class="stat__value">8 + 3</div><div class="stat__detail">一次 WinRM 请求打包 8 项探测，另 3 项在主控本地算</div></div>
+    <div class="stat"><div class="stat__label">已交付 Plan</div><div class="stat__value">6 / 6</div><div class="stat__detail">从基础设施到 PSO 闭环，6 期里程碑全部上线</div></div>
+    <div class="stat"><div class="stat__label">应用主屏</div><div class="stat__value">8</div><div class="stat__detail">总览 / 机器 / 项目 / DDC / PSO / 共享 / INI / 健康检查</div></div>
+    <div class="stat"><div class="stat__label">PowerShell 脚本</div><div class="stat__value">30</div><div class="stat__detail">凭据 / GPU / UE / DDC / PSO / 健康 / Bootstrap 全覆盖</div></div>
+    <div class="stat"><div class="stat__label">健康检查项</div><div class="stat__value">11</div><div class="stat__detail">每台机 1 次 WinRM 打包 8 项，另 3 项在主控本地算</div></div>
+  </section>
+
+  <!-- Glossary -->
+  <section class="glossary reveal" data-d="2" aria-label="术语速查">
+    <div class="glossary__head">
+      <div class="glossary__title">术语速查</div>
+      <div class="glossary__sub">下面文档里反复出现的缩略词，先扫一眼，免得读到一半要去查</div>
+    </div>
+    <dl class="glossary__list">
+      <div class="gloss"><dt>DDC</dt><dd>Derived Data Cache。UE 把材质 / Shader 烘焙好的中间产物，省得每次重新算</dd></div>
+      <div class="gloss"><dt>PSO</dt><dd>Pipeline State Object。GPU 流水线状态快照，先预热好切场景不卡</dd></div>
+      <div class="gloss"><dt>WinRM</dt><dd>Windows 远程管理协议，UECM 跑远程脚本走它，端口 <code>5985</code></dd></div>
+      <div class="gloss"><dt>CIDR</dt><dd>IP 段写法，如 <code>192.168.10.0/24</code> 表示 256 个 IP 的范围</dd></div>
+      <div class="gloss"><dt>DPAPI</dt><dd>Windows 自带的本机加密 API，密码绑当前用户落盘，搬到别处解不开</dd></div>
+      <div class="gloss"><dt>PsExec64</dt><dd>Sysinternals 工具，能用 SYSTEM 身份跑命令，用来把凭据注给系统服务</dd></div>
+      <div class="gloss"><dt>Robocopy</dt><dd>Windows 自带的多线程拷贝工具，断点续传友好</dd></div>
+      <div class="gloss"><dt>CVar</dt><dd>UE 引擎运行时配置开关，<code>r.</code> 开头的那些</dd></div>
+      <div class="gloss"><dt>.ddp</dt><dd>UECM 打包出来的 DDC 缓存文件（自定义后缀）</dd></div>
+      <div class="gloss"><dt>.uproject</dt><dd>UE 项目入口文件，每个项目根目录都有一个</dd></div>
+    </dl>
   </section>
 
   <!-- ============ QUICK START PATH (KEY) ============ -->
@@ -602,19 +660,19 @@
       <li class="quickstep">
         <div class="quickstep__num">2</div>
         <div class="quickstep__title">配置 &amp; 共享</div>
-        <div class="quickstep__cn">建 Mode B 共享盘；单台或整批机器下发 env var 和 INI 配置。</div>
+        <div class="quickstep__cn">建共享盘（推荐专用账号 Mode B），单台或整批下发环境变量和 INI 配置。</div>
         <a class="quickstep__link" href="#sc-b">→ 场景 B</a>
       </li>
       <li class="quickstep">
         <div class="quickstep__num">3</div>
-        <div class="quickstep__title">体检 &amp; 修复</div>
-        <div class="quickstep__cn">INI Scanner 扫出违规一键修；Cluster Health Check 给出 11×N 红绿矩阵。</div>
+        <div class="quickstep__title">健康检查 &amp; 修复</div>
+        <div class="quickstep__cn">INI Scanner 扫出漂移项一键修；Cluster Health Check 给出 11×N 红绿矩阵。</div>
         <a class="quickstep__link" href="#sc-c">→ 场景 C</a>
       </li>
       <li class="quickstep">
         <div class="quickstep__num">4</div>
         <div class="quickstep__title">DDC 缓存分发</div>
-        <div class="quickstep__cn">源机跑 commandlet 生成 .ddp pak，Robocopy 并发推到全集群。</div>
+        <div class="quickstep__cn">源机用 UE commandlet 生成 .ddp 缓存包，Robocopy 并发推到全集群。</div>
         <a class="quickstep__link" href="#sc-d">→ 场景 D</a>
       </li>
       <li class="quickstep">
@@ -648,25 +706,37 @@
             <div class="surface__cn">总览 · 集群概览</div>
           </div>
         </div>
-        <p class="surface__lead">进 app 第一眼就看到这个屏。机器健康、DDC 状态、凭据、INI 漂移这四件事有没有问题，一眼扫完。</p>
+        <p class="surface__lead">进 app 第一眼看的屏。<b>8 块 KPI 分两排</b> + 最近 DDC 包 / PSO 采集 + 集群告警 + PowerShell 桥接自检，一屏看完。<strong>机器 / 项目 / GPU / DDC / PSO</strong> 五件事的总入口。</p>
         <div class="surface__block">
           <div class="surface__blockhead"><svg><use href="#i-eye"/></svg>屏上能看到</div>
           <ul class="surface__list">
-            <li><b>4 块数字</b>：机器总数 / 关键告警数 / 警告数 / DDC 路径</li>
-            <li><b>告警列表</b>：不在线的机器一行一条</li>
-            <li><b>Bridge Test</b>：确认 PowerShell sidecar 是否正常联通的小工具</li>
+            <li><b>首排 4 块可点 KPI</b>：机器在线（<code>X / 总数</code>）/ 已发现项目 / GPU 基线（红字 <code>N 项偏离</code>）/ 健康评分。整张卡片就是 RouterLink，点一下跳对应 surface</li>
+            <li><b>次排 4 块状态</b>：机器数（<code>X 在线</code>）/ 严重（<code>SYSTEM / INI 阻塞项</code>）/ 警告（<code>驱动或配置漂移</code>）/ DDC 路径（默认显示 <code>\\HOST-01</code>，副标 <code>共享缓存基线</code>）</li>
+            <li><b>最近 DDC 包 / 最近 PSO 采集</b>：两张可点卡片，空态显示 <code>No DDC pak job queued.</code> / <code>No PSO collection queued.</code></li>
+            <li><b>集群告警</b>：右上挂 <code>X OPEN</code> 徽章，每行 = OFFLINE 状态标 + hostname + IP + 最近上线时间</li>
+            <li><b>PowerShell 桥接</b>：调 <code>tauriApi.testPowerShellBridge</code>，结果区显示 JSON <code>&lt;pre&gt;</code> 或红字错误</li>
           </ul>
         </div>
         <div class="surface__block">
           <div class="surface__blockhead"><svg><use href="#i-pointer"/></svg>能干什么</div>
           <ul class="surface__list">
-            <li>点一下跑 PowerShell bridge 自检，确认通路没问题</li>
-            <li>从 <code>+ 创建共享 DDC</code> 按钮直接打开 SMB 共享向导</li>
+            <li>顶栏右：<code>Run bridge test</code> 跑桥接自检 / <code>+ Create Shared DDC</code> 跳 <code>/shares</code> 打开 SMB 共享向导</li>
+            <li>8 块 KPI 全部可点击跳对应 surface；GPU 那块还附带 <code>?gpu=true</code> query，直接定位 GPU 矩阵</li>
+            <li>「最近 DDC 包 / PSO 采集」卡片整张可点，跳 DDC Pak / PSO Cache 看任务详情</li>
+          </ul>
+        </div>
+        <div class="surface__block">
+          <div class="surface__blockhead"><svg><use href="#i-layers"/></svg>全局组件（Sidebar + TopBar，下面 7 个 surface 共享）</div>
+          <ul class="surface__list">
+            <li><b>左侧 Sidebar</b>：UECM logo + <code>UE 缓存管理器</code> + cluster summary 副标 → 7 项导航（<b>没有 Shares 项</b>）→ 底部 <b>集群评分卡</b>（大数字 + 状态点 + <code>X 严重 · X 警告</code>）</li>
+            <li><b>顶部 TopBar</b>：全局搜索框 <code>搜索机器、项目、路径</code> + 活跃任务 pill（label + 进度%）+ 集群状态 pill + 语言切换 + 主题切换 + 日志面板抽屉按钮</li>
+            <li><b>底部抽屉</b>：UecmLogPanel 日志面板，默认隐藏，TopBar 终端图标唤起</li>
           </ul>
         </div>
         <div class="surface__related">
           <a class="relchip" href="#f-08">F-08 健康</a>
-          <a class="relchip" href="#p-09">P-09 体检</a>
+          <a class="relchip" href="#p-09">P-09 健康检查</a>
+          <a class="relchip" href="#f-05">F-05 共享盘</a>
         </div>
       </article>
 
@@ -680,22 +750,25 @@
             <div class="surface__cn">机器列表 · 清单</div>
           </div>
         </div>
-        <p class="surface__lead">集群里所有 Windows 机器的清单。点一行看详情，勾多台做批量操作 — 日常打开频率最高的一个屏。</p>
+        <p class="surface__lead">集群里所有 Windows 机器的清单。左侧表 + 右侧详情面板，日常打开频率最高的一个屏。<strong>创建共享 DDC 的真正入口也藏在这屏的顶栏</strong>（不是 Shares 那个屏）。</p>
         <div class="surface__block">
           <div class="surface__blockhead"><svg><use href="#i-eye"/></svg>屏上能看到</div>
           <ul class="surface__list">
-            <li><b>左侧机器表</b>：hostname / IP / 状态徽标 / UE 版本 / GPU 摘要</li>
-            <li><b>右侧详情面板</b>：选中一台后显示完整硬件信息 + env vars + INI 文件入口</li>
-            <li><b>多选状态条</b>：勾几台机器后浮出来，批量操作都在这里触发</li>
+            <li><b>左侧机器表</b>（22rem 宽 aside）：顶部一行 <code>全选 + 已选 X 项 + 批量环境变量 + 批量 INI</code>（未选时后两个 disabled）；下方每行 = checkbox + hostname + IP（mono）+ 删除链接</li>
+            <li><b>右侧详情头</b>：hostname 支持 <b>inline 重命名</b>（HostnameEditor）+ 状态徽章（online 绿 / offline 红 / 其它灰）+ IP + 右上按钮组 <code>刷新 / 凭据 / 环境变量 / 编辑 INI</code></li>
+            <li><b>详情主体</b>：基础信息表（角色 / 状态 / 最近上线）+ UE 安装表（版本 / 路径）+ GPU 表（型号 / 驱动 / 显存）</li>
+            <li><b>首次纳管 bootstrap 面板</b>（仅当机器 status ≠ online 时显示，左侧黄色边）：<code>显示本地脚本</code> + WinRM 凭据下拉 + <code>运行 bootstrap</code> + <code>Workgroup 本地管理员…</code> 复选框 + 结果 / 错误消息 + 脚本 <code>&lt;pre&gt;</code> 回显</li>
+            <li>空态：<code>还没有机器。点击「扫描」开始发现。</code></li>
           </ul>
         </div>
         <div class="surface__block">
           <div class="surface__blockhead"><svg><use href="#i-pointer"/></svg>能干什么</div>
           <ul class="surface__list">
-            <li><b>Discover</b>：扫一段 CIDR，把能通的机器自动收进来</li>
-            <li><b>Add Machine / Refresh / Rename</b>：手动加机器、刷新硬件信息、改 hostname</li>
-            <li><b>Batch Env Var / Batch INI</b>：多选机器，一次下发配置</li>
-            <li>给单台机器或批量绑定凭据 alias</li>
+            <li>顶栏：<code>共享</code>（开 ShareCreateWizard，真正建共享盘的入口）/ <code>扫描</code>（开 DiscoveryWizard）</li>
+            <li>行级：勾选、点击选中、单机删除</li>
+            <li>详情区：<code>刷新</code>（重新拉一次硬件 / UE / GPU）/ <code>凭据</code>（CredentialDialog 绑定 alias）/ <code>环境变量</code>（写死 var <code>UE-SharedDataCachePath</code>）/ <code>编辑 INI</code></li>
+            <li>跑 bootstrap：含 <code>enableLocalAccountRemoteAdmin</code> 复选项，专门给 Workgroup 模式开本地账号远管</li>
+            <li>批量：多选机器 → <code>批量环境变量</code>（BatchEnvVarModal）/ <code>批量 INI</code>（BatchIniEditModal）</li>
           </ul>
         </div>
         <div class="surface__related">
@@ -718,19 +791,21 @@
             <div class="surface__cn">项目 · Unreal 项目</div>
           </div>
         </div>
-        <p class="surface__lead">把散在各台机器上的 <code>.uproject</code> 文件汇总成「一个项目一个条目」— 同一个项目放在 5 台机器 5 个路径，这里只显示一行。</p>
+        <p class="surface__lead">把散在各台机器上的 <code>.uproject</code> 汇总成「一个项目一个条目」：同一个项目放在 5 台机器 5 个路径，这里只显示一行。<strong>位置（locations）是 lazy-load 的</strong>，展开行才会去拉。</p>
         <div class="surface__block">
           <div class="surface__blockhead"><svg><use href="#i-eye"/></svg>屏上能看到</div>
           <ul class="surface__list">
-            <li><b>项目列表</b>：项目名 / 覆盖了几台机器 / UE 版本</li>
-            <li><b>展开看路径分布</b>：哪台机器上哪个绝对路径属于这个项目</li>
+            <li><b>单卡片 main</b>：header 含 <code>项目清单</code> 标题 + <code>X 个逻辑项目</code> 副标 + 右上状态徽章 <code>就绪</code> / <code>错误</code></li>
+            <li><b>每行可展开</b>：<code>uproject_name</code>（粗体）+ <code>X 个位置</code> + 折叠箭头；展开后内嵌表格 <code>机器 / 根路径 / 状态</code>，状态用 info badge</li>
+            <li>三态：loading / 空态 <code>尚未发现任何项目。</code> / 列表；出错时底部红字</li>
           </ul>
         </div>
         <div class="surface__block">
           <div class="surface__blockhead"><svg><use href="#i-pointer"/></svg>能干什么</div>
           <ul class="surface__list">
-            <li><b>Discover Projects</b>：选源机，WinRM 远程 walk 拿回所有 <code>.uproject</code></li>
-            <li>看每个项目装在哪些机器上 — DDC / PSO 分发时的目标机器就从这里选</li>
+            <li>顶栏 <code>发现</code> → ProjectDiscoveryWizard（选源机 + 凭据，WinRM 远程 walk 拿回所有 <code>.uproject</code>）</li>
+            <li>顶栏 <code>映射</code> → ProjectMatchingModal（手工把已存在的路径绑定到逻辑项目，给走 share / robocopy 进来的项目补登记）</li>
+            <li>点击行 → <code>projects.loadLocations(id)</code> 懒加载这个项目在每台机器上的位置；DDC / PSO 分发选目标机就从这里看</li>
           </ul>
         </div>
         <div class="surface__related">
@@ -749,20 +824,21 @@
             <div class="surface__cn">DDC 打包 · 产物工作流</div>
           </div>
         </div>
-        <p class="surface__lead">把 Derived Data Cache 打成 <code>.ddp</code> 包，再 Robocopy 并发推到目标机。生成和分发是两个独立步骤，都在这个屏操作。</p>
+        <p class="surface__lead">把 Derived Data Cache 打成 <code>.ddp</code> 包，再 Robocopy 并发推到目标机。<strong>生成 + 分发是两个独立任务流</strong>，在这屏左右两栏并排跑。</p>
         <div class="surface__block">
           <div class="surface__blockhead"><svg><use href="#i-eye"/></svg>屏上能看到</div>
           <ul class="surface__list">
-            <li><b>pak 列表</b>：项目 / 文件大小 / sha256 / 生成时间</li>
-            <li><b>实时日志面板</b>：UE 进程 stdout / stderr 滚动回显</li>
-            <li><b>分发进度</b>：每台目标机当前字节数 + ✓ / ✗ / ↻ 状态标记</li>
+            <li><b>3 块 KPI</b>：<code>项目</code> / <code>运行中</code>（实际过滤 <code>spawning|running|verifying</code> 三态）/ <code>已完成</code></li>
+            <li><b>左栏 生成任务</b>：空态 <code>暂无 DDC 打包任务</code> + <code>生成一个 DDC 包以填充此列表。</code>；否则每个 job 一张 <code>PakJobCard</code>，卡片自带 cancel emit</li>
+            <li><b>右栏 分发任务</b>：空态 <code>暂无分发任务运行。</code>；否则渲染 <code>DistributeProgressTable</code>，每台目标机一行（当前字节 + ✓ / ✗ / ↻ 状态）</li>
           </ul>
         </div>
         <div class="surface__block">
           <div class="surface__blockhead"><svg><use href="#i-pointer"/></svg>能干什么</div>
           <ul class="surface__list">
-            <li><b>New Generation</b>：选项目 + 源机 + 输出路径，启动生成</li>
-            <li><b>Distribute</b>：选一个已生成的 pak + 多台目标机，并发推送</li>
+            <li>顶栏 <code>生成</code> → DdcPakWizard（传 projects + locations + machines + credentials）</li>
+            <li>Wizard 8 步：选项目 → 确认引擎版本 → 校验 DDC → 收集产物 → 压缩成 .ddp 包 → 分发 → 客户端验证 → 归档报告</li>
+            <li>每个 PakJobCard 内部都有 <code>取消</code> 按钮（emit <code>cancel</code> 到 store）</li>
           </ul>
         </div>
         <div class="surface__related">
@@ -783,21 +859,22 @@
             <div class="surface__cn">PSO 缓存 · Shader 流水线</div>
           </div>
         </div>
-        <p class="surface__lead">解决切换场景时的卡顿问题。先确认 CVar 开关没问题，再在源机录一次 PSO，然后推到 GPU 型号一致的目标机，最后看矩阵确认哪些机器可以用。</p>
+        <p class="surface__lead">解决切场景卡顿。<strong>同屏并列两类任务</strong>：左栏看已采集文件，右栏同时跑 collect job 和 distribute job。GPU 一致性矩阵在 Health Check 屏。</p>
         <div class="surface__block">
           <div class="surface__blockhead"><svg><use href="#i-eye"/></svg>屏上能看到</div>
           <ul class="surface__list">
-            <li><b>CVar 状态条</b>：R008-R010 是否全绿（PSO 预缓存 CVar 是否已开）</li>
-            <li><b>PSO 文件清单</b>：哪些机器收过、文件大小、来自哪次 collect</li>
-            <li><b>GPU 一致性矩阵</b>：源机和目标机的 GPU 型号 / 驱动版本是否匹配</li>
+            <li><b>3 块 KPI</b>：<code>项目</code> / <code>活跃</code> / <code>已采集</code></li>
+            <li><b>左栏 已采集文件</b>：header 带项目下拉（默认 <code>选择项目</code>，单项目时自动选中）；未选时空态 <code>未选择 PSO 项目</code> + <code>选择一个项目或开始一次采集任务。</code>；已选则渲染 <code>PsoFileExplorer</code></li>
+            <li><b>右栏 任务面板</b>：collect job 用 <code>PsoJobCard</code>（传 source / project label，可取消）；distribute job 自渲染 <code>分发 · {jobId}</code> + status badge + targets 表，每个 target = host + 状态徽章 <code>ok / err / running / unknown</code></li>
+            <li>任务区空态：<code>暂无 PSO 任务。</code></li>
           </ul>
         </div>
         <div class="surface__block">
           <div class="surface__blockhead"><svg><use href="#i-pointer"/></svg>能干什么</div>
           <ul class="surface__list">
-            <li><b>Collect</b>：选源机 + 项目 + 测试关卡，跑 UE runner 录一次 PSO</li>
-            <li><b>Distribute</b>：把 PSO 文件推到 GPU 型号一致的目标机</li>
-            <li>查看 GPU Consistency Matrix，确认哪些目标机能接收</li>
+            <li>顶栏 <code>采集</code> → PsoCollectWizard（选源机 + 项目 + 测试关卡，跑 UE runner 录 PSO）</li>
+            <li>文件级 <code>分发</code> → PsoDistributeWizard（自动携带选中文件，推到 GPU 型号一致的目标机）</li>
+            <li>collect 任务卡片可随时取消</li>
           </ul>
         </div>
         <div class="surface__related">
@@ -817,19 +894,22 @@
             <div class="surface__cn">SMB 共享 · Shared DDC</div>
           </div>
         </div>
-        <p class="surface__lead">目标机上已建的 SMB 共享清单，加上新建向导。DDC / PSO 往目标机推文件之前，目标机得先有共享盘，就在这里建。</p>
+        <p class="surface__lead">已建的 SMB 共享清单，只做查看 / 删除。<strong>入口隐蔽</strong>：侧栏没有这一项，本屏顶栏也没创建按钮。要建新共享，去 Dashboard 或 Machines 屏的顶栏按钮。</p>
         <div class="surface__block">
           <div class="surface__blockhead"><svg><use href="#i-eye"/></svg>屏上能看到</div>
           <ul class="surface__list">
-            <li><b>共享列表</b>：host / 路径 / 是 Mode A 还是 Mode B / 授权账号</li>
-            <li>每行带一个状态：本机当前能不能挂载</li>
+            <li><b>自定义 header</b>（没用 UecmPageHeader）：eyebrow <code>Shared DDC</code> + 标题 <code>SMB 共享</code> + 右侧 pill <code>X 个共享</code></li>
+            <li><b>表格</b>：<code>主机 / 共享名 / UNC 路径 / 模式 / 凭据 / 操作</code>，模式徽章 <code>managed</code> 蓝色高亮，其它灰</li>
+            <li><b>inline 删除确认面板</b>（不是 modal）：<code>确认删除共享 #{id}?</code> + 勾选 <code>同时在远端主机上移除该共享(需要凭据)</code> + 错误提示 + <code>删除 / 取消</code></li>
+            <li>三态：loading / 空态 <code>还没有共享。请前往「机器列表」点击「共享」按钮来创建。</code> / 表格</li>
           </ul>
         </div>
         <div class="surface__block">
           <div class="surface__blockhead"><svg><use href="#i-pointer"/></svg>能干什么</div>
           <ul class="surface__list">
-            <li><b>New Share · Mode A</b>：开 Guest + Everyone:Full，适合信任内网直接用</li>
-            <li><b>New Share · Mode B</b>：建 <code>ddc-svc</code> 专用账号，PsExec64 注入 SYSTEM 凭据，让系统服务也能挂载</li>
+            <li>行级 <code>删除</code> 链接 → 展开 inline 确认面板，决定是否同时远端清理（远端清理要凭据）</li>
+            <li><b>没有顶栏创建按钮、没有侧栏导航</b>：创建动作在 Dashboard / Machines 那两屏触发</li>
+            <li>新建走 ShareCreateWizard：可选 Mode A（Guest + Everyone:Full）或 Mode B（<code>ddc-svc</code> 专用账号 + PsExec64 注入 SYSTEM 凭据）</li>
           </ul>
         </div>
         <div class="surface__related">
@@ -848,21 +928,23 @@
             <div class="surface__cn">INI 扫描 · 配置漂移</div>
           </div>
         </div>
-        <p class="surface__lead">跨机器批量扫 project / user / engine 三类 INI 文件，哪里配置不对列出来，一键改掉还自动备份，改坏了能还原。</p>
+        <p class="surface__lead">跨机批量扫 project / user / engine 三类 INI 文件，哪里配置不对就列成一条「漂移项」。一键改，自动留备份。<strong>顶部有个全局应用凭据下拉</strong>，下面所有漂移项的修复动作都走这凭据。</p>
         <div class="surface__block">
           <div class="surface__blockhead"><svg><use href="#i-eye"/></svg>屏上能看到</div>
           <ul class="surface__list">
-            <li><b>层级结果树</b>：机器 → INI 文件 → 触发了哪条规则</li>
-            <li><b>三栏诊断</b>：What 是什么问题 / Why 为什么是问题 / Symptom 不改会怎样</li>
-            <li><b>before/after diff</b>：修复前后对比，确认没改错再提交</li>
+            <li><b>4 块 KPI</b>：<code>严重</code> / <code>警告</code> / <code>健康</code> / <code>文件</code>（tone: critical / warning / healthy / info）</li>
+            <li><b>顶部全局 <code>应用凭据</code> 下拉</b>：占位 <code>选择用于应用的凭据</code>，列出全部 <code>credentials.alias</code>；选完之后下面任何漂移项的修复都走这凭据</li>
+            <li><b>空态</b>：file-search 图标 + 标题 <code>运行一次 INI 扫描</code> + hint <code>本次会话尚未收集到诊断结果。</code></li>
+            <li><b>有漂移项时</b>：两栏 grid，左 <code>FindingHierarchy</code>（按机器分组的漂移项树）、右 <code>FindingDetail</code>（细节面板）</li>
           </ul>
         </div>
         <div class="surface__block">
           <div class="surface__blockhead"><svg><use href="#i-pointer"/></svg>能干什么</div>
           <ul class="surface__list">
-            <li><b>New Scan</b>：选机器范围 + INI 类型，跑一次扫描</li>
-            <li><b>Apply Fix</b>：一键改写 INI，自动生成 <code>.bak</code> 备份</li>
-            <li><b>Restore from backup</b>：从 <code>.bak</code> 回滚到改之前的状态</li>
+            <li>顶栏 <code>开始扫描</code> → IniScanWizard（选机器范围 + INI 类型）</li>
+            <li>选中漂移项 → <code>应用建议</code>（需先选凭据）或 <code>跳过</code></li>
+            <li>FindingDetail 内 4 个 CTA：<code>应用建议</code> / <code>自定义编辑</code> / <code>打开文件</code> / <code>跳过</code></li>
+            <li>apply 自动生成 <code>.bak</code> 备份；从 <code>.bak</code> 可回滚</li>
           </ul>
         </div>
         <div class="surface__related">
@@ -882,25 +964,30 @@
             <div class="surface__cn">健康检查 · 矩阵</div>
           </div>
         </div>
-        <p class="surface__lead">全集群健康状态一张红绿矩阵看完，11 行 × N 台机器。每台机只发一次 WinRM，远端跑 8 项主动探测，另外 3 项在本地推算出来。</p>
+        <p class="surface__lead">11 项检查 × N 台机器一张红绿矩阵看完。每台机一次 WinRM 打包 8 项探测 + 主控本地算 3 项。<strong>GPU / 驱动矩阵</strong> 单独放在这屏底部 section（不是弹窗、不是 PSO 屏）。</p>
         <div class="surface__block">
           <div class="surface__blockhead"><svg><use href="#i-eye"/></svg>屏上能看到</div>
           <ul class="surface__list">
-            <li><b>11×N 矩阵</b>：每格绿 / 黄 / 红一个，一眼看出哪台机器出了问题</li>
+            <li><b>5 块 KPI 一排</b>：左 1 块 ScoreTile 集群评分（数字 + 口语化 verdict <code>需关注 / 降级 / 健康 / 空闲</code>）+ 右 4 块 <code>健康 / 警告 / 严重 / 离线</code></li>
             <li><b>11 项检查</b>：smb / firewall_445 / share_reachable / ntfs_perm / cred_user / cred_system / env_vars / system_write + ini_consistency / pso_precaching / gpu_consistency</li>
-            <li><b>探针详情</b>：点任意格子看 Symptom + How-to-fix + 探针原始输出</li>
+            <li><b>3:2 双栏</b>：左 <code>HealthMatrix</code>（machines × checks 网格），右 detail aside</li>
+            <li><b>detail aside</b>：状态徽章 + check label + subtitle + <code>hostname · IP</code> + 3 块说明（<code>本项检查 / 症状 / 修复方法</code>）+ 底部 <code>&lt;pre&gt;</code> 最近探针输出（无输出时 <code>暂无探测输出</code>）</li>
+            <li><b>条件深链</b>：<code>pso_precaching</code> 行展示 <code>打开 INI 扫描器 R008-R010</code>（跳 <code>/ini-scanner?finding=R008</code>）；<code>gpu_consistency</code> 行展示 <code>打开 GPU 矩阵</code></li>
+            <li><b>底部独立 section</b>：<code>GPU / 驱动矩阵</code> 副标 <code>基线：{label} / X 台机器偏离</code> + <code>UecmGpuMatrix</code> 组件</li>
+            <li>三态：无机器 <code>还没有机器。先到「机器列表 &gt; 扫描」添加。</code> / 未跑过 heart-pulse 图标 + <code>运行一次完整健康检查</code> + <code>扫描完成后矩阵会自动填充。</code> / 矩阵</li>
           </ul>
         </div>
         <div class="surface__block">
           <div class="surface__blockhead"><svg><use href="#i-pointer"/></svg>能干什么</div>
           <ul class="surface__list">
-            <li><b>Run Health Check</b>：选机器范围，跑一次全量探测</li>
-            <li>查历史 run 记录，对比哪些红格这段时间变化了</li>
+            <li>顶栏 <code>开始全面检查</code> → HealthCheckWizard，选机器范围跑全量探测</li>
+            <li>点矩阵任意格子 → 右侧 aside 联动显示详情</li>
+            <li>detail 内深链跳 INI 扫描器 R008-R010 或 GPU 矩阵，直接落到具体修复界面</li>
           </ul>
         </div>
         <div class="surface__related">
           <a class="relchip" href="#f-08">F-08 健康</a>
-          <a class="relchip" href="#p-09">P-09 体检</a>
+          <a class="relchip" href="#p-09">P-09 健康检查</a>
           <a class="relchip" href="#sc-c">→ 场景 C</a>
         </div>
       </article>
@@ -913,9 +1000,9 @@
     <header class="sectionhead">
       <div>
         <div class="sectionhead__title"><span class="sectionhead__num">§ 02</span>Functional Manual</div>
-        <p class="sectionhead__sub">11 个独立功能。每张卡说清一件事能干什么，附对应的 Rust 模块和 PowerShell sidecar。</p>
+        <p class="sectionhead__sub">11 个独立功能。每张卡说清一件事能干什么，并标出背后的 Rust 模块和 PowerShell 脚本。</p>
       </div>
-      <div class="sectionhead__meta"><span>11 capabilities</span><span>4 backend layers</span><span>30 ps-scripts</span></div>
+      <div class="sectionhead__meta"><span>11 个功能</span><span>30 个 PowerShell 脚本</span><span>每个功能含 Rust 模块出处</span></div>
     </header>
 
     <div class="features">
@@ -927,7 +1014,7 @@
           <div class="feature__title">Network Discovery</div>
           <div class="feature__cn">扫一段 IP，谁开着就收谁</div>
         </div>
-        <p class="feature__body">给一段 IP 段，秒级并发扫 <strong>5985 / 445</strong>，能通的主机自动写入 SQLite，后续所有操作都从这里选目标。</p>
+        <p class="feature__body">并发扫 <strong>5985 / 445</strong> 端口（WinRM + SMB），能通的主机自动入库。后面机器列表、批量操作、健康检查的目标都从这里选。</p>
         <div class="feature__tags"><span class="tag">core::discovery</span><span class="tag">test-winrm.ps1</span></div>
       </article>
 
@@ -991,7 +1078,7 @@
         <div class="feature__icon"><svg><use href="#i-file-search"/></svg></div>
         <div>
           <div class="feature__title">INI Scanner</div>
-          <div class="feature__cn">扫 INI 配置，违规一键修</div>
+          <div class="feature__cn">扫 INI 配置，漂移项一键修</div>
         </div>
         <p class="feature__body">内置 <strong>R001–R010</strong> 共 10 条规则，每条都列清 What / Why / Symptom 三列。发现问题点 Apply Fix，看 before/after diff 确认再提交。</p>
         <div class="feature__tags"><span class="tag">core::ini_diagnostics</span><span class="tag">UecmCodeBlock.vue</span></div>
@@ -1035,7 +1122,7 @@
         <div class="feature__icon"><svg><use href="#i-usb"/></svg></div>
         <div>
           <div class="feature__title">WinRM Bootstrap</div>
-          <div class="feature__cn">目标机没开远程？先走这一步</div>
+          <div class="feature__cn">目标机没开 WinRM？先走这一步</div>
         </div>
         <p class="feature__body">主控机打包一个自包含目录，U 盘或共享盘拷过去，目标机以管理员跑一次 <code>bootstrap-winrm-remote.ps1</code> 即可。v1.0 里唯一需要人工跑腿的步骤。</p>
         <div class="feature__tags"><span class="tag">package-winrm-bootstrap.ps1</span><span class="tag">enable-winrm.ps1</span></div>
@@ -1051,7 +1138,7 @@
         <div class="sectionhead__title"><span class="sectionhead__num">§ 03</span>Validation Flows</div>
         <p class="sectionhead__sub">按真实使用场景分成 5 组。每组顶部有流程图，点节点直接跳到具体步骤。</p>
       </div>
-      <div class="sectionhead__meta"><span>5 scenarios</span><span>12 procedures</span><span>read-only safe</span></div>
+      <div class="sectionhead__meta"><span>5 个场景</span><span>12 个步骤</span><span>每步含前提 / 预期 / 验证</span></div>
     </header>
 
     <div class="scenarios">
@@ -1260,8 +1347,8 @@
           <div>
             <div class="scenario__title">
               <span class="scenario__letter">C</span>
-              体检 &amp; 修复
-              <span class="scenario__cn">INI 违规一键修，健康矩阵一眼看清</span>
+              健康检查 &amp; 修复
+              <span class="scenario__cn">INI 漂移项一键修，健康矩阵一眼看清</span>
             </div>
           </div>
           <div class="flow">
@@ -1276,7 +1363,7 @@
             <div class="proc__head"><span class="proc__id">P · 08</span><span class="badge badge--info">Diagnostics</span></div>
             <div>
               <div class="proc__title">Run INI Scanner + apply one-click fix</div>
-              <div class="proc__cn">扫全集群 INI 配置，选一条违规修掉</div>
+              <div class="proc__cn">扫全集群 INI 配置，选一条漂移项修掉</div>
             </div>
             <ol class="steps">
               <li>INI Scanner View → New Scan → 选机器范围 + INI 文件范围</li>
@@ -1287,7 +1374,7 @@
             </ol>
             <div class="tips">
               <div class="tip tip--prereq"><div class="tip__label"><svg><use href="#i-alert"/></svg>Prereq</div><div class="tip__body">目标机已加入 UECM；INI 文件存在于目标路径</div></div>
-              <div class="tip tip--expect"><div class="tip__label"><svg><use href="#i-check"/></svg>Expect</div><div class="tip__body">违规列表刷新；diff 视图显示正确；<code>.bak</code> 已写到目标机</div></div>
+              <div class="tip tip--expect"><div class="tip__label"><svg><use href="#i-check"/></svg>Expect</div><div class="tip__body">漂移项列表刷新；diff 视图显示正确；<code>.bak</code> 已写到目标机</div></div>
               <div class="tip tip--verify"><div class="tip__label"><svg><use href="#i-zap"/></svg>Verify</div><div class="tip__body">第二次 Scan 该条不再出现</div></div>
             </div>
           </article>
@@ -1345,7 +1432,7 @@
               <li>UECM 自动按项目身份匹配为「逻辑项目」</li>
               <li>DDC Pak View → New Generation → 选项目 + 源机 + 目标 .ddp 输出路径</li>
               <li>后台拉起 UE commandlet，实时推 stdout/stderr 到 UI</li>
-              <li>结束后检查 pak 文件大小和 sha256</li>
+              <li>结束后检查 .ddp 文件大小和 sha256</li>
             </ol>
             <div class="tips">
               <div class="tip tip--prereq"><div class="tip__label"><svg><use href="#i-alert"/></svg>Prereq</div><div class="tip__body">源机装了项目对应的 UE 版本；DDC 缓存至少预热过一次</div></div>
@@ -1361,7 +1448,7 @@
               <div class="proc__cn">Robocopy 并发把 .ddp 推到多台目标机</div>
             </div>
             <ol class="steps">
-              <li>DDC Pak View → 选已生成的 pak → Distribute</li>
+              <li>DDC Pak View → 选已生成的 .ddp 包 → Distribute</li>
               <li>多选目标机器（需映射到同一逻辑项目）→ Confirm</li>
               <li>每台机器并发跑 Robocopy，独立上报进度</li>
               <li>某台失败不影响其余 N-1 台继续跑</li>
@@ -1442,7 +1529,7 @@
       <article class="future">
         <div class="future__head"><span class="future__id">R · 02</span><span class="badge badge--healthy"><svg><use href="#i-zap"/></svg>Quick Win</span></div>
         <div><div class="future__title">Scheduled maintenance</div><div class="future__cn">定时任务自动维护</div></div>
-        <p class="future__body">类 cron 调度：每天凌晨自动跑 Health Check，每周自动重新生成 DDC pak 并推到全集群，不需要人记着。</p>
+        <p class="future__body">类 cron 调度：每天凌晨自动跑健康检查，每周自动重新生成 DDC 包并推到全集群，不需要人记着。</p>
         <p class="future__why">靠人记得按按钮，总有忘的时候</p>
       </article>
 

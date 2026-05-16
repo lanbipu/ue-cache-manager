@@ -1,0 +1,1663 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>UECM v1.0 · 操作手册与现状报告</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* instrument-panel palette in OKLCH */
+    --bg:           oklch(13% 0.008 235);
+    --bg-grid:      oklch(18% 0.010 235);
+    --surface:      oklch(17% 0.010 235);
+    --surface-2:    oklch(20% 0.012 235);
+    --border:       oklch(28% 0.014 235);
+    --border-soft:  oklch(23% 0.010 235);
+    --border-strong:oklch(40% 0.020 235);
+    --fg:           oklch(94% 0.005 235);
+    --fg-muted:     oklch(70% 0.012 235);
+    --fg-subtle:    oklch(48% 0.014 235);
+
+    --accent:       oklch(82% 0.155 78);     /* signal amber */
+    --accent-dim:   oklch(60% 0.110 78);
+    --accent-glow:  oklch(82% 0.155 78 / 0.18);
+
+    --ok:           oklch(74% 0.130 148);
+    --warn:         oklch(82% 0.150 82);
+    --err:          oklch(70% 0.160 28);
+    --info:         oklch(74% 0.085 220);
+
+    --shadow-inset: inset 0 1px 0 oklch(100% 0 0 / 0.04);
+
+    --type-display: "IBM Plex Sans", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    --type-mono:    "IBM Plex Mono", ui-monospace, "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--type-display);
+    font-feature-settings: "ss01", "ss02", "cv11", "tnum";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    margin: 0;
+    font-size: 15px;
+    line-height: 1.65;
+    background:
+      radial-gradient(1200px 600px at 20% -10%, var(--accent-glow), transparent 60%),
+      linear-gradient(180deg, oklch(15% 0.010 235), var(--bg) 30%);
+    background-attachment: fixed;
+    min-height: 100vh;
+  }
+
+  /* dot grid pattern overlay */
+  body::before {
+    content: "";
+    position: fixed; inset: 0;
+    background-image: radial-gradient(var(--bg-grid) 1px, transparent 1px);
+    background-size: 28px 28px;
+    opacity: 0.55;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { color: var(--fg); }
+
+  hr {
+    border: 0;
+    border-top: 1px solid var(--border-soft);
+    margin: 0;
+  }
+
+  /* layout */
+  .frame {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 0 48px;
+    position: relative;
+    z-index: 1;
+  }
+  @media (max-width: 720px) {
+    .frame { padding: 0 20px; }
+  }
+
+  /* TOP BAR */
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: oklch(13% 0.008 235 / 0.85);
+    backdrop-filter: saturate(140%) blur(14px);
+    -webkit-backdrop-filter: saturate(140%) blur(14px);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .topbar-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    padding: 14px 0;
+    font-family: var(--type-mono);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .topbar-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--fg);
+    font-weight: 600;
+  }
+  .topbar-brand .dot {
+    width: 8px; height: 8px;
+    background: var(--accent);
+    border-radius: 1px;
+    box-shadow: 0 0 12px var(--accent), inset 0 0 0 1px oklch(95% 0.05 78);
+    animation: pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+  .topbar-nav { display: flex; gap: 28px; }
+  .topbar-nav a {
+    color: var(--fg-muted);
+    transition: color 120ms ease-out;
+  }
+  .topbar-nav a:hover { color: var(--fg); }
+  .topbar-nav .num {
+    color: var(--accent-dim);
+    margin-right: 6px;
+  }
+  @media (max-width: 860px) {
+    .topbar-nav { display: none; }
+  }
+
+  /* HERO */
+  .hero {
+    padding: 72px 0 56px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .eyebrow {
+    font-family: var(--type-mono);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 24px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 28px;
+    height: 1px;
+    background: var(--accent);
+  }
+  .hero h1 {
+    font-family: var(--type-display);
+    font-weight: 600;
+    font-size: clamp(40px, 6vw, 64px);
+    line-height: 1.04;
+    letter-spacing: -0.025em;
+    margin: 0 0 24px;
+    max-width: 18ch;
+  }
+  .hero h1 em {
+    font-style: normal;
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .hero-lede {
+    font-size: 18px;
+    line-height: 1.55;
+    color: var(--fg-muted);
+    max-width: 62ch;
+    margin: 0 0 40px;
+  }
+  .hero-lede strong { color: var(--fg); font-weight: 500; }
+
+  /* SYSTEM STATUS BOARD */
+  .board {
+    margin-top: 16px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    box-shadow: var(--shadow-inset);
+  }
+  .board-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 16px;
+    padding: 14px 22px;
+    border-bottom: 1px solid var(--border-soft);
+    font-family: var(--type-mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-subtle);
+  }
+  .board-head span:first-child { color: var(--fg-muted); }
+  .board-head .live {
+    display: inline-flex; gap: 6px; align-items: center;
+    color: var(--ok);
+  }
+  .board-head .live::before {
+    content: ""; width: 6px; height: 6px;
+    background: var(--ok); border-radius: 50%;
+    box-shadow: 0 0 8px var(--ok);
+  }
+  .readout-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+  }
+  .readout {
+    padding: 20px 22px;
+    border-right: 1px solid var(--border-soft);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .readout:nth-child(5n) { border-right: none; }
+  .readout:nth-last-child(-n+5) { border-bottom: none; }
+  .readout-label {
+    font-family: var(--type-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fg-subtle);
+    margin-bottom: 8px;
+  }
+  .readout-value {
+    font-family: var(--type-mono);
+    font-size: 22px;
+    font-weight: 500;
+    color: var(--fg);
+    letter-spacing: -0.01em;
+    line-height: 1.1;
+  }
+  .readout-value .unit {
+    font-size: 11px;
+    color: var(--fg-subtle);
+    margin-left: 6px;
+    letter-spacing: 0.08em;
+  }
+  .readout-value.amber { color: var(--accent); }
+  .readout-value.ok { color: var(--ok); }
+  .readout-sub {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--fg-muted);
+    line-height: 1.4;
+  }
+  @media (max-width: 1080px) {
+    .readout-grid { grid-template-columns: repeat(3, 1fr); }
+    .readout { border-right: 1px solid var(--border-soft); border-bottom: 1px solid var(--border-soft); }
+    .readout:nth-child(5n) { border-right: 1px solid var(--border-soft); }
+    .readout:nth-child(3n) { border-right: none; }
+  }
+  @media (max-width: 640px) {
+    .readout-grid { grid-template-columns: repeat(2, 1fr); }
+    .readout:nth-child(3n) { border-right: 1px solid var(--border-soft); }
+    .readout:nth-child(even) { border-right: none; }
+  }
+
+  /* SECTION */
+  section {
+    padding: 88px 0 64px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .section-head {
+    display: grid;
+    grid-template-columns: 88px 1fr;
+    gap: 32px;
+    margin-bottom: 48px;
+    align-items: start;
+  }
+  .section-num {
+    font-family: var(--type-mono);
+    font-size: 52px;
+    font-weight: 300;
+    line-height: 1;
+    color: var(--accent);
+    letter-spacing: -0.03em;
+  }
+  .section-title h2 {
+    font-family: var(--type-display);
+    font-weight: 500;
+    font-size: 34px;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    margin: 0 0 14px;
+  }
+  .section-title .meta {
+    font-family: var(--type-mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fg-subtle);
+    margin-bottom: 12px;
+  }
+  .section-title p {
+    margin: 0;
+    color: var(--fg-muted);
+    font-size: 16px;
+    line-height: 1.6;
+    max-width: 62ch;
+  }
+  @media (max-width: 720px) {
+    .section-head { grid-template-columns: 1fr; gap: 12px; }
+    .section-num { font-size: 36px; }
+    .section-title h2 { font-size: 26px; }
+  }
+
+  /* FEATURE ROWS */
+  .module {
+    display: grid;
+    grid-template-columns: 88px 1fr;
+    gap: 32px;
+    padding: 28px 0;
+    border-top: 1px solid var(--border-soft);
+  }
+  .module:first-child { border-top: 1px solid var(--border); }
+  .module:last-child { border-bottom: 1px solid var(--border); }
+  .module-gutter {
+    font-family: var(--type-mono);
+    font-size: 13px;
+    color: var(--fg-subtle);
+    letter-spacing: 0.06em;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-top: 4px;
+  }
+  .module-gutter .id { color: var(--accent); font-size: 12px; }
+  .module-body { min-width: 0; }
+  .module-head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin-bottom: 10px;
+  }
+  .module-head h3 {
+    font-family: var(--type-display);
+    font-weight: 500;
+    font-size: 19px;
+    letter-spacing: -0.01em;
+    margin: 0;
+    color: var(--fg);
+  }
+  .module-head h3 .en {
+    font-family: var(--type-mono);
+    font-size: 12px;
+    color: var(--fg-subtle);
+    letter-spacing: 0.04em;
+    margin-left: 10px;
+    font-weight: 400;
+  }
+  .module-purpose {
+    color: var(--fg-muted);
+    margin: 4px 0 16px;
+    font-size: 15px;
+    line-height: 1.65;
+    max-width: 72ch;
+  }
+  .module-facts {
+    display: grid;
+    grid-template-columns: 92px 1fr;
+    gap: 10px 24px;
+    font-size: 13.5px;
+    line-height: 1.65;
+    margin-top: 14px;
+  }
+  .module-facts dt {
+    font-family: var(--type-mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-subtle);
+    padding-top: 2px;
+  }
+  .module-facts dd { margin: 0; color: var(--fg-muted); }
+  .module-facts dd code { color: var(--fg); }
+  @media (max-width: 720px) {
+    .module { grid-template-columns: 1fr; gap: 10px; }
+    .module-gutter { flex-direction: row; gap: 14px; }
+    .module-facts { grid-template-columns: 1fr; gap: 4px 0; }
+    .module-facts dt { padding-top: 8px; }
+  }
+
+  /* BADGES */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--type-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--fg-muted);
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .badge.live { color: var(--ok); border-color: oklch(35% 0.05 148); }
+  .badge.live::before {
+    content: ""; width: 5px; height: 5px;
+    background: var(--ok); border-radius: 50%;
+    box-shadow: 0 0 6px var(--ok);
+  }
+  .badge.deferred { color: var(--warn); border-color: oklch(35% 0.06 82); }
+  .badge.deferred::before {
+    content: ""; width: 5px; height: 5px;
+    background: var(--warn); border-radius: 50%;
+  }
+  .badge.blocked { color: var(--err); border-color: oklch(35% 0.06 28); }
+  .badge.blocked::before {
+    content: ""; width: 5px; height: 5px;
+    background: var(--err); border-radius: 50%;
+  }
+  .badge.info { color: var(--info); border-color: oklch(35% 0.04 220); }
+
+  code, .mono { font-family: var(--type-mono); }
+  code {
+    font-size: 0.88em;
+    background: var(--surface-2);
+    border: 1px solid var(--border-soft);
+    padding: 1px 6px;
+    color: var(--fg);
+  }
+
+  /* RUNBOOK */
+  .runbook {
+    display: grid;
+    grid-template-columns: 88px 1fr;
+    gap: 32px;
+    padding: 28px 0;
+    border-top: 1px solid var(--border-soft);
+  }
+  .runbook:first-child { border-top: 1px solid var(--border); }
+  .runbook:last-child  { border-bottom: 1px solid var(--border); }
+  .runbook-gutter {
+    font-family: var(--type-mono);
+    font-size: 13px;
+    color: var(--accent);
+    letter-spacing: 0.04em;
+    padding-top: 4px;
+  }
+  .runbook-gutter .num {
+    display: block;
+    font-size: 24px;
+    color: var(--fg);
+    font-weight: 500;
+    margin-bottom: 6px;
+    letter-spacing: -0.01em;
+  }
+  .runbook-head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .runbook-head h3 {
+    font-family: var(--type-display);
+    font-weight: 500;
+    font-size: 20px;
+    margin: 0;
+    color: var(--fg);
+    letter-spacing: -0.01em;
+  }
+  .runbook-intro {
+    color: var(--fg-muted);
+    font-size: 15px;
+    line-height: 1.65;
+    margin: 6px 0 18px;
+    max-width: 72ch;
+  }
+  .step-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    counter-reset: step;
+  }
+  .step-list > li {
+    counter-increment: step;
+    padding: 14px 0 16px;
+    padding-left: 44px;
+    position: relative;
+    border-top: 1px dashed var(--border-soft);
+  }
+  .step-list > li:first-child { border-top: none; padding-top: 6px; }
+  .step-list > li::before {
+    content: counter(step, decimal-leading-zero);
+    position: absolute;
+    left: 0; top: 14px;
+    font-family: var(--type-mono);
+    font-size: 12px;
+    color: var(--accent);
+    letter-spacing: 0.04em;
+  }
+  .step-list > li:first-child::before { top: 6px; }
+  .step-title {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--fg);
+    margin-bottom: 4px;
+  }
+  .step-detail {
+    color: var(--fg-muted);
+    font-size: 14px;
+    line-height: 1.65;
+    max-width: 72ch;
+  }
+  .step-detail .label {
+    font-family: var(--type-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-subtle);
+    margin-right: 8px;
+  }
+
+  /* COMMAND BLOCK */
+  pre.cmd {
+    font-family: var(--type-mono);
+    font-size: 12.5px;
+    line-height: 1.65;
+    color: var(--fg);
+    background: var(--bg-grid);
+    border: 1px solid var(--border);
+    margin: 12px 0 0;
+    padding: 12px 14px;
+    overflow-x: auto;
+    white-space: pre;
+    position: relative;
+  }
+  pre.cmd::before {
+    content: attr(data-host) " ❯";
+    color: var(--accent-dim);
+    margin-right: 8px;
+    display: inline;
+  }
+  pre.cmd.out::before {
+    content: "» " attr(data-host);
+    color: var(--fg-subtle);
+  }
+  pre.cmd .ok-line { color: var(--ok); }
+  pre.cmd .warn-line { color: var(--warn); }
+  pre.cmd .dim { color: var(--fg-subtle); }
+
+  /* MATRIX (health check table) */
+  .matrix-wrap {
+    border: 1px solid var(--border);
+    overflow-x: auto;
+    background: var(--surface);
+  }
+  table.matrix {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+    font-family: var(--type-display);
+  }
+  table.matrix th, table.matrix td {
+    text-align: left;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--border-soft);
+    vertical-align: top;
+  }
+  table.matrix thead th {
+    font-family: var(--type-mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-subtle);
+    font-weight: 500;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+  }
+  table.matrix td.id {
+    font-family: var(--type-mono);
+    color: var(--accent);
+    width: 76px;
+    white-space: nowrap;
+  }
+  table.matrix td.kind {
+    font-family: var(--type-mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--fg-subtle);
+    white-space: nowrap;
+  }
+  table.matrix td.name { color: var(--fg); font-weight: 500; }
+  table.matrix td.note { color: var(--fg-muted); }
+  table.matrix tr:last-child td { border-bottom: none; }
+  table.matrix tr:hover td { background: oklch(20% 0.012 235 / 0.5); }
+
+  /* ROADMAP */
+  .roadmap {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 36px;
+    padding: 26px 0;
+    border-top: 1px solid var(--border-soft);
+  }
+  .roadmap:first-child { border-top: 1px solid var(--border); }
+  .roadmap:last-child { border-bottom: 1px solid var(--border); }
+  .roadmap-key {
+    font-family: var(--type-mono);
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-subtle);
+  }
+  .roadmap-key .tag {
+    display: inline-block;
+    color: var(--accent);
+    margin-bottom: 4px;
+    font-size: 20px;
+    letter-spacing: -0.01em;
+  }
+  .roadmap-key .tag.now { color: var(--accent); }
+  .roadmap-key .tag.next { color: var(--info); }
+  .roadmap-key .tag.later { color: var(--fg-muted); }
+  .roadmap-key .span { display: block; font-size: 11px; color: var(--fg-subtle); }
+  .roadmap-items {
+    display: grid;
+    gap: 14px;
+  }
+  .roadmap-item {
+    padding-left: 18px;
+    position: relative;
+  }
+  .roadmap-item::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 9px;
+    width: 8px; height: 1px;
+    background: var(--accent-dim);
+  }
+  .roadmap-item h4 {
+    margin: 0;
+    font-family: var(--type-display);
+    font-size: 15.5px;
+    font-weight: 500;
+    color: var(--fg);
+    line-height: 1.4;
+  }
+  .roadmap-item p {
+    margin: 4px 0 0;
+    color: var(--fg-muted);
+    font-size: 14px;
+    line-height: 1.6;
+    max-width: 64ch;
+  }
+  @media (max-width: 720px) {
+    .roadmap { grid-template-columns: 1fr; gap: 14px; }
+  }
+
+  /* CALLOUT */
+  .callout {
+    border: 1px solid var(--border);
+    background: var(--surface);
+    padding: 22px 24px;
+    margin: 32px 0 8px;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 18px;
+    align-items: start;
+  }
+  .callout .glyph {
+    font-family: var(--type-mono);
+    color: var(--accent);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding-top: 2px;
+    white-space: nowrap;
+  }
+  .callout p {
+    margin: 0;
+    color: var(--fg);
+    font-size: 14.5px;
+    line-height: 1.65;
+  }
+  .callout p + p { margin-top: 8px; color: var(--fg-muted); }
+
+  /* FOOTER */
+  footer {
+    padding: 56px 0 80px;
+  }
+  .spec-sheet {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    gap: 14px 28px;
+    font-size: 13px;
+    line-height: 1.7;
+    font-family: var(--type-mono);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    padding: 24px 0;
+  }
+  .spec-sheet dt {
+    color: var(--fg-subtle);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .spec-sheet dd {
+    margin: 0;
+    color: var(--fg);
+  }
+  .spec-sheet dd .dim { color: var(--fg-muted); }
+  .signoff {
+    margin-top: 28px;
+    font-family: var(--type-mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-subtle);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+  .signoff .seal {
+    border: 1px solid var(--border);
+    padding: 6px 12px;
+    color: var(--accent);
+  }
+  @media (max-width: 720px) {
+    .spec-sheet { grid-template-columns: 1fr; gap: 2px 0; }
+    .spec-sheet dt { margin-top: 12px; }
+    .spec-sheet dt:first-child { margin-top: 0; }
+  }
+
+  /* PRINT */
+  @media print {
+    body { background: #fff; color: #000; }
+    body::before { display: none; }
+    .topbar { position: static; backdrop-filter: none; background: #fff; border-color: #ddd; }
+    .topbar-nav { display: none; }
+    .topbar-brand .dot { background: #000; box-shadow: none; animation: none; }
+    .hero { padding-top: 24px; }
+    section, footer { page-break-inside: avoid; }
+    .board, .matrix-wrap, .callout, pre.cmd, .spec-sheet {
+      background: #fff; border-color: #999; color: #000;
+    }
+    a { color: #000; text-decoration: underline; }
+    .badge { border-color: #666; color: #000; }
+    .badge.live::before, .badge.deferred::before, .badge.blocked::before { background: #000; box-shadow: none; }
+    .readout-value, .section-num, .runbook-gutter, .module-gutter .id,
+    .topbar-nav .num, .step-list > li::before, .roadmap-key .tag, .roadmap-item::before,
+    .eyebrow, .eyebrow::before, .callout .glyph, .signoff .seal, pre.cmd::before {
+      color: #000 !important; background: transparent !important;
+    }
+  }
+</style>
+</head>
+<body>
+
+<!-- TOPBAR -->
+<header class="topbar">
+  <div class="frame topbar-inner">
+    <div class="topbar-brand">
+      <span class="dot"></span>
+      UECM · UE Cache Manager
+    </div>
+    <nav class="topbar-nav">
+      <a href="#status"><span class="num">00</span>状态板</a>
+      <a href="#features"><span class="num">01</span>功能介绍</a>
+      <a href="#runbooks"><span class="num">02</span>流程说明</a>
+      <a href="#roadmap"><span class="num">03</span>未来规划</a>
+    </nav>
+  </div>
+</header>
+
+<!-- HERO -->
+<section class="hero" id="status" style="padding-top:88px;">
+  <div class="frame">
+    <p class="eyebrow">操作手册 · 现状报告 · v1.0</p>
+    <h1>VP/XR 渲染集群<br>的 <em>UE 缓存调度台</em></h1>
+    <p class="hero-lede">
+      UECM 是一台 Windows 操作机就能管完整个局域网渲染集群的桌面工具。
+      它的存在只为一件事：让集群里<strong>任意一台机器开 UE 工程都能零编译启动、零卡顿运行</strong>。
+      这份文档是 v1.0 的功能盘点、可验证的操作流程、以及尚未落地的下一步。
+    </p>
+
+    <!-- STATUS BOARD -->
+    <div class="board" aria-label="系统状态板">
+      <div class="board-head">
+        <span>SYSTEM STATUS · 2026-05-05 build</span>
+        <span class="live">LIVE · v1.0 feature-complete</span>
+      </div>
+      <div class="readout-grid">
+        <div class="readout">
+          <div class="readout-label">Release</div>
+          <div class="readout-value amber">v1.0<span class="unit">2026-05-05</span></div>
+          <div class="readout-sub">本地功能完整 · lanPC E2E 待重启</div>
+        </div>
+        <div class="readout">
+          <div class="readout-label">Plans landed</div>
+          <div class="readout-value ok">6<span class="unit">/ 6</span></div>
+          <div class="readout-sub">基础底座 / 发现配置 / 共享提权 / 诊断 / DDC Pak / PSO</div>
+        </div>
+        <div class="readout">
+          <div class="readout-label">Navigable views</div>
+          <div class="readout-value">8</div>
+          <div class="readout-sub">Dashboard · Machines · Shares · Projects · DDC Pak · PSO · INI · Health</div>
+        </div>
+        <div class="readout">
+          <div class="readout-label">Health-check rows</div>
+          <div class="readout-value">11<span class="unit">× N</span></div>
+          <div class="readout-sub">8 活检 + 3 派生 · 单机一次 PowerShell 轮转</div>
+        </div>
+        <div class="readout">
+          <div class="readout-label">INI rules</div>
+          <div class="readout-value">7<span class="unit">R001–R007</span></div>
+          <div class="readout-sub">硬编码路径 / 用户级覆盖 / 映射盘符 / 已弃用 CVar 等</div>
+        </div>
+        <div class="readout">
+          <div class="readout-label">SQLite tables</div>
+          <div class="readout-value">13</div>
+          <div class="readout-sub">machines · gpus · creds · shares · projects · ini · pso · ops · …</div>
+        </div>
+        <div class="readout">
+          <div class="readout-label">Test pass</div>
+          <div class="readout-value ok">316<span class="unit">/ 316</span></div>
+          <div class="readout-sub">159 frontend (vitest) · 157 backend (cargo)</div>
+        </div>
+        <div class="readout">
+          <div class="readout-label">Stack</div>
+          <div class="readout-value" style="font-size:14px;line-height:1.4;">Tauri 2.x · Vue 3 · Rust 1.75+</div>
+          <div class="readout-sub">SQLite · WinRM 5985 · SMB 445 · PowerShell sidecar</div>
+        </div>
+        <div class="readout">
+          <div class="readout-label">Bundled vendor</div>
+          <div class="readout-value" style="font-size:14px;line-height:1.4;">PsExec64 2.43</div>
+          <div class="readout-sub">SYSTEM 凭据注入用 · vendor/ 目录</div>
+        </div>
+        <div class="readout">
+          <div class="readout-label">Target platform</div>
+          <div class="readout-value" style="font-size:14px;line-height:1.4;">Windows 10 / 11</div>
+          <div class="readout-sub">Mac / Linux 仅本地开发与非 Windows 测试</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section id="features">
+  <div class="frame">
+    <div class="section-head">
+      <div class="section-num">01</div>
+      <div class="section-title">
+        <div class="meta">FEATURE MANUAL · MODULE BREAKDOWN</div>
+        <h2>功能介绍</h2>
+        <p>
+          按依赖分层列出 v1.0 已交付的全部能力。每个模块标注作用域（单机 / 集群 / 跨机分发），
+          交付状态，与底层用到的 Windows 通路。
+          阅读这段时请把它当一份"操作员能力卡片"，而不是 changelog——changelog 见尾部 spec sheet。
+        </p>
+      </div>
+    </div>
+
+    <!-- M01 -->
+    <div class="module">
+      <div class="module-gutter">
+        <span class="id">M01</span>
+        <span>BASE</span>
+        <span class="badge live">LIVE</span>
+      </div>
+      <div class="module-body">
+        <div class="module-head">
+          <h3>机器清单与发现 <span class="en">Machine Inventory</span></h3>
+          <span class="badge info">CIDR · WinRM · SMB · WMI</span>
+        </div>
+        <p class="module-purpose">
+          从一段 CIDR 起步，扫端口（WinRM 5985 / SMB 445），把可达 Windows 主机持久化到本地 SQLite，
+          并刷新它们的 UE 安装列表、GPU 型号、驱动版本、显存容量、在线状态。每台机器都有可见的"上次见过时间"。
+        </p>
+        <dl class="module-facts">
+          <dt>能做</dt><dd>CIDR 扫描 · 单机刷新 · hostname 重命名 · 多机选中后批量操作 · live online/offline 徽标</dd>
+          <dt>怎么读 GPU</dt><dd>显示类注册表 <code>qwMemorySize</code>（绕过 WMI <code>AdapterRAM</code> 的 4 GB 上限，RTX 3080 正确读到 10240 MB）</dd>
+          <dt>持久化</dt><dd><code>machines</code> · <code>machine_ue_installs</code> · <code>machine_gpus</code></dd>
+          <dt>边界</dt><dd>GPU 探测失败时 UE 列表仍保留；非 Windows 主机标"不适用"</dd>
+        </dl>
+      </div>
+    </div>
+
+    <!-- M02 -->
+    <div class="module">
+      <div class="module-gutter">
+        <span class="id">M02</span>
+        <span>BASE</span>
+        <span class="badge live">LIVE</span>
+      </div>
+      <div class="module-body">
+        <div class="module-head">
+          <h3>凭据管理与注入 <span class="en">Credential Aliases</span></h3>
+          <span class="badge info">DPAPI · cmdkey · SQLite</span>
+        </div>
+        <p class="module-purpose">
+          一份别名对应一份用户名+密码，密码用 DPAPI 加密落到 <code>%LOCALAPPDATA%\UECM\creds.bin</code>。
+          每次 WinRM 调用按需解出，转交给 <code>Invoke-Command -Credential</code>；
+          SMB 侧用 <code>cmdkey</code> 做透明认证。UECM 自身无需以管理员身份启动。
+        </p>
+        <dl class="module-facts">
+          <dt>UI 入口</dt><dd>机器详情面板 · SMB 共享向导内嵌选择器</dd>
+          <dt>注入点</dt><dd>每次 WinRM 远程调用 · cmdkey 用户级 · PsExec64 SYSTEM 级（B 模式共享必备）</dd>
+          <dt>SQLite</dt><dd><code>credentials</code>（别名映射，不存密码）</dd>
+        </dl>
+      </div>
+    </div>
+
+    <!-- M03 -->
+    <div class="module">
+      <div class="module-gutter">
+        <span class="id">M03</span>
+        <span>SHARING</span>
+        <span class="badge live">LIVE</span>
+      </div>
+      <div class="module-body">
+        <div class="module-head">
+          <h3>SMB 共享向导 <span class="en">SMB Share Wizard</span></h3>
+          <span class="badge info">Mode A / Mode B · PsExec</span>
+        </div>
+        <p class="module-purpose">
+          一键起一个共享 DDC 盘。两种工作模式：
+          <strong>A 模式</strong>用 Guest + Everyone:Full，封闭剧组现场友好；
+          <strong>B 模式</strong>在 Host 上创建 <code>ddc-svc</code> 本地账户，共享只授权给它，再通过 vendor 里的 PsExec64
+          把该账户凭据以 SYSTEM 身份注入到客户端 —— 这就是为什么 RenderStream Service 也能挂上这块盘。
+        </p>
+        <dl class="module-facts">
+          <dt>关键脚本</dt><dd><code>ps-scripts/</code> 里 setup-share-mode-* · inject-system-credential</dd>
+          <dt>客户端不动用户账</dt><dd>每台机器原有的日常账号继续登录，只多注入一组 Service-Account 凭据</dd>
+          <dt>预览即契约</dt><dd>执行前必看 PowerShell 命令明文，无黑盒</dd>
+        </dl>
+      </div>
+    </div>
+
+    <!-- M04 -->
+    <div class="module">
+      <div class="module-gutter">
+        <span class="id">M04</span>
+        <span>CONFIG</span>
+        <span class="badge live">LIVE</span>
+      </div>
+      <div class="module-body">
+        <div class="module-head">
+          <h3>环境变量与 INI 写入 <span class="en">Cluster Config Writes</span></h3>
+          <span class="badge info">setx /M · INI atomic write · backup</span>
+        </div>
+        <p class="module-purpose">
+          单机编辑系统级环境变量、单机编辑项目/用户/引擎 INI 键值，都带自动备份。
+          多机批量推送时一台失败不阻塞其他 —— 通过 mpsc fan-out + Tauri <code>batch-progress</code> 事件
+          把每台机器的 ✓ / ✗ / ↻ 实时回馈到 UI，最高并发 8 台。
+        </p>
+        <dl class="module-facts">
+          <dt>UI 视图</dt><dd>机器列表（批量环境变量 / 批量 INI 入口）· 机器详情面板</dd>
+          <dt>原子写</dt><dd>每次写 INI 前自动 snapshot 到 <code>operations.snapshot_blob</code>，可回滚</dd>
+          <dt>并发上限</dt><dd>8 台 / 批，避免局域网压垮</dd>
+        </dl>
+      </div>
+    </div>
+
+    <!-- M05 -->
+    <div class="module">
+      <div class="module-gutter">
+        <span class="id">M05</span>
+        <span>DIAGNOSTICS</span>
+        <span class="badge live">LIVE</span>
+      </div>
+      <div class="module-body">
+        <div class="module-head">
+          <h3>INI 扫描器 <span class="en">INI Scanner · R001–R007</span></h3>
+          <span class="badge info">Pure Rust rule engine</span>
+        </div>
+        <p class="module-purpose">
+          跨集群扫描项目 / 用户 / 引擎三级 INI 文件，纯 Rust 规则引擎挑出 7 类问题。
+          UI 用 3 列诊断面板呈现：<em>What（命中规则）</em>、<em>Why（背后机理）</em>、<em>Symptom（用户会看到的现象）</em>，
+          配合 <code>UecmCodeBlock</code> 的 before/after diff 一键应用。
+        </p>
+        <dl class="module-facts">
+          <dt>R001</dt><dd>硬编码 <code>Path=</code>，无 <code>EnvPathOverride</code> 兜底</dd>
+          <dt>R002</dt><dd>用户级 DDC 覆盖（<code>EditorPerProjectUserSettings.ini</code> 的隐形杀手）</dd>
+          <dt>R003</dt><dd>映射盘符路径 —— Windows Service 起不来时不可达</dd>
+          <dt>R004</dt><dd>已弃用的 CVar / ini key</dd>
+          <dt>R005</dt><dd>关键环境变量缺失</dd>
+          <dt>R006</dt><dd>INI 与环境变量不一致</dd>
+          <dt>R007</dt><dd>健康路径基线（命中即"全 OK"）</dd>
+        </dl>
+      </div>
+    </div>
+
+    <!-- M06 -->
+    <div class="module">
+      <div class="module-gutter">
+        <span class="id">M06</span>
+        <span>PROJECT</span>
+        <span class="badge live">LIVE</span>
+      </div>
+      <div class="module-body">
+        <div class="module-head">
+          <h3>项目身份与跨机定位 <span class="en">Project Identity</span></h3>
+          <span class="badge info">.uproject discovery</span>
+        </div>
+        <p class="module-purpose">
+          扫描每台机器上的 <code>*.uproject</code>，按"项目逻辑身份"分组（名字 + GUID），
+          并把"同一个项目在每台机器的实际路径"记到 <code>project_locations</code>。
+          下次分发 DDC Pak / PSO Cache，路径映射自动复用，不用再手填。
+        </p>
+        <dl class="module-facts">
+          <dt>三级匹配</dt><dd>① 文件名自动 → ② UI 半自动选择 → ③ 手填路径映射</dd>
+          <dt>SQLite</dt><dd><code>projects</code> · <code>project_locations</code></dd>
+        </dl>
+      </div>
+    </div>
+
+    <!-- M07 -->
+    <div class="module">
+      <div class="module-gutter">
+        <span class="id">M07</span>
+        <span>ARTIFACT</span>
+        <span class="badge live">LIVE</span>
+      </div>
+      <div class="module-body">
+        <div class="module-head">
+          <h3>DDC Pak 工作流 <span class="en">DDC Pak Generate &amp; Distribute</span></h3>
+          <span class="badge info">UE runner · Robocopy</span>
+        </div>
+        <p class="module-purpose">
+          通过一个可复用的 UE runner 触发 <code>-run=DerivedDataCache -fill -DDC=CreatePak</code>，
+          验证 <code>.ddp</code> 产物完整性，必要时取消正在跑的 UE 进程，最后通过 Robocopy 多机并发分发。
+          UI 把生成、校验、分发分作独立步骤，三种实用组合（本机生成 / 远程生成远程分发 / 本机生成远程分发）走同一套底座。
+        </p>
+        <dl class="module-facts">
+          <dt>UE 命令</dt><dd><code>UnrealEditor.exe Project.uproject -run=DerivedDataCache -fill -DDC=CreatePak</code></dd>
+          <dt>产物路径</dt><dd><code>&lt;ProjectDir&gt;/DerivedDataCache/Compressed.ddp</code></dd>
+          <dt>分发通道</dt><dd>Robocopy（当前唯一传输模式 · 无 chunked/resumable 支持）</dd>
+          <dt>取消能力</dt><dd>可中断正在跑的 UE 进程，UI 步骤显示"已取消"而非"卡住"</dd>
+        </dl>
+      </div>
+    </div>
+
+    <!-- M08 -->
+    <div class="module">
+      <div class="module-gutter">
+        <span class="id">M08</span>
+        <span>ARTIFACT</span>
+        <span class="badge live">LIVE</span>
+      </div>
+      <div class="module-body">
+        <div class="module-head">
+          <h3>PSO Cache 工作流 <span class="en">PSO Collect, Verify, Distribute</span></h3>
+          <span class="badge info">UE -game · GPU signature</span>
+        </div>
+        <p class="module-purpose">
+          PSO Cache 的整套流水线：先校验 PSO Precaching 三个核心 CVar（R008–R010），再启动 UE
+          <code>-game</code> 模式做现场采集，把 <code>*.upipelinecache</code> / <code>*.stablepc.csv</code> 收回来。
+          分发时跨机比对 GPU 型号与驱动版本，签名不一致会卡死 —— PSO 是 GPU/驱动强绑定的，混用会比没用还糟。
+        </p>
+        <dl class="module-facts">
+          <dt>CVar 校验</dt><dd><code>r.PSOPrecaching=1</code> · <code>r.PSOPrecache.Compile=1</code> · 其他相关项（健康检查 R008–R010）</dd>
+          <dt>采集位置</dt><dd><code>&lt;ProjectDir&gt;/Saved/CollectedPSOs/</code></dd>
+          <dt>GPU 守门</dt><dd>分发前比对 <code>machine_gpus</code>，不一致即 abort 并给出受影响机器列表</dd>
+          <dt>UI</dt><dd>PSO Cache 视图 · 文件浏览器 + GPU 矩阵</dd>
+        </dl>
+      </div>
+    </div>
+
+    <!-- M09 -->
+    <div class="module">
+      <div class="module-gutter">
+        <span class="id">M09</span>
+        <span>DIAGNOSTICS</span>
+        <span class="badge live">LIVE</span>
+      </div>
+      <div class="module-body">
+        <div class="module-head">
+          <h3>集群健康检查 <span class="en">Cluster Health Check Matrix</span></h3>
+          <span class="badge info">11 rows × N machines</span>
+        </div>
+        <p class="module-purpose">
+          一张 11 行 × N 台机器的矩阵，单机一次 PowerShell 往返跑完所有"活检"。
+          8 项活检（SMB 等）实测端口与权限，3 项派生（INI 一致性 / PSO precaching / GPU 一致性）基于已采集数据计算。
+          详情面板对每个故障给出 What / Symptom / How-to-fix + 最后一次探测原始输出。
+        </p>
+        <div class="matrix-wrap" style="margin-top:18px;">
+          <table class="matrix">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>检查项</th>
+                <th>类型</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td class="id">01</td><td class="name">smb</td><td class="kind">probe</td><td class="note">目标主机 SMB 服务可达</td></tr>
+              <tr><td class="id">02</td><td class="name">firewall_445</td><td class="kind">probe</td><td class="note">445 端口未被防火墙拦截</td></tr>
+              <tr><td class="id">03</td><td class="name">share_reachable</td><td class="kind">probe</td><td class="note">当前用户能 list 该 UNC 路径</td></tr>
+              <tr><td class="id">04</td><td class="name">ntfs_perm</td><td class="kind">probe</td><td class="note">NTFS 层对当前账号开放读 / 写</td></tr>
+              <tr><td class="id">05</td><td class="name">cred_user</td><td class="kind">probe</td><td class="note">用户级 cmdkey 注入存在且可解析</td></tr>
+              <tr><td class="id">06</td><td class="name">cred_system</td><td class="kind">probe</td><td class="note">SYSTEM 级凭据可用（RenderStream Service 必查）</td></tr>
+              <tr><td class="id">07</td><td class="name">env_vars</td><td class="kind">probe</td><td class="note">关键环境变量已设到系统级</td></tr>
+              <tr><td class="id">08</td><td class="name">system_write</td><td class="kind">probe</td><td class="note">SYSTEM 上下文能写到目标共享盘</td></tr>
+              <tr><td class="id">09</td><td class="name">ini_consistency</td><td class="kind">derived</td><td class="note">最近一次 INI 扫描是否仍存在未修复项</td></tr>
+              <tr><td class="id">10</td><td class="name">pso_precaching</td><td class="kind">derived</td><td class="note">项目 <code>ConsoleVariables.ini</code> 中的 PSO 三件套是否开启</td></tr>
+              <tr><td class="id">11</td><td class="name">gpu_consistency</td><td class="kind">derived</td><td class="note">基于 <code>machine_gpus</code> 的跨机 GPU/驱动一致性聚合</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- M10 -->
+    <div class="module">
+      <div class="module-gutter">
+        <span class="id">M10</span>
+        <span>ONBOARD</span>
+        <span class="badge live">LIVE</span>
+      </div>
+      <div class="module-body">
+        <div class="module-head">
+          <h3>WinRM Bootstrap 工具包 <span class="en">First-contact Bootstrap</span></h3>
+          <span class="badge info">workgroup / IP target</span>
+        </div>
+        <p class="module-purpose">
+          针对工作组（非域）或裸 IP 目标机的首次接入：UECM 自动拼装一个 helper 包，
+          含远端 <code>Enable-PSRemoting</code> 脚本和操作机本地需要执行的 TrustedHosts 配置。
+          按 <code>docs/bootstrap/</code> 里的脚本走一遍，没接过手的机器也能进入清单。
+        </p>
+        <dl class="module-facts">
+          <dt>典型场景</dt><dd>新到货 / 重装 / 现场紧急加机</dd>
+          <dt>脚本目录</dt><dd><code>docs/bootstrap/</code> · <code>ps-scripts/</code></dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- RUNBOOKS -->
+<section id="runbooks">
+  <div class="frame">
+    <div class="section-head">
+      <div class="section-num">02</div>
+      <div class="section-title">
+        <div class="meta">VERIFICATION RUNBOOKS · OPERATOR-PACED</div>
+        <h2>流程说明</h2>
+        <p>
+          每条都是一份可执行的验证 runbook：先看前置条件，再按编号步骤过一遍，最后检查输出。
+          预览即契约：所有写操作都先展示明文 PowerShell，再实际跑。
+          失败时按"诊断 + 影响 + 建议修复"三段式读错误面板。
+        </p>
+      </div>
+    </div>
+
+    <!-- F1 -->
+    <div class="runbook">
+      <div class="runbook-gutter">
+        <span class="num">F1</span>
+        <span>BOOTSTRAP</span>
+      </div>
+      <div>
+        <div class="runbook-head">
+          <h3>首次接入一台 Windows 目标</h3>
+          <span class="badge live">VERIFIED</span>
+        </div>
+        <p class="runbook-intro">
+          目标机是裸 IP / 工作组，没接过 UECM。这是"从零到清单可见"的最短路径。
+        </p>
+        <ol class="step-list">
+          <li>
+            <div class="step-title">在目标机上启用 WinRM</div>
+            <div class="step-detail">
+              <span class="label">操作端</span>把 <code>docs/bootstrap/enable-psremoting.ps1</code> 拷贝过去，管理员 PowerShell 跑一次。
+              输出末尾应看到 <code>WinRM listener: HTTP on 0.0.0.0:5985</code>。
+            </div>
+          </li>
+          <li>
+            <div class="step-title">在操作机配置 TrustedHosts</div>
+            <div class="step-detail">
+              <span class="label">操作机</span>管理员 PowerShell：
+              <pre class="cmd" data-host="PS"># 用 IP 或 hostname 都可，逗号分隔，* 通配仅限内网
+winrm set winrm/config/client '@{TrustedHosts="192.168.10.*"}'</pre>
+            </div>
+          </li>
+          <li>
+            <div class="step-title">UECM 里新建凭据别名</div>
+            <div class="step-detail">
+              进入<strong>机器列表 → 共享 → 凭据</strong>，填本地账户名+密码，起一个易记别名（推荐 <code>ops-admin</code>）。
+              密码进 DPAPI 加密文件，不进 SQLite 明文。
+            </div>
+          </li>
+          <li>
+            <div class="step-title">扫描 CIDR 添加目标</div>
+            <div class="step-detail">
+              <strong>机器列表 → 扫描</strong>，填 <code>192.168.10.0/24</code>（或目标所在网段）。
+              扫描完会列出端口可达主机，勾选目标机，点"添加并刷新"。
+            </div>
+          </li>
+          <li>
+            <div class="step-title">观察刷新结果</div>
+            <div class="step-detail">
+              通过即表示这台机器在册：UE 安装列表 / GPU 型号 / 驱动版本 / 显存 / hostname 都应被填上。<code>last_seen_at</code> 显示"刚刚"。
+            </div>
+          </li>
+        </ol>
+        <div class="callout">
+          <div class="glyph">FAIL</div>
+          <div>
+            <p>如果 WinRM 探测红灯但 SMB 绿灯：说明端口可达、PSRemoting 未启。回到第 1 步重新跑脚本，检查目标机防火墙规则。</p>
+            <p>如果两者都红灯：先 <code>nc -z -w5 &lt;ip&gt; 5985</code> 验网络层，可达后再排查目标机服务状态。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- F2 -->
+    <div class="runbook">
+      <div class="runbook-gutter">
+        <span class="num">F2</span>
+        <span>SHARING</span>
+      </div>
+      <div>
+        <div class="runbook-head">
+          <h3>建一块 Mode B 的 SMB 共享 DDC</h3>
+          <span class="badge live">VERIFIED · LOCAL</span>
+        </div>
+        <p class="runbook-intro">
+          B 模式才能让 RenderStream Service / 其他 SYSTEM 上下文进程读到共享盘。A 模式只在封闭剧组现场用。
+        </p>
+        <ol class="step-list">
+          <li>
+            <div class="step-title">指定一台 Host</div>
+            <div class="step-detail">
+              通常是 NAS 或一台 NTFS 大盘的机器。进入<strong>机器列表</strong>选中目标 Host，点"创建 Shared DDC"。
+            </div>
+          </li>
+          <li>
+            <div class="step-title">选 Mode B + 路径</div>
+            <div class="step-detail">
+              <span class="label">向导</span>选 Mode B，填本地路径（例如 <code>D:\UE-DDC</code>）和共享名（例如 <code>ue-ddc</code>）。
+              UECM 会生成一个 24 位强随机密码绑给 <code>ddc-svc</code> 账户，密码进 DPAPI。
+            </div>
+          </li>
+          <li>
+            <div class="step-title">看预览</div>
+            <div class="step-detail">
+              向导会列出将在 Host 上执行的全部 PowerShell：<code>New-LocalUser</code>、<code>New-SmbShare</code>、
+              ACL 设置、cmdkey 配置。明文可读，无任何隐藏写。
+            </div>
+          </li>
+          <li>
+            <div class="step-title">选客户端 + 注入 SYSTEM 凭据</div>
+            <div class="step-detail">
+              勾选所有 Render Node。对每台机器，UECM 用 <code>vendor/PsExec64.exe -s</code> 把 ddc-svc 凭据写到 SYSTEM 帐户的 cmdkey 域。
+              进度面板每台机器 ✓/✗/↻ 实时刷新。
+            </div>
+          </li>
+          <li>
+            <div class="step-title">在客户端验证 SYSTEM 可读</div>
+            <div class="step-detail">
+              <span class="label">客户端</span>跑：
+              <pre class="cmd" data-host="PS Admin">PsExec64.exe -s -i powershell.exe
+# SYSTEM 上下文里：
+Test-Path \\&lt;host&gt;\ue-ddc</pre>
+              返回 <code class="ok-line">True</code> 即说明 RenderStream 启动 UE 时也能读到。
+            </div>
+          </li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- F3 -->
+    <div class="runbook">
+      <div class="runbook-gutter">
+        <span class="num">F3</span>
+        <span>DIAGNOSE</span>
+      </div>
+      <div>
+        <div class="runbook-head">
+          <h3>跑一遍 INI 扫描 + 一键修复</h3>
+          <span class="badge live">VERIFIED</span>
+        </div>
+        <p class="runbook-intro">
+          典型场景：怀疑某台机器 DDC 静默失效（路径看着对，UE 仍在重编 shader）。INI 扫描器会 7 条规则全过一遍。
+        </p>
+        <ol class="step-list">
+          <li>
+            <div class="step-title">进入 INI 扫描视图</div>
+            <div class="step-detail">侧边栏 <strong>INI 扫描</strong>。选定目标机器（一台或多台），选定项目，点"开始扫描"。</div>
+          </li>
+          <li>
+            <div class="step-title">读结果层级</div>
+            <div class="step-detail">
+              结果按项目 / 用户级 / 引擎级三层展开。红色高危先看 —— 大概率是 R002（<code>EditorPerProjectUserSettings.ini</code> 里有用户级覆盖压过了环境变量）。
+            </div>
+          </li>
+          <li>
+            <div class="step-title">看 3 列诊断面板</div>
+            <div class="step-detail">
+              点中某条 finding，右侧展开 <em>What</em> / <em>Why</em> / <em>Symptom</em>。底部 <code>UecmCodeBlock</code> 给出 before/after diff。
+            </div>
+          </li>
+          <li>
+            <div class="step-title">一键应用</div>
+            <div class="step-detail">
+              点"应用建议"。UECM 自动 snapshot 该 INI 文件到 <code>operations.snapshot_blob</code>，
+              然后原子写入新内容。失败可一键回滚。
+            </div>
+          </li>
+          <li>
+            <div class="step-title">再扫一遍确认</div>
+            <div class="step-detail">
+              修复后立即重新扫一次，应只剩 R007（健康路径基线）—— 也就是全绿。
+            </div>
+          </li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- F4 -->
+    <div class="runbook">
+      <div class="runbook-gutter">
+        <span class="num">F4</span>
+        <span>BATCH</span>
+      </div>
+      <div>
+        <div class="runbook-head">
+          <h3>集群批量推送一条环境变量</h3>
+          <span class="badge live">VERIFIED</span>
+        </div>
+        <p class="runbook-intro">把 <code>UE-SharedDataCachePath</code> 一次性写到所有 Render Node 的系统级环境变量。</p>
+        <ol class="step-list">
+          <li>
+            <div class="step-title">机器列表多选</div>
+            <div class="step-detail">
+              筛选出所有 Render Node（按 role 标签），点"批量环境变量"。
+            </div>
+          </li>
+          <li>
+            <div class="step-title">填变量名/值 + 选凭据别名</div>
+            <div class="step-detail">
+              <pre class="cmd" data-host="UECM batch">name  = UE-SharedDataCachePath
+value = \\nas01\ue-ddc
+scope = Machine
+creds = ops-admin</pre>
+            </div>
+          </li>
+          <li>
+            <div class="step-title">看预览 → 执行</div>
+            <div class="step-detail">
+              预览页给出每台机器要跑的 <code>setx /M</code> 命令。点"执行"后 UI 切到实时进度面板，最高并发 8 台。
+            </div>
+          </li>
+          <li>
+            <div class="step-title">读进度</div>
+            <div class="step-detail">
+              <pre class="cmd out" data-host="batch-progress"><span class="dim">[↻] node-01  setx /M ...</span>
+<span class="ok-line">[✓] node-02  ok · 84 ms</span>
+<span class="ok-line">[✓] node-03  ok · 91 ms</span>
+<span class="warn-line">[✗] node-04  WinRM auth failed · retry available</span></pre>
+              失败项不阻塞其他，可单独"重试该机器"。
+            </div>
+          </li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- F5 -->
+    <div class="runbook">
+      <div class="runbook-gutter">
+        <span class="num">F5</span>
+        <span>ARTIFACT</span>
+      </div>
+      <div>
+        <div class="runbook-head">
+          <h3>DDC Pak 生成 → 分发</h3>
+          <span class="badge deferred">PARTIAL · lanPC E2E DEFERRED</span>
+        </div>
+        <p class="runbook-intro">
+          组合 2 是核心场景：在一台开发机上做完工程，本机生成 .ddp，再分发到所有渲染节点。
+          路径映射会自动从 <code>project_locations</code> 复用。本地路径已联通；lanPC 真机 E2E 因 <code>192.168.10.20</code> 不可达暂缓。
+        </p>
+        <ol class="step-list">
+          <li>
+            <div class="step-title">选项目 + 选生成机</div>
+            <div class="step-detail">DDC Pak 视图 → 选定项目 → 选定要在哪台机器上执行 <code>-run=DerivedDataCache</code>。</div>
+          </li>
+          <li>
+            <div class="step-title">触发生成</div>
+            <div class="step-detail">
+              <pre class="cmd" data-host="ue-runner">UnrealEditor.exe Project.uproject \
+  -run=DerivedDataCache -fill -DDC=CreatePak</pre>
+              UECM 监听 UE 日志，必要时可中断。完成后产物在 <code>&lt;ProjectDir&gt;/DerivedDataCache/Compressed.ddp</code>。
+            </div>
+          </li>
+          <li>
+            <div class="step-title">校验 .ddp</div>
+            <div class="step-detail">
+              UI 显示文件大小、生成时间、SHA。若校验失败，"重试"按钮重新跑 UE runner。
+            </div>
+          </li>
+          <li>
+            <div class="step-title">选目标节点 + 分发</div>
+            <div class="step-detail">
+              勾选要接收的渲染节点。UECM 自动从 <code>project_locations</code> 解析每台机器上该项目的实际路径，
+              Robocopy 多机并发推送。失败项各自重试。
+            </div>
+          </li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- F6 -->
+    <div class="runbook">
+      <div class="runbook-gutter">
+        <span class="num">F6</span>
+        <span>ARTIFACT</span>
+      </div>
+      <div>
+        <div class="runbook-head">
+          <h3>PSO Cache 采集 + 分发（带 GPU 守门）</h3>
+          <span class="badge deferred">PARTIAL · lanPC E2E DEFERRED</span>
+        </div>
+        <p class="runbook-intro">
+          PSO 与 GPU/驱动强绑定 —— 混用会比没用更糟。这条 runbook 把"守门 → 采集 → 分发"串起来。
+        </p>
+        <ol class="step-list">
+          <li>
+            <div class="step-title">先看 GPU 一致性矩阵</div>
+            <div class="step-detail">
+              PSO Cache 视图顶部就是 GPU 矩阵。所有目标节点 GPU 型号 + 驱动版本必须一致才进入下一步。
+              不一致：先升驱动到统一版本，或为不同 GPU 单独采集。
+            </div>
+          </li>
+          <li>
+            <div class="step-title">校验 PSO Precaching CVar</div>
+            <div class="step-detail">
+              健康检查里的 R008–R010 是否都绿？<code>r.PSOPrecaching=1</code> 等没开就不会做引擎自动 precache。
+              未开 → 用 INI 一键修复 / 批量推送补上。
+            </div>
+          </li>
+          <li>
+            <div class="step-title">选定一台采集机 + 远程启动 -game</div>
+            <div class="step-detail">
+              <pre class="cmd" data-host="ue-runner">UnrealEditor.exe Project.uproject -game \
+  -r.ShaderPipelineCache.Enabled=1 \
+  -windowed -resx=1920 -resy=1080</pre>
+              v1.0 仍需操作员或现场人员手动遍历场景（自动摄像机巡游在 v1.1 路线图）。
+            </div>
+          </li>
+          <li>
+            <div class="step-title">采集产物落盘</div>
+            <div class="step-detail">
+              <code>&lt;ProjectDir&gt;/Saved/CollectedPSOs/</code> 下会出现 <code>*.upipelinecache</code> / <code>*.stablepc.csv</code>。
+              UECM 同时把 GPU 签名写入 <code>pso_cache_files</code>，供后续守门用。
+            </div>
+          </li>
+          <li>
+            <div class="step-title">分发</div>
+            <div class="step-detail">
+              选目标节点，UECM 再次比对 GPU 签名。一致 → Robocopy 推送；不一致 → 直接 abort 并列出受影响机器。
+            </div>
+          </li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- F7 -->
+    <div class="runbook">
+      <div class="runbook-gutter">
+        <span class="num">F7</span>
+        <span>HEALTH</span>
+      </div>
+      <div>
+        <div class="runbook-head">
+          <h3>跑一遍集群健康检查</h3>
+          <span class="badge live">VERIFIED</span>
+        </div>
+        <p class="runbook-intro">
+          上线前 / 重大变更后必跑。11 行 × N 机器全绿才算 ready。
+        </p>
+        <ol class="step-list">
+          <li>
+            <div class="step-title">进入健康检查视图</div>
+            <div class="step-detail">侧边栏 <strong>健康检查</strong>。默认列出全部在册机器。可按 role 过滤。</div>
+          </li>
+          <li>
+            <div class="step-title">点"运行检查"</div>
+            <div class="step-detail">
+              每台机器一次 PowerShell 往返跑完 8 项活检；3 项派生检查基于上一次的 INI 扫描结果与 <code>machine_gpus</code> 数据即时算出。
+            </div>
+          </li>
+          <li>
+            <div class="step-title">看矩阵 + 详情面板</div>
+            <div class="step-detail">
+              红格点开 → What / Symptom / How-to-fix + 该项最后一次探测的原始输出。重点关注 <code>cred_system</code> 和 <code>system_write</code> 两列。
+            </div>
+          </li>
+          <li>
+            <div class="step-title">修复 + 重跑</div>
+            <div class="step-detail">
+              每条 fix 都对应一个具体动作（重新注入 SYSTEM 凭据 / 改 INI / 补环境变量 / 升驱动）。改完再点一次"运行检查"。
+            </div>
+          </li>
+        </ol>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ROADMAP -->
+<section id="roadmap">
+  <div class="frame">
+    <div class="section-head">
+      <div class="section-num">03</div>
+      <div class="section-title">
+        <div class="meta">ROADMAP · WHAT'S NEXT</div>
+        <h2>未来规划</h2>
+        <p>
+          v1.0 把"零编译启动 + 零卡顿运行"的工程闭环跑通了。下一阶段的事分三档：
+          <strong>NOW</strong>（v1.1 候选，已有明确触发条件）·
+          <strong>NEXT</strong>（v1.2 探索，有方向但需 PoC）·
+          <strong>LATER</strong>（远期，仍属构想，未冻结优先级）。
+        </p>
+      </div>
+    </div>
+
+    <!-- NOW -->
+    <div class="roadmap">
+      <div class="roadmap-key">
+        <span class="tag now">NOW · v1.1</span>
+        <span class="span">触发：lanPC 192.168.10.20 重新可达</span>
+      </div>
+      <div class="roadmap-items">
+        <div class="roadmap-item">
+          <h4>lanPC 真机 E2E 全链路通验</h4>
+          <p>F5 / F6 真实 UE 工程跑通：DDC Pak 生成→分发→.ddp 完整性、PSO 采集→GPU 守门→分发→运行时无卡顿验证。本地步骤都过了，缺一次现场拉满的端到端。</p>
+        </div>
+        <div class="roadmap-item">
+          <h4>可导出的集群报告</h4>
+          <p>把当前这份手册的逻辑做进产品：一键导出本次 Health Check + INI Scan + GPU 矩阵的 PDF/HTML 快照，供项目导演/拍摄团队签收。</p>
+        </div>
+        <div class="roadmap-item">
+          <h4>Robocopy 失败可断点续传</h4>
+          <p>当前只有重试整次。大工程的 DDC Pak 文件几个 GB 起，中断重传成本高，要做 chunked + resumable。</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- NEXT -->
+    <div class="roadmap">
+      <div class="roadmap-key">
+        <span class="tag next">NEXT · v1.2</span>
+        <span class="span">需 PoC · 不阻塞当前发布</span>
+      </div>
+      <div class="roadmap-items">
+        <div class="roadmap-item">
+          <h4>自动化 PSO 摄像机巡游</h4>
+          <p>v1.0 还要操作员手动遍历场景，效率低且易遗漏。下一步用 UE 自动相机路径脚本驱动 -game 模式，让 PSO 采集变成"启动→等结束"。</p>
+        </div>
+        <div class="roadmap-item">
+          <h4>多机分布式 PSO 采集</h4>
+          <p>一个项目的关卡列表分片，多台开发机各采一部分，最后合并产物。前提是这些机器 GPU 一致。</p>
+        </div>
+        <div class="roadmap-item">
+          <h4>AMD / Intel GPU E2E 校验</h4>
+          <p>v1.0 NVIDIA 是唯一已验证路径。AMD/Intel 卡的 PSO 行为与驱动注册表布局有差异，需要现场机器实测覆盖。</p>
+        </div>
+        <div class="roadmap-item">
+          <h4>定时自动健康检查</h4>
+          <p>建议下限 5 分钟一次，写入 <code>health_check_runs</code> 历史，触发阈值告警（例如关键凭据丢失）。</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- LATER -->
+    <div class="roadmap">
+      <div class="roadmap-key">
+        <span class="tag later">LATER · v2.x</span>
+        <span class="span">未冻结 · 视现场反馈再上</span>
+      </div>
+      <div class="roadmap-items">
+        <div class="roadmap-item">
+          <h4>多用户协作与 RBAC</h4>
+          <p>当前是单操作员模型，没有审计层。多用户接入后需要操作历史署名、角色（操作员 / 观察员 / 管理员）权限分级。</p>
+        </div>
+        <div class="roadmap-item">
+          <h4>ZenServer 后端支持</h4>
+          <p>v1 只支持 Filesystem 共享 DDC。ZenServer 是 UE 5.4+ 推的新缓存后端，跨现场带宽场景下更合适，但部署比 SMB 重。</p>
+        </div>
+        <div class="roadmap-item">
+          <h4>UECM 的 RenderStream 深度联调</h4>
+          <p>把 RenderStream Service 的健康指标也纳入矩阵：服务运行状态、当前挂载盘、最近一次 UE 启动日志摘要。让"服务起不来"在 UECM 里就能定位。</p>
+        </div>
+        <div class="roadmap-item">
+          <h4>自动更新与远程版本管理</h4>
+          <p>Tauri Updater 接入；多台操作机时（外景 + 公司）保持 UECM 版本同步。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout" style="margin-top:36px;">
+      <div class="glyph">SCOPE</div>
+      <div>
+        <p>这份路线图刻意把"自动化采集"和"分布式采集"放在 NEXT 而非 NOW —— 它们都需要真实 GPU + 真实工程做 PoC，不是改代码就能完成的。优先级由现场操作员反馈决定，不由 Roadmap 决定。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="frame">
+    <div class="section-head" style="margin-bottom:20px;">
+      <div class="section-num" style="color:var(--fg-subtle);">/</div>
+      <div class="section-title">
+        <div class="meta">SPEC SHEET · BUILD METADATA</div>
+        <h2 style="font-size:24px;">交付信息</h2>
+      </div>
+    </div>
+    <dl class="spec-sheet">
+      <dt>Project</dt>           <dd>UE Cache Manager (UECM)</dd>
+      <dt>Release</dt>           <dd>v1.0 · 2026-05-05 · feature-complete</dd>
+      <dt>Frontend</dt>          <dd>Vue 3 · Pinia · Vue Router · vue-i18n · Tailwind · reka-ui</dd>
+      <dt>Backend</dt>           <dd>Rust 1.75+ · Tauri 2.x · rusqlite · tokio · ipnet</dd>
+      <dt>Sidecar</dt>           <dd>PowerShell · <span class="dim">enable-winrm · setup-share-mode-{a,b} · inject-system-credential · setx-machine · query-gpu-driver · start-ue-pso-collect</span></dd>
+      <dt>Vendored</dt>          <dd>PsExec64 2.43 (Sysinternals, MS EULA) · NSIS 3.11 (optional installer)</dd>
+      <dt>Persistence</dt>       <dd>SQLite (13 tables) · Windows DPAPI encrypted credential blob · cmdkey</dd>
+      <dt>Transport</dt>         <dd>WinRM 5985 / SMB 445 / Robocopy fan-out / Tauri batch-progress events</dd>
+      <dt>Test coverage</dt>     <dd>vitest 159 · cargo --lib 157 · Windows-gated tests with <code>#[cfg(windows)]</code></dd>
+      <dt>Build outputs</dt>     <dd>.exe (Win NSIS) · .dmg (macOS dev) · .AppImage (Linux dev)</dd>
+      <dt>Known limits</dt>      <dd>Windows-only WinRM / registry / Credential Manager / Robocopy / UE 自动化 paths · 单操作员模型 · NVIDIA 已验证 / AMD-Intel 待</dd>
+      <dt>Authoritative spec</dt><dd><code>docs/superpowers/specs/2026-05-01-uecm-design.md</code></dd>
+      <dt>Plans</dt>             <dd><code>docs/superpowers/plans/</code> · 6 份已落地</dd>
+      <dt>Changelog</dt>         <dd><code>docs/superpowers/changelog/2026-05-05-v1.0.md</code></dd>
+    </dl>
+    <div class="signoff">
+      <span>UECM · 操作手册 · 2026-05-13 编辑</span>
+      <span class="seal">v1.0 · LOCAL FEATURE-COMPLETE</span>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
