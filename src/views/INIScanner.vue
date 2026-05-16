@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import UecmPageHeader from "@/components/primitives/UecmPageHeader.vue";
 import UecmIcon from "@/components/primitives/UecmIcon.vue";
 import UecmKpiTile from "@/components/primitives/UecmKpiTile.vue";
@@ -12,6 +13,7 @@ import { useDiagnosticsStore } from "@/stores/diagnostics";
 import { useMachinesStore } from "@/stores/machines";
 import type { IniFinding } from "@/services/tauri";
 
+const { t } = useI18n();
 const diagnostics = useDiagnosticsStore();
 const machines = useMachinesStore();
 const credentials = useCredentialsStore();
@@ -47,23 +49,23 @@ async function skip(finding: IniFinding) {
 <template>
   <div class="flex h-full flex-col">
     <div class="space-y-4 p-6">
-      <UecmPageHeader title="INI Scanner" eyebrow="Config drift" description="Scan project, user, and engine INI files for DDC and cache drift.">
+      <UecmPageHeader :title="t('iniScanner.title')" :eyebrow="t('iniScanner.eyebrow')" :description="t('iniScanner.description')">
         <template #actions>
           <Button data-open-ini-scan-btn @click="showWizard = true">
-            <UecmIcon name="play" /> Run scan
+            <UecmIcon name="play" /> {{ t("iniScanner.runScan") }}
           </Button>
         </template>
       </UecmPageHeader>
       <section class="grid grid-cols-4 gap-px overflow-hidden rounded-lg border bg-border">
-        <UecmKpiTile label="Critical" :value="diagnostics.summary.critical" tone="critical" />
-        <UecmKpiTile label="Warning" :value="diagnostics.summary.warning" tone="warning" />
-        <UecmKpiTile label="Healthy" :value="diagnostics.summary.healthy" tone="healthy" />
-        <UecmKpiTile label="Files" :value="diagnostics.summary.total_files" tone="info" />
+        <UecmKpiTile :label="t('iniScanner.kpiCritical')" :value="diagnostics.summary.critical" tone="critical" />
+        <UecmKpiTile :label="t('iniScanner.kpiWarning')" :value="diagnostics.summary.warning" tone="warning" />
+        <UecmKpiTile :label="t('iniScanner.kpiHealthy')" :value="diagnostics.summary.healthy" tone="healthy" />
+        <UecmKpiTile :label="t('iniScanner.kpiFiles')" :value="diagnostics.summary.total_files" tone="info" />
       </section>
       <label v-if="diagnostics.findings.length > 0" class="block max-w-sm text-sm">
-        <span class="mb-1 block text-muted-foreground">Apply credential</span>
+        <span class="mb-1 block text-muted-foreground">{{ t("iniScanner.applyCredential") }}</span>
         <select v-model="applyCredentialAlias" data-apply-credential class="h-9 w-full rounded-md border bg-background px-3 text-sm">
-          <option value="" disabled>Select credential for apply</option>
+          <option value="" disabled>{{ t("iniScanner.selectApplyCredentialPlaceholder") }}</option>
           <option v-for="cred in credentials.credentials" :key="cred.alias" :value="cred.alias">{{ cred.alias }}</option>
         </select>
       </label>
@@ -72,8 +74,8 @@ async function skip(finding: IniFinding) {
     <section v-if="diagnostics.findings.length === 0" class="grid flex-1 place-items-center text-center">
       <div>
         <UecmIcon name="file-search" size="32" class="mx-auto text-muted-foreground" />
-        <h2 class="mt-4 font-display text-lg font-extrabold">Run an INI scan</h2>
-        <p class="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">No diagnostics have been collected in this session.</p>
+        <h2 class="mt-4 font-display text-lg font-extrabold">{{ t("iniScanner.emptyTitle") }}</h2>
+        <p class="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">{{ t("iniScanner.emptyHint") }}</p>
       </div>
     </section>
 

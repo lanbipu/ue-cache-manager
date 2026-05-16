@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import Button from "@/components/ui/Button.vue";
 import ProjectDiscoveryWizard from "@/components/modals/ProjectDiscoveryWizard.vue";
 import ProjectMatchingModal from "@/components/modals/ProjectMatchingModal.vue";
@@ -10,6 +11,7 @@ import { useCredentialsStore } from "@/stores/credentials";
 import { useMachinesStore } from "@/stores/machines";
 import { useProjectsStore } from "@/stores/projects";
 
+const { t } = useI18n();
 const projects = useProjectsStore();
 const machines = useMachinesStore();
 const credentials = useCredentialsStore();
@@ -44,15 +46,15 @@ async function toggleProject(projectId: number) {
 
 <template>
   <div class="grid h-full grid-rows-[auto_1fr] gap-4 p-6">
-    <UecmPageHeader title="Projects" eyebrow="Unreal projects" description="Logical project identity and per-machine project paths.">
+    <UecmPageHeader :title="t('projects.title')" :eyebrow="t('projects.eyebrow')" :description="t('projects.description')">
       <template #actions>
         <Button variant="outline" data-map-project-btn @click="showMatching = true">
           <UecmIcon name="plus" />
-          Map
+          {{ t("projects.actionMap") }}
         </Button>
         <Button data-discover-projects-btn @click="showDiscovery = true">
           <UecmIcon name="radar" />
-          Discover
+          {{ t("projects.actionDiscover") }}
         </Button>
       </template>
     </UecmPageHeader>
@@ -60,15 +62,15 @@ async function toggleProject(projectId: number) {
     <main class="min-h-0 overflow-auto rounded-lg border bg-card">
       <div class="flex items-center justify-between border-b p-4">
         <div>
-          <h2 class="font-display text-sm font-extrabold">Project inventory</h2>
-          <p class="mt-1 text-xs text-muted-foreground">{{ projects.projects.length }} logical projects</p>
+          <h2 class="font-display text-sm font-extrabold">{{ t("projects.inventoryHeader") }}</h2>
+          <p class="mt-1 text-xs text-muted-foreground">{{ t("projects.inventoryCount", { count: projects.projects.length }) }}</p>
         </div>
-        <UecmStatusBadge :tone="projects.error ? 'critical' : 'info'" :label="projects.error ? 'error' : 'ready'" size="sm" />
+        <UecmStatusBadge :tone="projects.error ? 'critical' : 'info'" :label="projects.error ? t('projects.statusError') : t('projects.statusReady')" size="sm" />
       </div>
 
-      <p v-if="projects.isLoading" class="p-4 text-sm text-muted-foreground">Loading...</p>
+      <p v-if="projects.isLoading" class="p-4 text-sm text-muted-foreground">{{ t("common.loading") }}</p>
       <p v-else-if="projects.projects.length === 0" data-projects-empty class="p-6 text-sm text-muted-foreground">
-        No projects discovered yet.
+        {{ t("projects.emptyShort") }}
       </p>
 
       <div v-else class="divide-y">
@@ -77,7 +79,7 @@ async function toggleProject(projectId: number) {
             <span class="min-w-0">
               <span class="block truncate font-display text-sm font-extrabold">{{ project.uproject_name }}</span>
               <span class="mt-1 block text-xs text-muted-foreground">
-                {{ project.location_count }} location{{ project.location_count === 1 ? "" : "s" }}
+                {{ project.location_count === 1 ? t("projects.locationCountOne", { count: project.location_count }) : t("projects.locationCountMany", { count: project.location_count }) }}
               </span>
             </span>
             <UecmIcon :name="expanded.has(project.id) ? 'chevron-down' : 'chevron-right'" />
@@ -87,9 +89,9 @@ async function toggleProject(projectId: number) {
             <table class="w-full text-left text-sm">
               <thead class="bg-muted text-xs uppercase text-muted-foreground">
                 <tr>
-                  <th class="px-3 py-2">Machine</th>
-                  <th class="px-3 py-2">Root</th>
-                  <th class="px-3 py-2">Status</th>
+                  <th class="px-3 py-2">{{ t("projects.headerMachine") }}</th>
+                  <th class="px-3 py-2">{{ t("projects.headerRoot") }}</th>
+                  <th class="px-3 py-2">{{ t("projects.headerStatus") }}</th>
                 </tr>
               </thead>
               <tbody>

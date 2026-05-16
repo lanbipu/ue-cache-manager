@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import Button from "@/components/ui/Button.vue";
 import PsoCollectWizard from "@/components/modals/PsoCollectWizard.vue";
 import PsoDistributeWizard from "@/components/modals/PsoDistributeWizard.vue";
@@ -15,6 +16,7 @@ import { useProjectsStore } from "@/stores/projects";
 import { usePsoStore } from "@/stores/pso";
 import type { PsoCacheFile } from "@/services/tauri";
 
+const { t } = useI18n();
 const machines = useMachinesStore();
 const projects = useProjectsStore();
 const pso = usePsoStore();
@@ -87,38 +89,38 @@ function targetTone(status: string) {
 
 <template>
   <div class="grid h-full grid-rows-[auto_auto_1fr] gap-4 p-6">
-    <UecmPageHeader title="PSO Cache" eyebrow="Shader pipeline" description="Collect and fan out GPU-specific pipeline cache files.">
+    <UecmPageHeader :title="t('psoCache.title')" :eyebrow="t('psoCache.eyebrow')" :description="t('psoCache.description')">
       <template #actions>
         <Button data-pso-collect-btn @click="showCollect = true">
           <UecmIcon name="database" />
-          Collect
+          {{ t("psoCache.actionCollect") }}
         </Button>
       </template>
     </UecmPageHeader>
 
     <section class="grid gap-3 md:grid-cols-3">
-      <UecmStat label="Projects" :value="projects.projects.length" icon="folder-git-2" />
-      <UecmStat label="Active" :value="activeCollectJobs" icon="loader-2" />
-      <UecmStat label="Collected" :value="completedCollectJobs" icon="check-circle-2" />
+      <UecmStat :label="t('psoCache.statProjects')" :value="projects.projects.length" icon="folder-git-2" />
+      <UecmStat :label="t('psoCache.statActive')" :value="activeCollectJobs" icon="loader-2" />
+      <UecmStat :label="t('psoCache.statCollected')" :value="completedCollectJobs" icon="check-circle-2" />
     </section>
 
     <main class="grid min-h-0 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(24rem,0.8fr)]">
       <section class="min-h-0 overflow-auto rounded-lg border bg-card">
         <div class="flex items-center justify-between gap-3 border-b p-4">
-          <h2 class="font-display text-sm font-extrabold">Collected files</h2>
+          <h2 class="font-display text-sm font-extrabold">{{ t("psoCache.collectedFiles") }}</h2>
           <select
             v-model.number="selectedProjectId"
             data-pso-project-select
             class="h-9 max-w-xs rounded-md border bg-background px-3 text-sm"
           >
-            <option :value="null">Select project</option>
+            <option :value="null">{{ t("psoCache.selectProject") }}</option>
             <option v-for="project in projects.projects" :key="project.id" :value="project.id">
               {{ project.uproject_name }}
             </option>
           </select>
         </div>
         <div v-if="selectedProjectId == null" data-pso-cache-empty class="p-4">
-          <UecmStateBlock variant="empty" title="No PSO project selected" message="Select a project or start a collection job." />
+          <UecmStateBlock variant="empty" :title="t('psoCache.noProjectSelected')" :message="t('psoCache.noProjectSelectedHint')" />
         </div>
         <PsoFileExplorer
           v-else
@@ -131,10 +133,10 @@ function targetTone(status: string) {
 
       <section class="min-h-0 overflow-auto rounded-lg border bg-card">
         <div class="border-b p-4">
-          <h2 class="font-display text-sm font-extrabold">Jobs</h2>
+          <h2 class="font-display text-sm font-extrabold">{{ t("psoCache.jobsHeading") }}</h2>
         </div>
         <div v-if="pso.collectJobs.length === 0 && pso.distributeJobs.length === 0" class="p-6 text-sm text-muted-foreground">
-          No PSO jobs queued.
+          {{ t("psoCache.noJobsQueued") }}
         </div>
         <div v-else class="space-y-4 p-4">
           <PsoJobCard
@@ -152,7 +154,7 @@ function targetTone(status: string) {
             class="rounded-lg border p-4"
           >
             <div class="mb-3 flex items-center justify-between gap-3">
-              <h3 class="truncate font-display text-sm font-extrabold">Distribute · {{ job.job_id }}</h3>
+              <h3 class="truncate font-display text-sm font-extrabold">{{ t("psoCache.distributeJobTitle", { jobId: job.job_id }) }}</h3>
               <UecmStatusBadge :tone="job.status === 'completed' ? 'healthy' : 'progress'" :label="job.status" size="sm" />
             </div>
             <table class="w-full text-sm">

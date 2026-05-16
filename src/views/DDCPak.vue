@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import Button from "@/components/ui/Button.vue";
 import DdcPakWizard from "@/components/modals/DdcPakWizard.vue";
 import DistributeProgressTable from "@/components/ddcpak/DistributeProgressTable.vue";
@@ -13,6 +14,7 @@ import { useDdcPakStore } from "@/stores/ddcPak";
 import { useMachinesStore } from "@/stores/machines";
 import { useProjectsStore } from "@/stores/projects";
 
+const { t } = useI18n();
 const projects = useProjectsStore();
 const machines = useMachinesStore();
 const credentials = useCredentialsStore();
@@ -35,28 +37,28 @@ const completedGenerates = computed(() =>
 
 <template>
   <div class="grid h-full grid-rows-[auto_auto_1fr] gap-4 p-6">
-    <UecmPageHeader title="DDC Pak" eyebrow="Artifact workflow" description="Generate and fan out portable Derived Data Cache pak files.">
+    <UecmPageHeader :title="t('ddcPak.title')" :eyebrow="t('ddcPak.eyebrow')" :description="t('ddcPak.description')">
       <template #actions>
         <Button data-open-ddc-pak-wizard @click="showWizard = true">
           <UecmIcon name="package" />
-          Generate
+          {{ t("ddcPak.actionGenerate") }}
         </Button>
       </template>
     </UecmPageHeader>
 
     <section class="grid gap-3 md:grid-cols-3">
-      <UecmStat label="Projects" :value="projects.projects.length" icon="folder-git-2" />
-      <UecmStat label="Running" :value="runningGenerates" icon="loader-2" />
-      <UecmStat label="Completed" :value="completedGenerates" icon="check-circle-2" />
+      <UecmStat :label="t('ddcPak.statProjects')" :value="projects.projects.length" icon="folder-git-2" />
+      <UecmStat :label="t('ddcPak.statRunning')" :value="runningGenerates" icon="loader-2" />
+      <UecmStat :label="t('ddcPak.statCompleted')" :value="completedGenerates" icon="check-circle-2" />
     </section>
 
     <main class="grid min-h-0 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(24rem,0.8fr)]">
       <section class="min-h-0 overflow-auto rounded-lg border bg-card">
         <div class="border-b p-4">
-          <h2 class="font-display text-sm font-extrabold">Generation jobs</h2>
+          <h2 class="font-display text-sm font-extrabold">{{ t("ddcPak.generationJobs") }}</h2>
         </div>
         <div v-if="ddcPak.generateJobs.length === 0" data-ddc-pak-empty class="p-4">
-          <UecmStateBlock variant="empty" title="No DDC pak job queued" message="Generate a DDC pak to populate this list." />
+          <UecmStateBlock variant="empty" :title="t('ddcPak.emptyTitle')" :message="t('ddcPak.emptyHint')" />
         </div>
         <div v-else class="space-y-3 p-4">
           <PakJobCard
@@ -70,10 +72,10 @@ const completedGenerates = computed(() =>
 
       <section class="min-h-0 overflow-auto rounded-lg border bg-card">
         <div class="border-b p-4">
-          <h2 class="font-display text-sm font-extrabold">Distribution jobs</h2>
+          <h2 class="font-display text-sm font-extrabold">{{ t("ddcPak.distributionJobs") }}</h2>
         </div>
         <div v-if="ddcPak.distributeJobs.length === 0" class="p-6 text-sm text-muted-foreground">
-          No distribution running.
+          {{ t("ddcPak.noDistribution") }}
         </div>
         <div v-else class="space-y-4 p-4">
           <DistributeProgressTable

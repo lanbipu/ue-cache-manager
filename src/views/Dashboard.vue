@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { RouterLink } from "vue-router";
 import Button from "@/components/ui/Button.vue";
 import UecmIcon from "@/components/primitives/UecmIcon.vue";
@@ -15,6 +16,7 @@ import { useProjectsStore } from "@/stores/projects";
 import { usePsoStore } from "@/stores/pso";
 import { tauriApi, type EchoResult, type UecmError } from "@/services/tauri";
 
+const { t } = useI18n();
 const machines = useMachinesStore();
 const projects = useProjectsStore();
 const ddcPak = useDdcPakStore();
@@ -47,7 +49,10 @@ const alerts = computed(() =>
     .map((machine) => ({
       tone: alertTone(machine.status),
       title: `${machine.hostname} ${machine.status}`,
-      detail: `${machine.ip} last seen ${machine.last_seen_at ?? "unknown"}`,
+      detail: t("dashboard.alertDetail", {
+        ip: machine.ip,
+        time: machine.last_seen_at ?? t("dashboard.lastSeenUnknown"),
+      }),
     })),
 );
 
@@ -72,62 +77,62 @@ async function runBridgeTest() {
 <template>
   <div class="h-full space-y-6 overflow-auto p-6">
     <UecmPageHeader
-      title="Dashboard"
-      eyebrow="Mission Control"
-      description="Operational snapshot for inventory, projects, DDC pak, PSO cache, and health gates."
+      :title="t('dashboard.title')"
+      :eyebrow="t('dashboard.eyebrow')"
+      :description="t('dashboard.description')"
     >
       <template #actions>
         <Button variant="outline" data-bridge-test-btn :disabled="loading" @click="runBridgeTest">
           <UecmIcon name="terminal" />
-          {{ loading ? "Running..." : "Run bridge test" }}
+          {{ loading ? t("dashboard.runningBridgeTest") : t("dashboard.runBridgeTest") }}
         </Button>
         <Button as="a" href="#/shares">
           <UecmIcon name="plus" />
-          Create Shared DDC
+          {{ t("dashboard.createSharedDdc") }}
         </Button>
       </template>
     </UecmPageHeader>
 
     <section data-dashboard-kpi class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
       <RouterLink to="/machines" class="rounded-lg border bg-card p-4 hover:bg-muted/40">
-        <p class="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">Machines online</p>
+        <p class="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">{{ t("dashboard.kpiMachinesOnline") }}</p>
         <p class="mt-2 font-display text-3xl font-extrabold">
           {{ online }} <span class="text-base text-muted-foreground">/ {{ machines.machines.length }}</span>
         </p>
       </RouterLink>
       <RouterLink to="/projects" class="rounded-lg border bg-card p-4 hover:bg-muted/40">
-        <p class="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">Projects discovered</p>
+        <p class="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">{{ t("dashboard.kpiProjectsDiscovered") }}</p>
         <p class="mt-2 font-display text-3xl font-extrabold">{{ projects.projects.length }}</p>
       </RouterLink>
       <RouterLink to="/health-check?gpu=true" class="rounded-lg border bg-card p-4 hover:bg-muted/40">
-        <p class="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">GPU baseline</p>
+        <p class="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">{{ t("dashboard.kpiGpuBaseline") }}</p>
         <p class="mt-2 truncate font-mono text-sm">{{ gpu.baselineLabel }}</p>
-        <p class="mt-1 text-xs text-status-warning">{{ gpu.deviationCount }} deviation(s)</p>
+        <p class="mt-1 text-xs text-status-warning">{{ t("dashboard.gpuDeviations", { count: gpu.deviationCount }) }}</p>
       </RouterLink>
       <RouterLink to="/health-check" class="rounded-lg border bg-card p-4 hover:bg-muted/40">
-        <p class="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">Health score</p>
+        <p class="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">{{ t("dashboard.kpiHealthScore") }}</p>
         <p class="mt-2 font-display text-3xl font-extrabold">{{ healthScore ?? "-" }}</p>
       </RouterLink>
     </section>
 
     <section class="grid gap-4 md:grid-cols-4">
-      <UecmStat label="Machines" :value="machines.machines.length" icon="server" :detail="`${online} online`" />
-      <UecmStat label="Critical" :value="critical" icon="alert-triangle" detail="SYSTEM / INI blockers" />
-      <UecmStat label="Warnings" :value="warning" icon="info" detail="Driver or config drift" />
-      <UecmStat label="DDC Path" value="\\HOST-01" icon="hard-drive" detail="Shared cache baseline" />
+      <UecmStat :label="t('dashboard.statMachines')" :value="machines.machines.length" icon="server" :detail="t('dashboard.onlineCount', { count: online })" />
+      <UecmStat :label="t('dashboard.statCritical')" :value="critical" icon="alert-triangle" :detail="t('dashboard.criticalDetail')" />
+      <UecmStat :label="t('dashboard.statWarnings')" :value="warning" icon="info" :detail="t('dashboard.warningDetail')" />
+      <UecmStat :label="t('dashboard.statDdcPath')" value="\\HOST-01" icon="hard-drive" :detail="t('dashboard.ddcDetail')" />
     </section>
 
     <section data-dashboard-recent class="grid gap-4 md:grid-cols-2">
       <RouterLink to="/ddc-pak" class="rounded-lg border bg-card p-4 hover:bg-muted/40">
-        <p class="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">Last DDC pak</p>
+        <p class="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">{{ t("dashboard.lastDdcPak") }}</p>
         <p class="mt-2 text-sm">
-          {{ lastDdcJob ? `${lastDdcJob.status} / ${lastDdcJob.job_id}` : "No DDC pak job queued." }}
+          {{ lastDdcJob ? `${lastDdcJob.status} / ${lastDdcJob.job_id}` : t("dashboard.noDdcQueued") }}
         </p>
       </RouterLink>
       <RouterLink to="/pso-cache" class="rounded-lg border bg-card p-4 hover:bg-muted/40">
-        <p class="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">Last PSO collection</p>
+        <p class="text-xs font-bold uppercase tracking-[0.18em] text-muted-foreground">{{ t("dashboard.lastPsoCollection") }}</p>
         <p class="mt-2 text-sm">
-          {{ lastPsoJob ? `${lastPsoJob.status} / ${lastPsoJob.files_collected ?? "?"} file(s)` : "No PSO collection queued." }}
+          {{ lastPsoJob ? `${lastPsoJob.status} / ${t("dashboard.psoFilesCollected", { count: lastPsoJob.files_collected ?? t("dashboard.psoFilesUnknown") })}` : t("dashboard.noPsoQueued") }}
         </p>
       </RouterLink>
     </section>
@@ -135,20 +140,20 @@ async function runBridgeTest() {
     <section class="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
       <article class="rounded-lg border bg-card p-4">
         <div class="mb-3 flex items-center justify-between">
-          <h2 class="font-display text-lg font-extrabold">Cluster Alerts</h2>
-          <UecmStatusBadge tone="warning" :label="`${alerts.length} open`" size="sm" />
+          <h2 class="font-display text-lg font-extrabold">{{ t("dashboard.clusterAlerts") }}</h2>
+          <UecmStatusBadge tone="warning" :label="t('dashboard.openCount', { count: alerts.length })" size="sm" />
         </div>
         <UecmStateBlock
           v-if="machines.machines.length === 0"
           variant="empty"
-          title="No machines registered yet"
-          message="Use Machines > Scan to build the inventory."
+          :title="t('dashboard.noMachinesTitle')"
+          :message="t('dashboard.noMachinesMessage')"
         />
         <UecmStateBlock
           v-else-if="alerts.length === 0"
           variant="empty"
-          title="No open machine status alerts"
-          message="Machine inventory is currently clean."
+          :title="t('dashboard.noAlertsTitle')"
+          :message="t('dashboard.noAlertsMessage')"
         />
         <div v-else class="divide-y">
           <div v-for="alert in alerts" :key="alert.title" class="flex items-start gap-3 py-3">
@@ -162,9 +167,9 @@ async function runBridgeTest() {
       </article>
 
       <article class="rounded-lg border bg-card p-4">
-        <h2 class="font-display text-lg font-extrabold">PowerShell Bridge</h2>
+        <h2 class="font-display text-lg font-extrabold">{{ t("dashboard.bridgeTitle") }}</h2>
         <p class="mt-1 text-sm text-muted-foreground">
-          Verifies frontend to Rust to PowerShell sidecar pipeline. Non-Windows machines may return a Windows-only error.
+          {{ t("dashboard.bridgeDescription") }}
         </p>
         <pre v-if="result" class="mt-4 overflow-auto rounded-md border bg-muted p-3 font-mono text-xs">{{ JSON.stringify(result, null, 2) }}</pre>
         <p v-if="error" class="mt-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
