@@ -2,6 +2,7 @@ pub mod commands;
 pub mod core;
 pub mod data;
 pub mod error;
+pub mod startup;
 
 use std::path::PathBuf;
 use tauri::Manager;

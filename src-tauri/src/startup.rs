@@ -1,0 +1,148 @@
+//! Shared startup paths and bootstrapping for both binaries (`uecm`, `uecm-cli`).
+//!
+//! Replaces the Tauri-only `app.path().app_data_dir()` and `app.path().resolve()`
+//! lookups so the CLI can initialize without a Tauri Builder context.
+
+use crate::data::{self, Db};
+use crate::error::{UecmError, UecmResult};
+use directories::BaseDirs;
+use std::env;
+use std::path::{Path, PathBuf};
+
+/// Bundle identifier that mirrors `src-tauri/tauri.conf.json::identifier`.
+/// MUST stay in sync with that file, otherwise CLI and UI will open different
+/// SQLite files and the UI/CLI shared-state guarantee breaks.
+///
+/// Tauri 2's `app.path().app_data_dir()` resolves to `<system data dir>/<identifier>`
+/// on all three platforms; mirroring that path keeps both binaries on the same DB.
+pub const APP_IDENTIFIER: &str = "com.lanbipu.uecm";
+
+/// Resolves the SQLite DB path. Same location for UI and CLI so both share state.
+/// Override with `UECM_DB_PATH` env var (used in tests and ad-hoc debug sessions).
+///
+/// Resolution mirrors Tauri 2 `app_data_dir()`:
+/// - Windows: `%APPDATA%\com.lanbipu.uecm\uecm.sqlite`
+/// - macOS:   `~/Library/Application Support/com.lanbipu.uecm/uecm.sqlite`
+/// - Linux:   `$XDG_DATA_HOME/com.lanbipu.uecm/uecm.sqlite` (or `~/.local/share/...`)
+pub fn resolve_db_path() -> UecmResult<PathBuf> {
+    if let Ok(override_path) = env::var("UECM_DB_PATH") {
+        return Ok(PathBuf::from(override_path));
+    }
+    let base = BaseDirs::new().ok_or_else(|| {
+        UecmError::Configuration("failed to resolve user base directories".into())
+    })?;
+    let data_dir = base.data_dir().join(APP_IDENTIFIER);
+    std::fs::create_dir_all(&data_dir).map_err(|e| {
+        UecmError::Configuration(format!("create data dir {}: {}", data_dir.display(), e))
+    })?;
+    Ok(data_dir.join("uecm.sqlite"))
+}
+
+/// Opens the DB, sets WAL mode, runs idempotent migrations. Both binaries call this.
+pub fn open_and_migrate_db(path: &Path) -> UecmResult<Db> {
+    let db = data::open(path)?;
+    {
+        let mut conn = db.lock().unwrap();
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .map_err(|e| UecmError::Configuration(format!("set WAL mode: {}", e)))?;
+        data::schema::migrate(&mut conn)?;
+    }
+    Ok(db)
+}
+
+/// Resolves the directory containing PowerShell sidecar scripts.
+/// Priority:
+///   1. `UECM_PS_DIR` env var
+///   2. `<exe-dir>/ps-scripts` (release binaries ship scripts alongside)
+///   3. `<repo-root>/ps-scripts` via CARGO_MANIFEST_DIR (dev builds)
+pub fn resolve_ps_script_dir() -> PathBuf {
+    if let Ok(override_path) = env::var("UECM_PS_DIR") {
+        return PathBuf::from(override_path);
+    }
+    if let Ok(exe) = env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let candidate = parent.join("ps-scripts");
+            if candidate.is_dir() {
+                return candidate;
+            }
+        }
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("ps-scripts")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// Mutex to serialize env var tests to prevent parallel execution race conditions.
+    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn resolve_db_path_uses_env_override() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let custom = "/tmp/test-override-uecm.sqlite";
+        env::set_var("UECM_DB_PATH", custom);
+        let path = resolve_db_path().unwrap();
+        assert_eq!(path, PathBuf::from(custom));
+        env::remove_var("UECM_DB_PATH");
+    }
+
+    #[test]
+    fn resolve_db_path_uses_tauri_identifier_subdir() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        env::remove_var("UECM_DB_PATH");
+        let path = resolve_db_path().unwrap();
+        assert!(path.ends_with("uecm.sqlite"));
+        // Path must include the Tauri identifier so UI and CLI converge on the same DB.
+        let s = path.to_string_lossy().into_owned();
+        assert!(
+            s.contains(APP_IDENTIFIER),
+            "DB path {} must contain identifier {}",
+            s,
+            APP_IDENTIFIER
+        );
+        assert!(path.parent().unwrap().is_dir());
+    }
+
+    #[test]
+    fn resolve_ps_script_dir_uses_env_override() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        let custom = "/tmp/test-ps-uecm";
+        env::set_var("UECM_PS_DIR", custom);
+        let path = resolve_ps_script_dir();
+        assert_eq!(path, PathBuf::from(custom));
+        env::remove_var("UECM_PS_DIR");
+    }
+
+    #[test]
+    fn resolve_ps_script_dir_finds_repo_scripts_in_dev() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        env::remove_var("UECM_PS_DIR");
+        let path = resolve_ps_script_dir();
+        assert!(
+            path.ends_with("ps-scripts"),
+            "expected path ending in ps-scripts, got {}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn open_and_migrate_db_creates_and_migrates() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.sqlite");
+        let db = open_and_migrate_db(&path).unwrap();
+        let conn = db.lock().unwrap();
+        let mode: String = conn
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal");
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM machines", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+}
