@@ -2231,6 +2231,7 @@ git commit -m "docs: CLI Plan 1 changelog"
 - SIGINT / Ctrl-C graceful cancel (spec §8.4) — Plan 1 emits no long-running UE work yet; `machine scan` is sub-second
 - Exit code 10 (post-error NDJSON) and 130 (SIGINT) — placeholder in `exit_code_for`; full enforcement when long-running domains land
 - **Credential-aware `machine refresh`** — `core::winrm::probe` and `core::discovery::detect_*` are host-only today. Plan 1 inherits the UI's no-credential refresh semantics; CLI flags for cred/user/pass on `machine refresh` are deferred until the underlying `core` APIs grow `_with_credential` variants (planned for the same plan that brings the `env` / `ini` / `share` domains with full credential coverage)
+- **Lazy DB initialization for DB-free subcommands** — `cli::run::run()` currently opens + migrates the DB before dispatching, even for diagnostic commands (`system version` / `system db-path` / `system ps-dir` / `winrm bootstrap-script`) that never touch it. In environments where the data dir is unwritable or the DB file is broken/locked, these otherwise-safe commands fail with `environment_error`. Fixing this cleanly requires making `Ctx::db: Option<&Db>` and threading `ok_or` checks through every handler that uses DB — an architectural decision better made in the Plan 2 brainstorm. Raised by Codex post-Task-1.4 review (P2)
 
 ## Known assumptions
 

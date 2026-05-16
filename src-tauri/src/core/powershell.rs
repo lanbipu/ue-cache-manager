@@ -36,11 +36,33 @@ pub(crate) fn decode_subprocess_output(bytes: &[u8]) -> String {
 }
 
 /// Resolve a sidecar script name to its on-disk path.
-/// Respects `UECM_PS_DIR` env override, then searches:
+/// Respects `UECM_PS_DIR` env override (returned unconditionally — caller wants
+/// that exact dir), then searches per-file:
 ///   1. `<exe-dir>/ps-scripts/<name>` — production install (Tauri bundle.resources)
 ///   2. `<repo-root>/ps-scripts/<name>` — dev builds via `CARGO_MANIFEST_DIR`
+///
+/// File-existence is checked per `name` so a partially-populated exe-dir
+/// (e.g. an older copy missing a newly added script) still falls back to the
+/// repo-root copy. If no candidate exists, the manifest-relative path is
+/// returned as a last resort so the caller's `fs::read` failure surfaces a
+/// useful error message.
 pub fn script_path(name: &str) -> PathBuf {
-    crate::startup::resolve_ps_script_dir().join(name)
+    if let Ok(over) = std::env::var("UECM_PS_DIR") {
+        return PathBuf::from(over).join(name);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let candidate = parent.join("ps-scripts").join(name);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("ps-scripts")
+        .join(name)
 }
 
 /// Load a sidecar script's text. Used when the script body is forwarded over
