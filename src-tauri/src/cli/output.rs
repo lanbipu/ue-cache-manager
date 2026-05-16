@@ -88,7 +88,6 @@ pub fn error_code(err: &UecmError) -> &'static str {
         UecmError::Configuration(_) | UecmError::Database(_) | UecmError::Io(_) => {
             "environment_error"
         }
-        _ => "internal_error",
     }
 }
 
@@ -102,7 +101,7 @@ pub fn exit_code_for(err: &UecmError) -> i32 {
         UecmError::InvalidInput(_) => 2,
         UecmError::Configuration(_) | UecmError::Database(_) | UecmError::Io(_) => 3,
         UecmError::PowerShell(_) => 4,
-        _ => 1,
+        UecmError::OperationFailed(_) => 1,
     }
 }
 
