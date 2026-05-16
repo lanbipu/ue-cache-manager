@@ -4,6 +4,13 @@ pub mod data;
 pub mod error;
 pub mod startup;
 
+/// Crate-wide lock for tests that mutate process-global env vars (`UECM_*`).
+/// Multiple modules touch the same env vars; without a single shared mutex,
+/// parallel tests in different modules can interleave set/remove calls and
+/// produce flaky reads. Acquire this lock at the top of any env-mutating test.
+#[cfg(test)]
+pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 use std::path::PathBuf;
 use tauri::Manager;
 

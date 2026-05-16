@@ -146,12 +146,9 @@ pub fn run_json<T: DeserializeOwned>(script_path: &Path, args: &[&str]) -> UecmR
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use crate::ENV_TEST_LOCK;
     #[cfg(windows)]
     use serde::Deserialize;
-
-    /// Mutex to serialize env var tests to prevent parallel execution race conditions.
-    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[cfg(windows)]
     #[derive(Debug, Deserialize)]

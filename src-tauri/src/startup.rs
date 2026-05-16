@@ -75,10 +75,7 @@ pub fn resolve_ps_script_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// Mutex to serialize env var tests to prevent parallel execution race conditions.
-    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
+    use crate::ENV_TEST_LOCK;
 
     #[test]
     fn resolve_db_path_uses_env_override() {
