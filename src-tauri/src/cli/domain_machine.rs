@@ -14,9 +14,7 @@ pub fn handle(ctx: &mut Ctx<'_>, action: MachineAction) -> UecmResult<()> {
         MachineAction::List => list(ctx),
         MachineAction::Scan { cidr, timeout_ms } => scan(ctx, &cidr, timeout_ms),
         MachineAction::Add { ip, hostname } => add(ctx, ip, hostname),
-        MachineAction::Refresh { .. } => {
-            Err(UecmError::OperationFailed("refresh: pending Task 3.4".into()))
-        }
+        MachineAction::Refresh { id } => refresh(ctx, id),
         MachineAction::Detail { id } => detail(ctx, id),
         MachineAction::Delete { id, yes } => delete(ctx, id, yes),
         MachineAction::Rename { id, hostname } => rename(ctx, id, hostname),
@@ -123,6 +121,107 @@ fn scan(ctx: &mut Ctx<'_>, cidr: &str, timeout_ms: u64) -> UecmResult<()> {
             summary: serde_json::json!({ "hosts": total }),
         })
         .ok();
+    Ok(())
+}
+
+fn refresh(ctx: &mut Ctx<'_>, id: i64) -> UecmResult<()> {
+    // Fetch machine and extract hostname before we start emitting
+    let host = {
+        let db = ctx.require_db()?;
+        let machine = machines::find_by_id(db, id)?
+            .ok_or_else(|| UecmError::InvalidInput(format!("machine id={} not found", id)))?;
+        machine.hostname.clone()
+    };
+
+    ctx.emitter
+        .emit_event(&Event::Started {
+            task_type: "machine_refresh".into(),
+            task_id: Some(format!("machine:{}", id)),
+            metadata: serde_json::json!({ "host": host }),
+        })
+        .ok();
+
+    // 1. WinRM probe
+    ctx.emitter
+        .emit_event(&Event::Progress {
+            pct: None,
+            label: "winrm probe".into(),
+            current: None,
+            total: None,
+        })
+        .ok();
+    let probe = crate::core::winrm::probe(&host)?;
+    if !probe.ok {
+        return Err(UecmError::PowerShell(format!(
+            "winrm probe failed: {}",
+            probe.message
+        )));
+    }
+
+    // 2. Detect UE installs
+    ctx.emitter
+        .emit_event(&Event::Progress {
+            pct: None,
+            label: "detect ue installs".into(),
+            current: None,
+            total: None,
+        })
+        .ok();
+    let detected_ue = crate::core::discovery::detect_ue_versions(&host)?;
+
+    // 3. Detect GPUs
+    ctx.emitter
+        .emit_event(&Event::Progress {
+            pct: None,
+            label: "detect gpus".into(),
+            current: None,
+            total: None,
+        })
+        .ok();
+    let detected_gpus = crate::core::discovery::detect_gpus(&host)?;
+
+    // 4. Persist
+    {
+        let db = ctx.require_db()?;
+
+        // Convert DetectedUe → UeInstall (first is primary)
+        machine_ue_installs::delete_for_machine(db, id)?;
+        for (idx, detected) in detected_ue.iter().enumerate() {
+            let install = machine_ue_installs::UeInstall {
+                id: None,
+                machine_id: id,
+                version: detected.version.clone(),
+                install_path: detected.install_path.clone(),
+                is_primary: idx == 0,
+            };
+            machine_ue_installs::upsert(db, &install)?;
+        }
+
+        // Convert DetectedGpu → GpuInfo
+        let gpu_infos: Vec<machine_gpus::GpuInfo> = detected_gpus
+            .iter()
+            .map(|gpu| machine_gpus::GpuInfo {
+                id: None,
+                machine_id: id,
+                gpu_model: gpu.gpu_model.clone(),
+                driver_version: gpu.driver_version.clone(),
+                vendor: gpu.vendor,
+                vram_mb: gpu.vram_mb,
+            })
+            .collect();
+        machine_gpus::replace_for_machine(db, id, &gpu_infos)?;
+
+        // Touch last_seen
+        machines::mark_seen(db, id, "ok")?;
+    }
+
+    let summary = json!({
+        "machine_id": id,
+        "ue_versions": detected_ue.len(),
+        "gpus": detected_gpus.len(),
+        "latency_ms": probe.latency_ms,
+    });
+    ctx.emitter.emit_event(&Event::Completed { summary }).ok();
     Ok(())
 }
 
