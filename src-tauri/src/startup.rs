@@ -31,11 +31,11 @@ pub fn resolve_db_path() -> UecmResult<PathBuf> {
     let base = BaseDirs::new().ok_or_else(|| {
         UecmError::Configuration("failed to resolve user base directories".into())
     })?;
-    let data_dir = base.data_dir().join(APP_IDENTIFIER);
-    std::fs::create_dir_all(&data_dir).map_err(|e| {
-        UecmError::Configuration(format!("create data dir {}: {}", data_dir.display(), e))
-    })?;
-    Ok(data_dir.join("uecm.sqlite"))
+    // Side-effect-free: no `create_dir_all` here. `open_and_migrate_db` creates
+    // the parent directory when it actually opens the DB, so DB-free commands
+    // (`system version`, `system db-path`, `system ps-dir`) never touch the
+    // filesystem just to print a path.
+    Ok(base.data_dir().join(APP_IDENTIFIER).join("uecm.sqlite"))
 }
 
 /// Opens the DB (WAL mode is set inside `data::open`) and runs idempotent

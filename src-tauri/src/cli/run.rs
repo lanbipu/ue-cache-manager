@@ -44,10 +44,9 @@ fn needs_db(cmd: &Domain) -> bool {
     use crate::cli::args::{SystemAction, WinrmAction};
     match cmd {
         Domain::Machine { .. } => true,
-        Domain::System { action } => matches!(
-            action,
-            SystemAction::MigrateDb | SystemAction::Echo { .. }
-        ),
+        // `system echo` only round-trips a PS script; it should still work
+        // when the DB is broken so users can isolate sidecar problems.
+        Domain::System { action } => matches!(action, SystemAction::MigrateDb),
         Domain::Winrm { action } => !matches!(action, WinrmAction::BootstrapScript { .. }),
     }
 }
