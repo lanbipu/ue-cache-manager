@@ -7,6 +7,7 @@ $BuildDir   = 'E:\uecm-plan4-test'
 $DeployDir  = 'C:\Tools\UECM'
 $StagingDir = 'E:\uecm-plan4-test\.deploy-staging'
 $TarFile    = Join-Path $StagingDir 'deploy.tar.gz'
+$stamp      = Get-Date -Format 'yyyyMMdd-HHmmss'
 
 function Step($n, $msg) { Write-Host "[lanPC $n] $msg" -ForegroundColor Cyan }
 
@@ -61,10 +62,20 @@ try {
   & pnpm install --frozen-lockfile
   if ($LASTEXITCODE -ne 0) { throw "pnpm install failed (exit $LASTEXITCODE)" }
 
-  # 4. Tauri release build (--no-bundle: skip msi/exe installer, only produce target\release\uecm.exe)
+  # 4. Release build: tauri (--no-bundle) produces target\release\uecm.exe;
+  #    then cargo --bin uecm-cli produces target\release\uecm-cli.exe.
   Step '4/7' "pnpm tauri build --no-bundle"
   & pnpm tauri build --no-bundle
   if ($LASTEXITCODE -ne 0) { throw "tauri build failed (exit $LASTEXITCODE)" }
+
+  # 4 (CLI). cargo build --release --bin uecm-cli (incremental; most deps already compiled above)
+  Push-Location (Join-Path $BuildDir 'src-tauri')
+  try {
+    & cargo build --release --bin uecm-cli
+    if ($LASTEXITCODE -ne 0) { throw "cargo build uecm-cli failed (exit $LASTEXITCODE)" }
+  } finally {
+    Pop-Location
+  }
 } finally {
   Pop-Location
 }
@@ -74,12 +85,23 @@ if (-not (Test-Path $BuildExe)) {
   throw "expected build artifact missing: $BuildExe"
 }
 $BuildHash = (Get-FileHash $BuildExe -Algorithm SHA256).Hash
-Write-Host "    built exe sha256: $BuildHash"
+Write-Host "    built uecm.exe sha256:     $BuildHash"
 
-# 5. Kill running uecm.exe so we can overwrite it
-Step '5/7' "stop running uecm.exe (if any)"
+$BuildCliExe = Join-Path $BuildDir 'src-tauri\target\release\uecm-cli.exe'
+if (-not (Test-Path $BuildCliExe)) {
+  throw "expected build artifact missing: $BuildCliExe"
+}
+$BuildCliHash = (Get-FileHash $BuildCliExe -Algorithm SHA256).Hash
+Write-Host "    built uecm-cli.exe sha256: $BuildCliHash"
+
+# 5. Kill running uecm.exe / uecm-cli.exe so we can overwrite them
+Step '5/7' "stop running uecm.exe / uecm-cli.exe (if any)"
 Get-Process -Name 'uecm' -ErrorAction SilentlyContinue | ForEach-Object {
-  Write-Host "    killing PID $($_.Id)"
+  Write-Host "    killing uecm PID $($_.Id)"
+  Stop-Process -Id $_.Id -Force
+}
+Get-Process -Name 'uecm-cli' -ErrorAction SilentlyContinue | ForEach-Object {
+  Write-Host "    killing uecm-cli PID $($_.Id)"
   Stop-Process -Id $_.Id -Force
 }
 Start-Sleep -Milliseconds 500
@@ -91,10 +113,15 @@ if (-not (Test-Path $DeployDir)) {
 }
 $LiveExe = Join-Path $DeployDir 'uecm.exe'
 if (Test-Path $LiveExe) {
-  $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
   Move-Item -Force $LiveExe (Join-Path $DeployDir "uecm.exe.bak-$stamp")
 }
 Copy-Item -Force $BuildExe $LiveExe
+
+$LiveCliExe = Join-Path $DeployDir 'uecm-cli.exe'
+if (Test-Path $LiveCliExe) {
+  Move-Item -Force $LiveCliExe (Join-Path $DeployDir "uecm-cli.exe.bak-$stamp")
+}
+Copy-Item -Force $BuildCliExe $LiveCliExe
 
 # Copy ps-scripts (mirror)
 $BuildPsScripts  = Join-Path $BuildDir 'ps-scripts'
@@ -112,16 +139,25 @@ if (Test-Path $BuildVendor) {
   Copy-Item -Recurse $BuildVendor $DeployVendor
 }
 
-# 7. SHA256 align check: built vs deployed must match
-Step '7/7' "verify SHA256 alignment"
+# 7. SHA256 verify: built vs deployed must match for both binaries
+Step '7/7' "verify SHA256 (uecm.exe + uecm-cli.exe)"
 $DeployHash = (Get-FileHash $LiveExe -Algorithm SHA256).Hash
 if ($BuildHash -ne $DeployHash) {
-  throw "SHA256 mismatch! build=$BuildHash deploy=$DeployHash"
+  throw "SHA256 mismatch uecm.exe! build=$BuildHash deploy=$DeployHash"
 }
-Write-Host "    OK: $DeployHash"
+Write-Host "    OK uecm.exe:     $DeployHash"
+
+$DeployCliHash = (Get-FileHash $LiveCliExe -Algorithm SHA256).Hash
+if ($BuildCliHash -ne $DeployCliHash) {
+  throw "SHA256 mismatch uecm-cli.exe! build=$BuildCliHash deploy=$DeployCliHash"
+}
+Write-Host "    OK uecm-cli.exe: $DeployCliHash"
 
 Write-Host ""
 Write-Host "[lanPC] deploy complete." -ForegroundColor Green
-Write-Host "    build exe:  $BuildExe"
-Write-Host "    deploy exe: $LiveExe"
-Write-Host "    sha256:     $DeployHash"
+Write-Host "    build gui exe:  $BuildExe"
+Write-Host "    deploy gui exe: $LiveExe"
+Write-Host "    gui sha256:     $DeployHash"
+Write-Host "    build cli exe:  $BuildCliExe"
+Write-Host "    deploy cli exe: $LiveCliExe"
+Write-Host "    cli sha256:     $DeployCliHash"

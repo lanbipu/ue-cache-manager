@@ -72,4 +72,4 @@ scp -q "$REMOTE_PS1_LOCAL"  "$SSH_HOST:$REMOTE_STAGING_FWDSLASH/deploy-lanpc-rem
 say "[5/5] lanPC: run remote deploy (this runs typecheck/install/build/deploy)"
 ssh "$SSH_HOST" "powershell -NoProfile -ExecutionPolicy Bypass -File $REMOTE_STAGING\\deploy-lanpc-remote.ps1"
 
-ok "=== deploy done. Launch C:\\Tools\\UECM\\uecm.exe to verify. ==="
+ok "=== deploy done. Launch C:\\Tools\\UECM\\uecm.exe (GUI) + uecm-cli.exe (CLI) to verify. ==="
