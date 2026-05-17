@@ -269,7 +269,12 @@ async function confirmDelete() {
         <p v-if="!detail || detail.gpus.length === 0" class="mt-3 text-sm text-muted-foreground">
           {{ store.isDetailLoading ? t("common.loading") : t("machineDetail.noGpus") }}
         </p>
-        <table v-else class="mt-3 w-full text-sm">
+        <table v-else class="mt-3 w-full table-fixed text-sm">
+          <colgroup>
+            <col class="w-1/2" />
+            <col class="w-[22.6%]" />
+            <col />
+          </colgroup>
           <thead class="text-xs text-muted-foreground">
             <tr>
               <th class="px-3 py-1 text-left font-medium">{{ t("machineDetail.headerModel") }}</th>
