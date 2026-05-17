@@ -19,11 +19,20 @@ pub struct CredentialArgs {
 
     /// Inline password. Leaks into shell history — prefer --pass-stdin
     /// or --cred-alias.
-    #[arg(long, value_name = "PASS", group = "secret", conflicts_with = "pass_stdin")]
+    #[arg(
+        long,
+        value_name = "PASS",
+        group = "secret",
+        conflicts_with_all = ["pass_stdin", "cred_alias"]
+    )]
     pub pass: Option<String>,
 
     /// Read password from stdin (one line, \r\n trimmed).
-    #[arg(long, group = "secret", conflicts_with = "pass")]
+    #[arg(
+        long,
+        group = "secret",
+        conflicts_with_all = ["pass", "cred_alias"]
+    )]
     pub pass_stdin: bool,
 }
 

@@ -21,7 +21,9 @@ fn value_sha256_prefix(value: &str) -> String {
 }
 
 fn redact_in_string(msg: String, value: &str) -> String {
-    if value.len() >= 4 && msg.contains(value) {
+    // Redact any non-empty value occurrence — short ini values like `K=v`
+    // would otherwise slip through earlier `len >= 4` guard.
+    if !value.is_empty() && msg.contains(value) {
         msg.replace(value, "[REDACTED:value]")
     } else {
         msg

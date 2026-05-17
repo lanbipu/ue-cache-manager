@@ -183,7 +183,10 @@ fn redact_error(e: UecmError, value: &str) -> UecmError {
 }
 
 fn redact_in_string(msg: String, value: &str) -> String {
-    if value.len() >= 4 && msg.contains(value) {
+    // Redact any non-empty value occurrence. The earlier `len >= 4` guard let
+    // short secrets (`abc`, `p1`) leak when setx-machine.ps1 echoed them in
+    // verification failures.
+    if !value.is_empty() && msg.contains(value) {
         msg.replace(value, "[REDACTED:value]")
     } else {
         msg
