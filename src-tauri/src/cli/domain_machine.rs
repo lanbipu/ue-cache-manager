@@ -85,6 +85,14 @@ fn delete(ctx: &mut Ctx<'_>, id: i64, yes: bool) -> UecmResult<()> {
     }
 
     let db = ctx.require_db()?;
+    // Check existence first so a typo / repeated delete fails loudly instead
+    // of pretending success. `machines::delete` itself is row-count-agnostic.
+    if machines::find_by_id(db, id)?.is_none() {
+        return Err(UecmError::InvalidInput(format!(
+            "machine id={} not found (already deleted or wrong id)",
+            id
+        )));
+    }
     machines::delete(db, id)?;
 
     let summary = json!({
@@ -209,6 +217,16 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64) -> UecmResult<()> {
         })
         .ok();
     let detected_ue = crate::core::discovery::detect_ue_versions(&host)?;
+    // PowerShell `query-ue-versions.ps1` sorts version ascending, so picking
+    // index 0 marks the OLDEST install as primary — which downstream DDC/PSO
+    // jobs would prefer over the newest engine. Pick the highest version
+    // string instead (lexicographic compare is fine for X.Y semver-ish: "5.8"
+    // > "5.7" > "5.4" > "4.27" — all of UE's version range works).
+    let primary_idx = detected_ue
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.version.cmp(&b.version))
+        .map(|(i, _)| i);
     {
         let db = ctx.require_db()?;
         machine_ue_installs::delete_for_machine(db, id)?;
@@ -218,7 +236,7 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64) -> UecmResult<()> {
                 machine_id: id,
                 version: detected.version.clone(),
                 install_path: detected.install_path.clone(),
-                is_primary: idx == 0,
+                is_primary: Some(idx) == primary_idx,
             };
             machine_ue_installs::upsert(db, &install)?;
         }
