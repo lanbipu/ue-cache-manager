@@ -409,9 +409,124 @@ export interface HealthProgressEvent {
   error: string | null;
 }
 
+const demoMachines: Machine[] = [
+  {
+    id: 101,
+    hostname: "STAGE-CONTROL",
+    ip: "192.168.10.10",
+    role: "operator",
+    status: "online",
+    last_seen_at: "2026-05-16T19:52:14+08:00",
+  },
+  {
+    id: 102,
+    hostname: "RENDER-01",
+    ip: "192.168.10.21",
+    role: "render",
+    status: "online",
+    last_seen_at: "2026-05-16T19:51:48+08:00",
+  },
+  {
+    id: 103,
+    hostname: "RENDER-02",
+    ip: "192.168.10.22",
+    role: "render",
+    status: "warning",
+    last_seen_at: "2026-05-16T19:47:02+08:00",
+  },
+  {
+    id: 104,
+    hostname: "RENDER-03",
+    ip: "192.168.10.23",
+    role: "render",
+    status: "critical",
+    last_seen_at: "2026-05-16T18:33:41+08:00",
+  },
+  {
+    id: 105,
+    hostname: "VP-WORKSTATION",
+    ip: "192.168.10.31",
+    role: "artist",
+    status: "online",
+    last_seen_at: "2026-05-16T19:49:09+08:00",
+  },
+  {
+    id: 106,
+    hostname: "NAS-DDC",
+    ip: "192.168.10.40",
+    role: "cache-host",
+    status: "degraded",
+    last_seen_at: "2026-05-16T19:10:25+08:00",
+  },
+  {
+    id: 107,
+    hostname: "COLOR-GRADE",
+    ip: "192.168.10.55",
+    role: "review",
+    status: "offline",
+    last_seen_at: "2026-05-15T23:18:06+08:00",
+  },
+  {
+    id: 108,
+    hostname: "LED-PROCESSOR",
+    ip: "192.168.10.60",
+    role: "stage",
+    status: "unknown",
+    last_seen_at: null,
+  },
+];
+
+const demoDetails: Record<number, MachineDetail> = Object.fromEntries(
+  demoMachines.map((machine, index) => [
+    machine.id!,
+    {
+      machine,
+      ue_installs:
+        machine.status === "offline" || machine.status === "unknown"
+          ? []
+          : [
+              {
+                id: machine.id! * 10 + 1,
+                machine_id: machine.id!,
+                version: index % 2 === 0 ? "5.4" : "5.3",
+                install_path: index % 2 === 0 ? "C:\\Program Files\\Epic Games\\UE_5.4" : "D:\\Epic\\UE_5.3",
+                is_primary: true,
+              },
+              {
+                id: machine.id! * 10 + 2,
+                machine_id: machine.id!,
+                version: "5.2",
+                install_path: "D:\\Epic\\UE_5.2",
+                is_primary: false,
+              },
+            ],
+      gpus:
+        machine.status === "offline" || machine.status === "unknown"
+          ? []
+          : [
+              {
+                id: machine.id! * 10 + 3,
+                machine_id: machine.id!,
+                gpu_model: index === 0 ? "NVIDIA RTX A6000" : "NVIDIA RTX 4090",
+                driver_version: index === 3 ? "551.86" : "552.44",
+                vendor: "nvidia",
+                vram_mb: index === 0 ? 49152 : 24576,
+              },
+            ],
+    },
+  ]),
+) as Record<number, MachineDetail>;
+
+function isPlainBrowserDev() {
+  if (typeof window === "undefined") return false;
+  const tauriWindow = window as Window & { __TAURI_INTERNALS__?: unknown };
+  return import.meta.env.DEV && import.meta.env.MODE !== "test" && !tauriWindow.__TAURI_INTERNALS__;
+}
+
 export const tauriApi = {
   // Machines
   async listMachines(): Promise<Machine[]> {
+    if (isPlainBrowserDev()) return demoMachines;
     return invoke<Machine[]>("list_machines");
   },
   async addMachine(hostname: string, ip: string): Promise<number> {
@@ -424,6 +539,10 @@ export const tauriApi = {
     return invoke<void>("rename_machine", { id, hostname });
   },
   async getMachineDetail(id: number): Promise<MachineDetail> {
+    if (isPlainBrowserDev()) {
+      const detail = demoDetails[id];
+      if (detail) return detail;
+    }
     return invoke<MachineDetail>("get_machine_detail", { id });
   },
 
@@ -435,6 +554,16 @@ export const tauriApi = {
     return invoke<number>("add_discovered_machine", { ip, hostname });
   },
   async refreshMachine(machineId: number): Promise<RefreshResult> {
+    if (isPlainBrowserDev()) {
+      const detail = demoDetails[machineId];
+      return {
+        machine_id: machineId,
+        winrm_ok: detail?.machine.status === "online",
+        ue_installs: detail?.ue_installs ?? [],
+        gpus: detail?.gpus ?? [],
+        error: detail?.machine.status === "online" ? null : "Demo host is not reachable.",
+      };
+    }
     return invoke<RefreshResult>("refresh_machine", { machineId });
   },
   async bootstrapWinrm(
@@ -454,6 +583,16 @@ export const tauriApi = {
 
   // Credentials
   async listCredentials(): Promise<CredentialRecord[]> {
+    if (isPlainBrowserDev()) {
+      return [
+        {
+          id: 1,
+          alias: "UECM:winrm:stage-admin",
+          kind: "winrm",
+          username: "stage-admin",
+        },
+      ];
+    }
     return invoke<CredentialRecord[]>("list_credentials");
   },
   async saveCredential(
