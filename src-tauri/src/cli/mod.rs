@@ -8,6 +8,10 @@ pub mod run;
 pub mod domain_system;
 pub mod domain_machine;
 pub mod domain_winrm;
+pub mod domain_cred;
+pub mod domain_env;
+pub mod domain_ini;
+pub mod domain_share;
 
 // Re-export the emitter trait + the generic extension trait so domain handlers
 // can `use crate::cli::{Emitter, EmitSerialize}` in one line.

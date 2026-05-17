@@ -38,6 +38,26 @@ pub enum Domain {
         #[command(subcommand)]
         action: WinrmAction,
     },
+    /// Credential storage (DPAPI + cmdkey + SQLite metadata).
+    Cred {
+        #[command(subcommand)]
+        action: CredAction,
+    },
+    /// Read / write system-level environment variables on remote hosts.
+    Env {
+        #[command(subcommand)]
+        action: EnvAction,
+    },
+    /// Read / write / remove single INI keys on remote hosts.
+    Ini {
+        #[command(subcommand)]
+        action: IniAction,
+    },
+    /// SMB share inventory + creation + SYSTEM credential injection.
+    Share {
+        #[command(subcommand)]
+        action: ShareAction,
+    },
 }
 
 // ---------- system ----------
@@ -122,6 +142,134 @@ pub enum WinrmAction {
     },
 }
 
+// ---------- cred ----------
+#[derive(Subcommand, Debug)]
+pub enum CredAction {
+    /// List saved credential aliases.
+    List,
+    /// Save a credential (cmdkey + DPAPI + SQLite metadata).
+    Save {
+        #[arg(long)]
+        alias: String,
+        #[arg(long)]
+        user: String,
+        #[arg(long, group = "secret", conflicts_with = "pass_stdin")]
+        pass: Option<String>,
+        #[arg(long, group = "secret", conflicts_with = "pass")]
+        pass_stdin: bool,
+        #[arg(long, default_value = "winrm")]
+        kind: String,
+    },
+    /// Delete a credential alias.
+    Delete { alias: String },
+}
+
+// ---------- env ----------
+#[derive(Subcommand, Debug)]
+pub enum EnvAction {
+    /// Read an environment variable on a single host.
+    Get {
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        name: String,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Write an environment variable on one or more hosts.
+    Set {
+        #[command(flatten)]
+        target: crate::cli::host_args::HostArgs,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        value: String,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+}
+
+// ---------- ini ----------
+#[derive(Subcommand, Debug)]
+pub enum IniAction {
+    /// Read all keys from one INI section on a single host.
+    Read {
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        file: String,
+        #[arg(long)]
+        section: String,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Write a single INI key on one or more hosts.
+    Set {
+        #[command(flatten)]
+        target: crate::cli::host_args::HostArgs,
+        #[arg(long)]
+        file: String,
+        #[arg(long)]
+        section: String,
+        #[arg(long)]
+        key: String,
+        #[arg(long)]
+        value: String,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Remove a single INI key on one or more hosts.
+    Remove {
+        #[command(flatten)]
+        target: crate::cli::host_args::HostArgs,
+        #[arg(long)]
+        file: String,
+        #[arg(long)]
+        section: String,
+        #[arg(long)]
+        key: String,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+}
+
+// ---------- share ----------
+#[derive(Subcommand, Debug)]
+pub enum ShareAction {
+    /// List share configs in the local inventory.
+    List,
+    /// Forget a share config (LOCAL inventory only; remote SMB share is NOT removed).
+    Forget {
+        id: i64,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Create an SMB share (Mode A = open Guest+Everyone; Mode B = dedicated ddc-svc).
+    Create {
+        #[arg(long, value_name = "a|b")]
+        mode: String,
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        share: String,
+        #[arg(long)]
+        local_path: String,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Inject the share's SYSTEM-context credential on a client machine.
+    InjectSystemCred {
+        #[arg(long)]
+        client_host: String,
+        #[arg(long)]
+        target_host: String,
+        #[arg(long, default_value = "ddc-svc")]
+        svc_user: String,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,5 +312,61 @@ mod tests {
             "uecm-cli", "machine", "refresh", "3", "--cred-alias", "winrm-admin",
         ]);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn parses_cred_save_with_alias_and_user() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "cred", "save",
+            "--alias", "winrm-admin",
+            "--user", "Administrator",
+            "--pass-stdin",
+        ]).unwrap();
+        match cli.command {
+            Domain::Cred { action: CredAction::Save { alias, user, pass, pass_stdin, .. } } => {
+                assert_eq!(alias, "winrm-admin");
+                assert_eq!(user, "Administrator");
+                assert_eq!(pass, None);
+                assert!(pass_stdin);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn cred_save_rejects_both_pass_and_pass_stdin() {
+        let r = Cli::try_parse_from([
+            "uecm-cli", "cred", "save",
+            "--alias", "a", "--user", "u",
+            "--pass", "p", "--pass-stdin",
+        ]);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn env_set_rejects_both_host_and_hosts() {
+        let r = Cli::try_parse_from([
+            "uecm-cli", "env", "set",
+            "--host", "a", "--hosts", "b,c",
+            "--name", "X", "--value", "Y",
+        ]);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn env_set_accepts_hosts_list() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "env", "set",
+            "--hosts", "a,b,c",
+            "--name", "X", "--value", "Y",
+        ]).unwrap();
+        match cli.command {
+            Domain::Env { action: EnvAction::Set { target, name, value, .. } } => {
+                assert_eq!(target.hosts, Some(vec!["a".into(), "b".into(), "c".into()]));
+                assert_eq!(name, "X");
+                assert_eq!(value, "Y");
+            }
+            _ => panic!("wrong variant"),
+        }
     }
 }

@@ -3,7 +3,7 @@
 
 use crate::cli::args::{Cli, Domain};
 use crate::cli::output::{Emitter, HumanEmitter, NdjsonEmitter, exit_code_for};
-use crate::cli::{domain_machine, domain_system, domain_winrm};
+use crate::cli::{domain_cred, domain_env, domain_ini, domain_machine, domain_share, domain_system, domain_winrm};
 use crate::data::Db;
 use crate::error::UecmError;
 use crate::startup;
@@ -52,6 +52,11 @@ fn needs_db(cmd: &Domain) -> bool {
         // None of the WinRM commands touch SQLite — they all talk PowerShell
         // sidecar or print text.
         Domain::Winrm { .. } => false,
+        // Phase 2 domains (cred/env/ini/share) — all will require DB for now.
+        Domain::Cred { .. } => true,
+        Domain::Env { .. } => true,
+        Domain::Ini { .. } => true,
+        Domain::Share { .. } => true,
     }
 }
 
@@ -101,6 +106,10 @@ pub fn run(cli: Cli) -> i32 {
         Domain::System { action } => domain_system::handle(&mut ctx, action),
         Domain::Machine { action } => domain_machine::handle(&mut ctx, action),
         Domain::Winrm { action } => domain_winrm::handle(&mut ctx, action),
+        Domain::Cred { action } => domain_cred::handle(&mut ctx, action),
+        Domain::Env { action } => domain_env::handle(&mut ctx, action),
+        Domain::Ini { action } => domain_ini::handle(&mut ctx, action),
+        Domain::Share { action } => domain_share::handle(&mut ctx, action),
     };
 
     match result {
