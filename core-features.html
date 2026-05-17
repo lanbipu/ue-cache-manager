@@ -155,6 +155,81 @@
   .index .ix-num { font-family: "Manrope", sans-serif; font-weight: 800; font-size: 13px; color: var(--primary); display: block; margin-bottom: 4px; letter-spacing: 0.02em; }
   .index .ix-name { font-size: 13px; font-weight: 500; line-height: 1.4; }
 
+  /* === Mindmap ============================================= */
+  .mindmap { margin: 72px 0 8px; }
+  .mindmap-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 18px; flex-wrap: wrap; }
+  .mindmap-head .heading { display: flex; flex-direction: column; gap: 6px; }
+  .mindmap-head .heading .label { display: block; }
+  .mindmap-head .heading .sub { color: var(--muted-fg); font-size: 13px; line-height: 1.65; margin: 0; max-width: 58ch; }
+  .mindmap-head .cross-note {
+    color: var(--muted-fg); font-size: 12px;
+    padding: 7px 12px; background: var(--muted);
+    border-radius: 9999px; flex: 0 0 auto;
+    align-self: flex-start;
+  }
+  .mindmap-head .cross-note strong { color: var(--primary); font-weight: 700; }
+  .mindmap-frame {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--card);
+    padding: 24px 12px 28px;
+    overflow-x: auto;
+  }
+  .mindmap-svg {
+    display: block;
+    width: 100%;
+    min-width: 1040px;
+    height: auto;
+  }
+
+  /* SVG inner styles — CSS variables work inside SVG fills/strokes in all modern browsers */
+  .mm-edge { stroke: var(--border); stroke-width: 1; fill: none; }
+  .mm-edge.spine { stroke: var(--primary-line); stroke-width: 1.5; }
+
+  .mm-root-box { fill: var(--primary-soft); stroke: var(--primary); stroke-width: 1.5; }
+  .mm-root-name {
+    font-family: "Manrope", -apple-system, sans-serif;
+    font-weight: 800; font-size: 26px;
+    fill: var(--primary);
+    letter-spacing: 0.005em;
+  }
+  .mm-root-sub {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    font-size: 12px; font-weight: 500;
+    fill: var(--muted-fg);
+  }
+
+  .mm-branch-box { fill: var(--muted); stroke: var(--border); stroke-width: 1; }
+  .mm-branch-num {
+    font-family: "Manrope", sans-serif;
+    font-weight: 800; font-size: 15px;
+    fill: var(--primary);
+  }
+  .mm-branch-name {
+    font-family: "Manrope", sans-serif;
+    font-weight: 800; font-size: 15px;
+    fill: var(--fg);
+  }
+  .mm-branch-meta {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    font-size: 11px; font-weight: 500;
+    fill: var(--muted-fg);
+    letter-spacing: 0.01em;
+  }
+
+  .mm-leaf-dot { fill: var(--primary); }
+  .mm-leaf-cmd {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 11.5px;
+    fill: var(--fg);
+    font-weight: 600;
+  }
+  .mm-leaf-note {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    font-size: 12px;
+    fill: var(--muted-fg);
+  }
+
   /* === Feature block ======================================= */
   .feature { margin-top: 88px; }
   .feature[id] { scroll-margin-top: 24px; }
@@ -255,8 +330,9 @@
   .mode .msub { color: var(--muted-fg); font-size: 13px; margin: 0 0 14px; }
   .mode .mech { font-size: 13.5px; line-height: 1.65; }
   .mode .mech .k { font-family: ui-monospace, monospace; color: var(--fg); background: var(--muted); padding: 1px 6px; border-radius: 4px; }
-  .mode-note { font-size: 13px; color: var(--muted-fg); margin: 16px 0 0; }
+  .mode-note { font-size: 13px; color: var(--muted-fg); margin: 16px 0 0; line-height: 1.7; }
   .mode-note strong { color: var(--fg); font-weight: 700; }
+  .mode-note code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; background: var(--muted-strong); padding: 1px 7px; border-radius: 4px; color: var(--fg); white-space: nowrap; }
 
   /* Callout (warning) */
   .callout {
@@ -422,6 +498,147 @@
     </ol>
   </nav>
 
+  <!-- Mindmap -->
+  <section class="mindmap" aria-labelledby="mm-heading">
+    <div class="mindmap-head">
+      <div class="heading">
+        <span class="label" id="mm-heading">能力全景</span>
+        <p class="sub">读图顺序：左侧根节点（UECM 三层缓存目标）→ 中段 5 个核心功能 → 右侧每项展开关键命令与参数。</p>
+      </div>
+      <span class="cross-note"><strong>05 诊断</strong>与其他四项是横切关系，可在任何时点跑。</span>
+    </div>
+
+    <div class="mindmap-frame">
+      <svg viewBox="0 0 1280 760" class="mindmap-svg" role="img" aria-labelledby="mm-title mm-desc" preserveAspectRatio="xMidYMid meet">
+        <title id="mm-title">UECM 核心功能思维导图</title>
+        <desc id="mm-desc">以 UECM 三层缓存目标为根，向右辐射出 5 个核心功能：01 机器接入与状态刷新、02 SMB 共享配置、03 DDC Pak 工作流、04 PSO Cache 工作流、05 集群诊断；每个功能再展开为对应的 CLI 命令与关键参数。</desc>
+
+        <!-- Edges: drawn first so node boxes sit on top -->
+        <g aria-hidden="true">
+          <!-- Root → Branch (spine) -->
+          <path class="mm-edge spine" d="M 280 380 C 340 380, 340 100, 400 100" />
+          <path class="mm-edge spine" d="M 280 380 C 340 380, 340 240, 400 240" />
+          <path class="mm-edge spine" d="M 280 380 L 400 380" />
+          <path class="mm-edge spine" d="M 280 380 C 340 380, 340 520, 400 520" />
+          <path class="mm-edge spine" d="M 280 380 C 340 380, 340 660, 400 660" />
+
+          <!-- B1 → leaves -->
+          <path class="mm-edge" d="M 700 100 C 720 100, 720 58, 740 58" />
+          <path class="mm-edge" d="M 700 100 C 720 100, 720 86, 740 86" />
+          <path class="mm-edge" d="M 700 100 C 720 100, 720 114, 740 114" />
+          <path class="mm-edge" d="M 700 100 C 720 100, 720 142, 740 142" />
+
+          <!-- B2 → leaves -->
+          <path class="mm-edge" d="M 700 240 C 720 240, 720 212, 740 212" />
+          <path class="mm-edge" d="M 700 240 L 740 240" />
+          <path class="mm-edge" d="M 700 240 C 720 240, 720 268, 740 268" />
+
+          <!-- B3 → leaves -->
+          <path class="mm-edge" d="M 700 380 C 720 380, 720 352, 740 352" />
+          <path class="mm-edge" d="M 700 380 L 740 380" />
+          <path class="mm-edge" d="M 700 380 C 720 380, 720 408, 740 408" />
+
+          <!-- B4 → leaves -->
+          <path class="mm-edge" d="M 700 520 C 720 520, 720 492, 740 492" />
+          <path class="mm-edge" d="M 700 520 L 740 520" />
+          <path class="mm-edge" d="M 700 520 C 720 520, 720 548, 740 548" />
+
+          <!-- B5 → leaves -->
+          <path class="mm-edge" d="M 700 660 C 720 660, 720 618, 740 618" />
+          <path class="mm-edge" d="M 700 660 C 720 660, 720 646, 740 646" />
+          <path class="mm-edge" d="M 700 660 C 720 660, 720 674, 740 674" />
+          <path class="mm-edge" d="M 700 660 C 720 660, 720 702, 740 702" />
+        </g>
+
+        <!-- Root -->
+        <g>
+          <rect class="mm-root-box" x="60" y="340" width="220" height="80" rx="14" />
+          <text class="mm-root-name" x="170" y="376" text-anchor="middle">UECM</text>
+          <text class="mm-root-sub" x="170" y="400" text-anchor="middle">三层缓存 · 操作员控制台</text>
+        </g>
+
+        <!-- Branch 01 -->
+        <g>
+          <rect class="mm-branch-box" x="400" y="70" width="300" height="60" rx="8" />
+          <text x="420" y="96"><tspan class="mm-branch-num">01</tspan><tspan class="mm-branch-name" dx="10">机器接入与状态刷新</tspan></text>
+          <text class="mm-branch-meta" x="420" y="116">machine · winrm · cred · bootstrap</text>
+        </g>
+        <g>
+          <circle class="mm-leaf-dot" cx="740" cy="58" r="3" />
+          <text x="752" y="62"><tspan class="mm-leaf-cmd">machine scan</tspan><tspan class="mm-leaf-note" dx="6">· 探 5985 / 445 / 135 三端口</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="86" r="3" />
+          <text x="752" y="90"><tspan class="mm-leaf-cmd">winrm preflight</tspan><tspan class="mm-leaf-note" dx="6">· Shallow / Deep，verdict 决定走 Path B</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="114" r="3" />
+          <text x="752" y="118"><tspan class="mm-leaf-cmd">winrm bootstrap</tspan><tspan class="mm-leaf-note" dx="6">· Path A · USB 一键  |  Path B · 远程 PsExec</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="142" r="3" />
+          <text x="752" y="146"><tspan class="mm-leaf-cmd">machine refresh</tspan><tspan class="mm-leaf-note" dx="6">· UE 版本（注册表）+ GPU（WMI）</tspan></text>
+        </g>
+
+        <!-- Branch 02 -->
+        <g>
+          <rect class="mm-branch-box" x="400" y="210" width="300" height="60" rx="8" />
+          <text x="420" y="236"><tspan class="mm-branch-num">02</tspan><tspan class="mm-branch-name" dx="10">SMB 共享配置</tspan></text>
+          <text class="mm-branch-meta" x="420" y="256">share · 缓存分发的物理基础</text>
+        </g>
+        <g>
+          <circle class="mm-leaf-dot" cx="740" cy="212" r="3" />
+          <text x="752" y="216"><tspan class="mm-leaf-cmd">share create</tspan><tspan class="mm-leaf-note" dx="6">· Mode A · 开 Guest + Everyone : Full</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="240" r="3" />
+          <text x="752" y="244"><tspan class="mm-leaf-cmd">share inject-system-cred</tspan><tspan class="mm-leaf-note" dx="6">· Mode B · ddc-svc + SYSTEM 凭据空间</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="268" r="3" />
+          <text x="752" y="272"><tspan class="mm-leaf-cmd">share list</tspan><tspan class="mm-leaf-note" dx="6">· 全集群当前共享枚举</tspan></text>
+        </g>
+
+        <!-- Branch 03 -->
+        <g>
+          <rect class="mm-branch-box" x="400" y="350" width="300" height="60" rx="8" />
+          <text x="420" y="376"><tspan class="mm-branch-num">03</tspan><tspan class="mm-branch-name" dx="10">DDC Pak 工作流</tspan></text>
+          <text class="mm-branch-meta" x="420" y="396">ddc · L1 缓存 · 消除 Shader 重编译</text>
+        </g>
+        <g>
+          <circle class="mm-leaf-dot" cx="740" cy="352" r="3" />
+          <text x="752" y="356"><tspan class="mm-leaf-cmd">ddc generate</tspan><tspan class="mm-leaf-note" dx="6">· 调 UE runner 生成 .ddp pak</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="380" r="3" />
+          <text x="752" y="384"><tspan class="mm-leaf-cmd">ddc verify</tspan><tspan class="mm-leaf-note" dx="6">· 文件完整性校验</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="408" r="3" />
+          <text x="752" y="412"><tspan class="mm-leaf-cmd">ddc distribute</tspan><tspan class="mm-leaf-note" dx="6">· Robocopy 扇出到全集群</tspan></text>
+        </g>
+
+        <!-- Branch 04 -->
+        <g>
+          <rect class="mm-branch-box" x="400" y="490" width="300" height="60" rx="8" />
+          <text x="420" y="516"><tspan class="mm-branch-num">04</tspan><tspan class="mm-branch-name" dx="10">PSO Cache 工作流</tspan></text>
+          <text class="mm-branch-meta" x="420" y="536">pso · L2 + L3 缓存 · 切场零卡顿</text>
+        </g>
+        <g>
+          <circle class="mm-leaf-dot" cx="740" cy="492" r="3" />
+          <text x="752" y="496"><tspan class="mm-leaf-cmd">pso verify</tspan><tspan class="mm-leaf-note" dx="6">· 检 R008 / R009 / R010 precaching CVar</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="520" r="3" />
+          <text x="752" y="524"><tspan class="mm-leaf-cmd">pso collect</tspan><tspan class="mm-leaf-note" dx="6">· UE -game 跑采集，写 .upipelinecache</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="548" r="3" />
+          <text x="752" y="552"><tspan class="mm-leaf-cmd">pso distribute</tspan><tspan class="mm-leaf-note" dx="6">· GPU 一致性检测后才扇出</tspan></text>
+        </g>
+
+        <!-- Branch 05 -->
+        <g>
+          <rect class="mm-branch-box" x="400" y="630" width="300" height="60" rx="8" />
+          <text x="420" y="656"><tspan class="mm-branch-num">05</tspan><tspan class="mm-branch-name" dx="10">集群诊断</tspan></text>
+          <text class="mm-branch-meta" x="420" y="676">ini · health · 横切验证</text>
+        </g>
+        <g>
+          <circle class="mm-leaf-dot" cx="740" cy="618" r="3" />
+          <text x="752" y="622"><tspan class="mm-leaf-cmd">ini scan</tspan><tspan class="mm-leaf-note" dx="6">· 7 条规则 R001 / R007，三级 INI</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="646" r="3" />
+          <text x="752" y="650"><tspan class="mm-leaf-cmd">ini apply-finding</tspan><tspan class="mm-leaf-note" dx="6">· 一键修复，自动 .bak 备份</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="674" r="3" />
+          <text x="752" y="678"><tspan class="mm-leaf-cmd">health run</tspan><tspan class="mm-leaf-note" dx="6">· 8 个 active probe + 3 个 derived 指标</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="702" r="3" />
+          <text x="752" y="706"><tspan class="mm-leaf-cmd">health results</tspan><tspan class="mm-leaf-note" dx="6">· 输出 N 机 × 11 行矩阵</tspan></text>
+        </g>
+      </svg>
+    </div>
+  </section>
+
   <!-- Feature 01 -->
   <article class="feature" id="f1">
     <header class="feature-head">
@@ -432,27 +649,49 @@
           <span class="domain accent">machine</span>
           <span class="domain">winrm</span>
           <span class="domain">cred</span>
+          <span class="domain">bootstrap</span>
         </div>
       </div>
     </header>
 
     <p class="gist">
       把一台从未纳管过的 Windows render node，从「发现」一路带到「可远程操作 + 状态可读」。
-      <strong>整个过程零手工，凭据存本机 DPAPI</strong>，TD 不用记任何明文密码。
+      <strong>两条 bootstrap 路径按机器可达性选</strong>，凭据存本机 DPAPI，TD 不用记任何明文密码。
     </p>
 
     <div class="workflow" aria-label="接入流程">
-      <span class="step">扫 CIDR<span class="k">（5985 / 445）</span></span>
+      <span class="step">扫 CIDR<span class="k">（5985 / 445 / 135）</span></span>
       <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
-      <span class="step">WinRM bootstrap</span>
+      <span class="step">preflight 判 Path B 可行性</span>
       <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
-      <span class="step">存凭据<span class="k">（DPAPI + cmdkey）</span></span>
+      <span class="step">推 bootstrap<span class="k">（A · USB 或 B · 远程）</span></span>
       <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
-      <span class="step">刷新读 UE 版本<span class="k">（注册表）</span>+ GPU 型号 / 显存 / 驱动<span class="k">（WMI）</span></span>
+      <span class="step">machine refresh 读 UE 版本<span class="k">（注册表）</span>+ GPU<span class="k">（WMI）</span></span>
     </div>
 
-    <div class="commands" aria-label="典型命令">
+    <div class="modes" role="list" aria-label="两条 bootstrap 路径">
+      <div class="mode" role="listitem">
+        <div class="mkind">Path A · USB 一键</div>
+        <h3 class="mtitle">零远程依赖</h3>
+        <p class="msub">机器从未纳管 / 远程不可达 / 工作组孤岛。</p>
+        <p class="mech">U 盘塞 <span class="k">UECM-Bootstrap.cmd</span>，跑到机器跟前双击。脚本用 <span class="k">fltmc</span> 检测 admin token 后自提升 UAC，不依赖 LanmanServer，避免在 SMB 没启动的机器上陷入 UAC 重启循环。中文 README 带 UTF-8 BOM，防 PowerShell 5.1 mojibake。</p>
+      </div>
+      <div class="mode" role="listitem">
+        <div class="mkind">Path B · 远程 PsExec</div>
+        <h3 class="mtitle">先 preflight 再动手</h3>
+        <p class="msub">机器已在线、SMB 445 + RPC 135 通、有本地管理员凭据。</p>
+        <p class="mech">默认 <strong>Shallow 零痕迹</strong>：tcp_135 / tcp_445 / 挂 <span class="k">ADMIN$</span> 测 NTLM / 写删探针文件。<span class="k">--probe</span> 切 <strong>Deep</strong>：真跑一次 PsExec64（写 Event 7045 / 7036），唯一能检出 UAC remote token filter 拦截的方式。verdict=<span class="k">viable</span> 才推 bootstrap。</p>
+      </div>
+    </div>
+
+    <p class="mode-note">
+      <strong>bootstrap 实际做的 7 件事：</strong>不只是开 WinRM。<code>enable-winrm.ps1</code> 默认全开，覆盖
+      <code>WinRM core</code>、<code>SMB Server + 445</code>、<code>WMI</code>、<code>ExecutionPolicy=RemoteSigned</code>、<code>LongPaths</code>、<code>HighPerformance</code>、<code>LocalAccountTokenFilterPolicy=1</code>，远程操作 / 状态读取 / UE 资源路径所需的整套系统配置一次到位。
+    </p>
+
+    <div class="commands" aria-label="典型命令" style="margin-top:24px">
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine scan <span class="arg">--cidr 192.168.10.0/24</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli winrm preflight <span class="arg">lanpc --user admin --pass-stdin [--probe]</span></span></div>
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli winrm bootstrap <span class="arg">--host lanpc</span></span></div>
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine refresh <span class="arg">--all</span></span></div>
     </div>
