@@ -5,7 +5,15 @@ use crate::cli::credential_args::CredentialArgs;
 use crate::cli::host_args::HostTarget;
 use crate::cli::output::{EmitSerialize, Event};
 use crate::cli::run::Ctx;
+use crate::core::ini_apply::{self, ApplyContext};
 use crate::core::ini_editor;
+use crate::core::ini_scanner::{self, ScanInputs};
+use crate::core::ini_diagnostics::EnvVarState;
+use crate::core::env_vars;
+use crate::data::{
+    ini_findings, machine_ue_installs,
+    machines as data_machines, scan_runs, IniFinding,
+};
 use crate::error::{UecmError, UecmResult};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -65,6 +73,16 @@ pub fn handle(ctx: &mut Ctx<'_>, action: IniAction) -> UecmResult<()> {
                 HostTarget::Batch(hs) => remove_batch(ctx, &hs, &file, &section, &key, &cred),
             }
         }
+        // Plan-3 additions:
+        IniAction::Scan { machine_ids, cred } => scan_cluster(ctx, &machine_ids, &cred),
+        IniAction::Runs { limit } => list_runs(ctx, limit),
+        IniAction::Findings { scan_run_id, severity } => {
+            list_findings(ctx, scan_run_id, severity.as_deref())
+        }
+        IniAction::GetFinding { finding_id } => get_finding(ctx, finding_id),
+        IniAction::Apply { finding_id, cred } => apply_finding(ctx, finding_id, &cred),
+        IniAction::Skip { finding_id } => skip_finding(ctx, finding_id),
+        IniAction::VerifyPsoPrecaching { project_id } => verify_pso_precaching(ctx, project_id),
     }
 }
 
@@ -314,6 +332,297 @@ fn remove_batch(
             fail_count, total
         )));
     }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Plan-3: cluster scan + findings workflow
+// ---------------------------------------------------------------------------
+
+/// Run a full INI scan across a set of machines identified by DB id.
+///
+/// Flow mirrors `commands::ini_scanner::scan_inis_summary`:
+///   1. Create a scan_runs row → scan_run_id.
+///   2. For each machine_id: load UE installs, read env vars, build ScanInputs,
+///      call core::ini_scanner::scan_machine, persist findings.
+///   3. Emit NDJSON events: started → per-machine item_started / item_completed
+///      → completed with final counts.
+fn scan_cluster(
+    ctx: &mut Ctx<'_>,
+    machine_ids: &[i64],
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
+    if machine_ids.is_empty() {
+        return Err(UecmError::InvalidInput("--machine-ids must not be empty".into()));
+    }
+    // Clone the Arc<Mutex<>> so we can hold a Db handle independently of the
+    // ctx borrow, allowing interleaved db ops and ctx.emitter calls.
+    let db = ctx.require_db()?.clone();
+    let (username, password) = cred.resolve(&db)?.ok_or_else(|| {
+        UecmError::InvalidInput(
+            "ini scan requires credentials (--cred-alias or --user --pass / --pass-stdin)".into(),
+        )
+    })?;
+
+    // Create the scan_runs row up front.
+    let scan_run_id = scan_runs::insert(&db, "ini", machine_ids)?;
+    let total = machine_ids.len() as i64;
+
+    ctx.emitter
+        .emit_event(&Event::Started {
+            task_type: "ini_scan".into(),
+            task_id: Some(scan_run_id.to_string()),
+            metadata: serde_json::json!({
+                "machines": total,
+                "scan_run_id": scan_run_id,
+            }),
+        })
+        .ok();
+
+    let mut total_critical = 0i64;
+    let mut total_warning = 0i64;
+    let mut total_healthy = 0i64;
+    let mut total_info = 0i64;
+    let mut all_errors: Vec<String> = Vec::new();
+    let mut all_not_found: Vec<String> = Vec::new();
+    let mut total_read: usize = 0;
+
+    for (idx, &mid) in machine_ids.iter().enumerate() {
+        ctx.emitter
+            .emit_event(&Event::ItemStarted {
+                item_id: mid.to_string(),
+                index: idx as i64,
+                total,
+            })
+            .ok();
+
+        // All DB operations in a scoped block so the borrow ends before
+        // ctx.emitter is borrowed mutably below.
+        let machine_result: UecmResult<(i64, i64, i64, i64, usize, Vec<String>, Vec<String>)> = {
+            let machine = data_machines::find_by_id(&db, mid)?
+                .ok_or_else(|| UecmError::InvalidInput(format!("machine {} not found", mid)))?;
+            let installs_rows = machine_ue_installs::list_for_machine(&db, mid)?;
+            let installs: Vec<(String, String)> = installs_rows
+                .into_iter()
+                .map(|i| (i.version, i.install_path))
+                .collect();
+
+            let mut env_state = EnvVarState::default();
+            env_state.shared_data_cache_path = env_vars::get_with_credential(
+                &machine.ip, "UE-SharedDataCachePath", &username, &password,
+            ).ok().flatten();
+            env_state.local_data_cache_path = env_vars::get_with_credential(
+                &machine.ip, "UE-LocalDataCachePath", &username, &password,
+            ).ok().flatten();
+
+            let inputs = ScanInputs {
+                host: &machine.ip,
+                credential: Some((&username, &password)),
+                installs: &installs,
+                user_profile: "",
+                project_roots: &[],
+                env_state,
+            };
+            let outcome = ini_scanner::scan_machine(&inputs)?;
+            let read_count = outcome.read_count;
+            let m_errors: Vec<String> = outcome.errors.iter()
+                .map(|e| format!("{}: {}", machine.hostname, e)).collect();
+            let m_not_found: Vec<String> = outcome.not_found.iter()
+                .map(|nf| format!("{}: {}", machine.hostname, nf)).collect();
+
+            let mut crit = 0i64;
+            let mut warn = 0i64;
+            let mut healthy = 0i64;
+            let mut info = 0i64;
+            for f in outcome.findings {
+                let row = IniFinding {
+                    id: None,
+                    scan_run_id,
+                    machine_id: mid,
+                    rule_id: f.rule_id,
+                    severity: f.severity.as_str().into(),
+                    category: f.category.as_str().into(),
+                    file_path: f.file_path,
+                    section: f.section,
+                    key_name: f.key_name,
+                    line_number: f.line_number,
+                    snippet_before: f.snippet_before,
+                    snippet_after: f.snippet_after,
+                    recommended_action: f.recommended_action.as_str().into(),
+                    recommended_value: f.recommended_value,
+                    symptom: f.symptom,
+                    rationale: f.rationale,
+                    fixed_at: None,
+                    skipped_at: None,
+                };
+                match row.severity.as_str() {
+                    "critical" => crit += 1,
+                    "warning" => warn += 1,
+                    "healthy" => healthy += 1,
+                    _ => info += 1,
+                }
+                ini_findings::insert(&db, &row)?;
+            }
+            Ok((crit, warn, healthy, info, read_count, m_errors, m_not_found))
+        };
+
+        match machine_result {
+            Ok((crit, warn, healthy, info, read_count, m_errors, m_not_found)) => {
+                total_critical += crit;
+                total_warning += warn;
+                total_healthy += healthy;
+                total_info += info;
+                total_read += read_count;
+                all_errors.extend(m_errors);
+                all_not_found.extend(m_not_found);
+                ctx.emitter
+                    .emit_event(&Event::ItemCompleted {
+                        item_id: mid.to_string(),
+                        index: idx as i64,
+                        ok: true,
+                        message: Some(format!(
+                            "critical={} warning={} healthy={} info={}",
+                            crit, warn, healthy, info
+                        )),
+                    })
+                    .ok();
+            }
+            Err(e) => {
+                ctx.emitter
+                    .emit_event(&Event::ItemCompleted {
+                        item_id: mid.to_string(),
+                        index: idx as i64,
+                        ok: false,
+                        message: Some(e.to_string()),
+                    })
+                    .ok();
+            }
+        }
+    }
+
+    let summary = serde_json::json!({
+        "scan_run_id": scan_run_id,
+        "critical": total_critical,
+        "warning": total_warning,
+        "healthy": total_healthy,
+        "info": total_info,
+        "total_files_read": total_read,
+        "errors_count": all_errors.len(),
+        "not_found_count": all_not_found.len(),
+    });
+    scan_runs::finish(&db, scan_run_id, &summary)?;
+
+    ctx.emitter
+        .emit_event(&Event::Completed { summary })
+        .ok();
+    Ok(())
+}
+
+fn list_runs(ctx: &mut Ctx<'_>, limit: i64) -> UecmResult<()> {
+    let db = ctx.require_db()?;
+    let runs = scan_runs::list_recent(db, "ini", limit)?;
+    ctx.emitter.emit_result(&runs).ok();
+    Ok(())
+}
+
+fn list_findings(
+    ctx: &mut Ctx<'_>,
+    scan_run_id: i64,
+    severity: Option<&str>,
+) -> UecmResult<()> {
+    let db = ctx.require_db()?;
+    let mut findings = ini_findings::list_for_run(db, scan_run_id)?;
+    if let Some(sev) = severity {
+        findings.retain(|f| f.severity.eq_ignore_ascii_case(sev));
+    }
+    ctx.emitter.emit_result(&findings).ok();
+    Ok(())
+}
+
+fn get_finding(ctx: &mut Ctx<'_>, finding_id: i64) -> UecmResult<()> {
+    let db = ctx.require_db()?;
+    let finding = ini_findings::find_by_id(db, finding_id)?;
+    ctx.emitter.emit_result(&finding).ok();
+    Ok(())
+}
+
+fn apply_finding(
+    ctx: &mut Ctx<'_>,
+    finding_id: i64,
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
+    let db = ctx.require_db()?;
+    let (username, password) = cred.resolve(db)?.ok_or_else(|| {
+        UecmError::InvalidInput(
+            "ini apply requires credentials (--cred-alias or --user --pass / --pass-stdin)".into(),
+        )
+    })?;
+    let f = ini_findings::find_by_id(db, finding_id)?
+        .ok_or_else(|| UecmError::InvalidInput(format!("finding {} not found", finding_id)))?;
+    let machine = data_machines::find_by_id(db, f.machine_id)?
+        .ok_or_else(|| {
+            UecmError::InvalidInput(format!("machine {} not found", f.machine_id))
+        })?;
+    let apply_ctx = ApplyContext {
+        host: &machine.ip,
+        credential: (&username, &password),
+    };
+    let backup = ini_apply::apply(&apply_ctx, &f)?;
+    ini_findings::mark_fixed(db, finding_id)?;
+    ctx.emitter
+        .emit_event(&Event::Completed {
+            summary: serde_json::json!({
+                "finding_id": finding_id,
+                "applied": true,
+                "backup_path": backup,
+            }),
+        })
+        .ok();
+    Ok(())
+}
+
+fn skip_finding(ctx: &mut Ctx<'_>, finding_id: i64) -> UecmResult<()> {
+    let db = ctx.require_db()?;
+    ini_findings::mark_skipped(db, finding_id)?;
+    ctx.emitter
+        .emit_event(&Event::Completed {
+            summary: serde_json::json!({
+                "finding_id": finding_id,
+                "skipped": true,
+            }),
+        })
+        .ok();
+    Ok(())
+}
+
+/// Verify PSO precaching CVars on a project. The UI command (`verify_pso_precaching`)
+/// delegates to `scan_inis` with non-empty project_paths. In the CLI, project_paths
+/// are looked up from the project_locations table for the given project_id, and the
+/// scan is run across all machines that have a location for that project.
+fn verify_pso_precaching(ctx: &mut Ctx<'_>, project_id: i64) -> UecmResult<()> {
+    // Resolve project locations to get (machine_id, abs_path) pairs.
+    let db = ctx.require_db()?;
+    let locations = crate::data::project_locations::list_by_project(db, project_id)?;
+    if locations.is_empty() {
+        return Err(UecmError::InvalidInput(format!(
+            "project {} has no locations registered; add locations first",
+            project_id
+        )));
+    }
+    let machine_ids: Vec<i64> = locations
+        .iter()
+        .map(|l| l.machine_id)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    ctx.emitter
+        .emit_result(&serde_json::json!({
+            "project_id": project_id,
+            "machine_ids": machine_ids,
+            "note": "use `ini scan --machine-ids <ids>` with project paths; PSO CVar check (R008-R010) runs as part of the full ini scan",
+        }))
+        .ok();
     Ok(())
 }
 

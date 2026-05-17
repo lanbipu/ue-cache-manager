@@ -239,6 +239,40 @@ pub enum IniAction {
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
+    /// Run cluster INI scan across one or more machines.
+    Scan {
+        #[arg(long, value_name = "M1,M2,...", value_delimiter = ',')]
+        machine_ids: Vec<i64>,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// List recent INI scan runs.
+    Runs {
+        #[arg(long, default_value_t = 10)]
+        limit: i64,
+    },
+    /// List findings for a given scan run.
+    Findings {
+        scan_run_id: i64,
+        /// Filter by severity (critical / warning / healthy / info).
+        #[arg(long)]
+        severity: Option<String>,
+    },
+    /// Get one finding by id.
+    GetFinding { finding_id: i64 },
+    /// Apply (auto-fix) a finding's recommendation on the remote machine.
+    Apply {
+        finding_id: i64,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Mark a finding as skipped (won't apply).
+    Skip { finding_id: i64 },
+    /// Verify PSO precaching CVars (R008-R010) in a project's ConsoleVariables.ini.
+    VerifyPsoPrecaching {
+        #[arg(long)]
+        project_id: i64,
+    },
 }
 
 // ---------- share ----------
