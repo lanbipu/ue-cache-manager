@@ -218,14 +218,21 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64) -> UecmResult<()> {
         .ok();
     let detected_ue = crate::core::discovery::detect_ue_versions(&host)?;
     // PowerShell `query-ue-versions.ps1` sorts version ascending, so picking
-    // index 0 marks the OLDEST install as primary — which downstream DDC/PSO
-    // jobs would prefer over the newest engine. Pick the highest version
-    // string instead (lexicographic compare is fine for X.Y semver-ish: "5.8"
-    // > "5.7" > "5.4" > "4.27" — all of UE's version range works).
+    // index 0 marks the OLDEST install as primary — wrong, downstream
+    // DDC/PSO jobs that fall back to `is_primary` would pick the wrong engine.
+    // Compare versions NUMERICALLY (split major.minor and parse), not
+    // lexicographically — string compare puts "4.9" > "4.27" and would put
+    // "5.10" < "5.8" once UE 5.10 ships.
+    fn parse_version(v: &str) -> (u32, u32) {
+        let mut parts = v.split('.');
+        let major = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let minor = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        (major, minor)
+    }
     let primary_idx = detected_ue
         .iter()
         .enumerate()
-        .max_by(|(_, a), (_, b)| a.version.cmp(&b.version))
+        .max_by_key(|(_, d)| parse_version(&d.version))
         .map(|(i, _)| i);
     {
         let db = ctx.require_db()?;
