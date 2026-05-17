@@ -1,16 +1,25 @@
 # Enables Windows Remote Management for one-time UECM target onboarding.
 # Run locally on the target machine as Administrator.
 #
-# Default changes:
+# Default changes (always applied):
 # - Start WinRM and set it to Automatic startup.
 # - Enable PowerShell Remoting and the WinRM HTTP listener on port 5985.
 # - Enable Windows Remote Management firewall rules.
 # - Change active Public network profiles to Private unless -NetworkCategory Skip is used.
 #
-# Optional changes:
+# Optional changes (off by default — UECM-Bootstrap.cmd wrapper enables all of these):
 # - -AllowedRemoteAddress restricts WinRM firewall rules to specific source IPs/CIDRs.
 # - -TrustedHosts sets WSMan Client TrustedHosts on this machine.
 # - -EnableLocalAccountRemoteAdmin enables remote admin tokens for local admin accounts.
+# - -EnableSmbServer ensures LanmanServer is Automatic+Running and File and Printer
+#   Sharing firewall rules are enabled (required for UECM SMB share creation).
+# - -EnableWmi ensures Winmgmt is Automatic+Running (required for UECM machine refresh).
+# - -SetExecutionPolicy <RemoteSigned|Bypass|Skip> sets LocalMachine execution policy.
+# - -EnableLongPaths sets HKLM:\...\FileSystem\LongPathsEnabled=1 (required for UE
+#   asset paths > 260 chars).
+# - -PowerProfile <HighPerformance|Balanced|Skip> activates a built-in power scheme;
+#   HighPerformance is hidden on some Win11 builds — the script restores it via
+#   powercfg /duplicatescheme before activating.
 #
 # This script does not enable SSH, Basic auth, CredSSP, AllowUnencrypted, or WinRM HTTPS.
 
@@ -23,6 +32,18 @@ param(
     [string[]]$TrustedHosts = @(),
 
     [switch]$EnableLocalAccountRemoteAdmin,
+
+    [switch]$EnableSmbServer,
+
+    [switch]$EnableWmi,
+
+    [ValidateSet('RemoteSigned', 'Bypass', 'Skip')]
+    [string]$SetExecutionPolicy = 'Skip',
+
+    [switch]$EnableLongPaths,
+
+    [ValidateSet('HighPerformance', 'Balanced', 'Skip')]
+    [string]$PowerProfile = 'Skip',
 
     [switch]$CheckOnly
 )
@@ -228,6 +249,197 @@ function Enable-UecmLocalAccountRemoteAdmin {
     Add-UecmChange $Changes 'LocalAccountTokenFilterPolicy set to 1'
 }
 
+function Enable-UecmSmbServer {
+    param([System.Collections.Generic.List[string]]$Changes)
+    if (-not $EnableSmbServer) { return }
+
+    $svc = Get-Service -Name LanmanServer -ErrorAction SilentlyContinue
+    if (-not $svc) {
+        Add-UecmChange $Changes 'WARNING: LanmanServer service not present; SMB share creation will fail'
+        return
+    }
+
+    try {
+        $startMode = (Get-CimInstance Win32_Service -Filter "Name='LanmanServer'" -ErrorAction Stop).StartMode
+    } catch {
+        $startMode = $svc.StartType.ToString()
+    }
+    if ($startMode -ne 'Auto' -and $startMode -ne 'Automatic') {
+        Set-Service -Name LanmanServer -StartupType Automatic -ErrorAction Stop
+        Add-UecmChange $Changes 'LanmanServer startup type set to Automatic'
+    }
+    if ($svc.Status -ne 'Running') {
+        Start-Service -Name LanmanServer -ErrorAction Stop
+        Add-UecmChange $Changes 'LanmanServer service started'
+    }
+
+    # UECM only needs SMB-In (TCP 445). Enabling the full 'File and Printer Sharing'
+    # group would also open NetBIOS 137-139, LLMNR/mDNS, Spooler RPC etc — unnecessary
+    # attack surface.
+    #
+    # Use the stable rule Name 'FPS-SMB-In-TCP' (NOT DisplayName which is localized —
+    # on zh-CN Windows the DisplayName is "文件和打印机共享(SMB-入站)" and a
+    # DisplayName-based lookup would silently fail and leave SMB 445 closed).
+    $smbRule = $null
+    try {
+        $smbRule = Get-NetFirewallRule -Name 'FPS-SMB-In-TCP' -ErrorAction Stop
+    } catch {
+        # Fallback: enumerate inbound TCP Allow rules with LocalPort 445.
+        # MUST filter by Protocol=TCP + Action=Allow — otherwise we could pick a
+        # disabled Block rule and "enable" it, which would silently block SMB
+        # while reporting success.
+        try {
+            $candidateRules = @(
+                Get-NetFirewallRule -Direction Inbound -Action Allow -ErrorAction SilentlyContinue |
+                    Where-Object {
+                        try {
+                            $port = $_ | Get-NetFirewallPortFilter -ErrorAction Stop
+                            ($port.Protocol -eq 'TCP') -and ($port.LocalPort -contains '445')
+                        } catch { $false }
+                    }
+            )
+            # Prefer a currently-disabled rule (need to enable it); otherwise any match.
+            $smbRule = $candidateRules | Where-Object { $_.Enabled -eq 'False' } | Select-Object -First 1
+            if (-not $smbRule) {
+                $smbRule = $candidateRules | Select-Object -First 1
+            }
+        } catch {
+            $smbRule = $null
+        }
+    }
+
+    if (-not $smbRule) {
+        Add-UecmChange $Changes 'WARNING: SMB-In firewall rule (FPS-SMB-In-TCP / TCP 445 inbound) not found on this machine; share creation may fail'
+        return
+    }
+
+    try {
+        $smbRule | Enable-NetFirewallRule -ErrorAction Stop
+        $ruleId = if ($smbRule.Name) { $smbRule.Name } else { $smbRule.DisplayName }
+        Add-UecmChange $Changes "SMB-In firewall rule enabled (rule: $ruleId, TCP 445 only)"
+    } catch {
+        Add-UecmChange $Changes "WARNING: could not enable SMB-In firewall rule: $($_.Exception.Message)"
+    }
+}
+
+function Enable-UecmWmi {
+    param([System.Collections.Generic.List[string]]$Changes)
+    if (-not $EnableWmi) { return }
+
+    $svc = Get-Service -Name Winmgmt -ErrorAction SilentlyContinue
+    if (-not $svc) {
+        Add-UecmChange $Changes 'WARNING: Winmgmt service not present; UECM machine refresh will fail'
+        return
+    }
+
+    try {
+        $startMode = (Get-CimInstance Win32_Service -Filter "Name='Winmgmt'" -ErrorAction Stop).StartMode
+    } catch {
+        $startMode = $svc.StartType.ToString()
+    }
+    if ($startMode -ne 'Auto' -and $startMode -ne 'Automatic') {
+        Set-Service -Name Winmgmt -StartupType Automatic -ErrorAction Stop
+        Add-UecmChange $Changes 'Winmgmt startup type set to Automatic'
+    }
+    if ($svc.Status -ne 'Running') {
+        Start-Service -Name Winmgmt -ErrorAction Stop
+        Add-UecmChange $Changes 'Winmgmt service started'
+    }
+}
+
+function Set-UecmLocalExecutionPolicy {
+    param([System.Collections.Generic.List[string]]$Changes)
+    if ($SetExecutionPolicy -eq 'Skip') { return }
+
+    $current = Get-ExecutionPolicy -Scope LocalMachine -ErrorAction SilentlyContinue
+    if ("$current" -eq $SetExecutionPolicy) {
+        Add-UecmChange $Changes "LocalMachine execution policy already $SetExecutionPolicy"
+        return
+    }
+    try {
+        Set-ExecutionPolicy -ExecutionPolicy $SetExecutionPolicy -Scope LocalMachine -Force -ErrorAction Stop
+        Add-UecmChange $Changes "LocalMachine execution policy set to $SetExecutionPolicy (was $current)"
+    } catch {
+        # GPO may override LocalMachine — record but do not fail bootstrap.
+        Add-UecmChange $Changes "WARNING: could not set LocalMachine execution policy (likely GPO-managed): $($_.Exception.Message)"
+    }
+}
+
+function Enable-UecmLongPaths {
+    param([System.Collections.Generic.List[string]]$Changes)
+    if (-not $EnableLongPaths) { return }
+
+    $path = 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem'
+    $current = Get-UecmRegistryDword -Path $path -Name 'LongPathsEnabled'
+    if ($current -eq 1) {
+        Add-UecmChange $Changes 'LongPathsEnabled already 1'
+        return
+    }
+    New-ItemProperty -Path $path -Name 'LongPathsEnabled' -PropertyType DWord -Value 1 -Force | Out-Null
+    Add-UecmChange $Changes 'LongPathsEnabled set to 1 (effective after reboot for some processes)'
+}
+
+function Set-UecmPowerPlan {
+    param([System.Collections.Generic.List[string]]$Changes)
+    if ($PowerProfile -eq 'Skip') { return }
+
+    $guidMap = @{
+        'HighPerformance' = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
+        'Balanced'        = '381b4222-f694-41f0-9685-ff5bb260df2e'
+    }
+    $guid = $guidMap[$PowerProfile]
+
+    # Power plan restoration is idempotent across reruns:
+    #   1. Built-in GUID present in list → use it directly.
+    #   2. Built-in GUID hidden but we previously duplicated it (named "UECM-<Profile>")
+    #      → reuse that GUID, do NOT duplicate again.
+    #   3. Truly missing → /duplicatescheme + /changename to a stable UECM-* tag so
+    #      the next run finds it via case 2.
+    # This prevents each bootstrap rerun from creating yet another power scheme.
+    $list = (& powercfg /list 2>&1) -join "`n"
+    $activeGuid = $null
+    $uecmPlanTag = "UECM-$PowerProfile"
+    $guidRegex = '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
+
+    if ($list -match [regex]::Escape($guid)) {
+        # Case 1: built-in scheme is still visible.
+        $activeGuid = $guid
+    } else {
+        # Case 2: look for a prior UECM-tagged duplicate.
+        foreach ($line in ($list -split "`r?`n")) {
+            if ($line -match ($guidRegex + '.*\(\s*' + [regex]::Escape($uecmPlanTag) + '\s*\)')) {
+                $activeGuid = $matches[1]
+                Add-UecmChange $Changes "reusing existing $uecmPlanTag power plan (GUID: $activeGuid)"
+                break
+            }
+        }
+    }
+
+    if (-not $activeGuid) {
+        # Case 3: actually missing — duplicate, capture new GUID, rename for next-run match.
+        $dupOutput = (& powercfg /duplicatescheme $guid 2>&1) -join "`n"
+        if ($LASTEXITCODE -ne 0) {
+            Add-UecmChange $Changes "WARNING: power plan $PowerProfile GUID not found and duplicatescheme failed; keeping current plan"
+            return
+        }
+        if ($dupOutput -match $guidRegex) {
+            $activeGuid = $matches[1]
+            & powercfg /changename $activeGuid $uecmPlanTag "Created by UECM bootstrap" 2>&1 | Out-Null
+            Add-UecmChange $Changes "$PowerProfile power plan restored via duplicatescheme, tagged $uecmPlanTag (new GUID: $activeGuid)"
+        } else {
+            Add-UecmChange $Changes "WARNING: duplicatescheme ran but new GUID could not be parsed; keeping current plan"
+            return
+        }
+    }
+
+    & powercfg /setactive $activeGuid 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Add-UecmChange $Changes "WARNING: powercfg setactive returned exit code $LASTEXITCODE; current plan unchanged"
+        return
+    }
+    Add-UecmChange $Changes "active power plan set to $PowerProfile (active GUID: $activeGuid)"
+}
+
 try {
     if ($CheckOnly) {
         $checkState = Get-UecmWinRmState
@@ -257,6 +469,11 @@ try {
     Set-UecmFirewallScope -Changes $changes
     Set-UecmTrustedHosts -Changes $changes
     Enable-UecmLocalAccountRemoteAdmin -Changes $changes
+    Enable-UecmSmbServer -Changes $changes
+    Enable-UecmWmi -Changes $changes
+    Set-UecmLocalExecutionPolicy -Changes $changes
+    Enable-UecmLongPaths -Changes $changes
+    Set-UecmPowerPlan -Changes $changes
 
     if (-not (Test-UecmLocalWsMan)) {
         throw 'WinRM was configured but Test-WSMan localhost still failed.'
