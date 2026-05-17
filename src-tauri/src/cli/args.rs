@@ -73,6 +73,11 @@ pub enum Domain {
         #[command(subcommand)]
         action: GpuAction,
     },
+    /// DDC pak workflow (generate / verify / distribute).
+    Ddc {
+        #[command(subcommand)]
+        action: DdcAction,
+    },
 }
 
 // ---------- system ----------
@@ -399,6 +404,40 @@ pub enum HealthAction {
 pub enum GpuAction {
     /// Show GPU consistency matrix across all machines in inventory.
     Matrix,
+}
+
+// ---------- ddc ----------
+#[derive(Subcommand, Debug)]
+pub enum DdcAction {
+    /// Generate a DDC pak file by running UE with -DDC=CreatePak.
+    Generate {
+        #[arg(long)]
+        project_id: i64,
+        #[arg(long)]
+        source_machine: i64,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Verify a previously generated .ddp pak file exists and has non-zero size.
+    Verify {
+        #[arg(long)]
+        project_id: i64,
+        #[arg(long)]
+        source_machine: i64,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Distribute the DDC pak to one or more target machines via Robocopy.
+    Distribute {
+        #[arg(long)]
+        project_id: i64,
+        #[arg(long)]
+        source_machine: i64,
+        #[arg(long, value_name = "M1,M2,...", value_delimiter = ',')]
+        targets: Vec<i64>,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
 }
 
 #[cfg(test)]
