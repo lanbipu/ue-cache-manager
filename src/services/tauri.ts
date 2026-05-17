@@ -38,6 +38,8 @@ export interface ProbedHost {
   ip: string;
   winrm_open: boolean;
   smb_open: boolean;
+  /** TCP 135 (DCE/RPC EPM) — required by PsExec-based Path B remote bootstrap. Optional for backward-compat with older fixtures. */
+  rpc_open?: boolean;
 }
 
 export interface ScanResult {

@@ -3,7 +3,7 @@
 use crate::cli::args::WinrmAction;
 use crate::cli::run::Ctx;
 use crate::cli::EmitSerialize;
-use crate::core::{bootstrap, winrm};
+use crate::core::{bootstrap, preflight, winrm};
 use crate::error::{UecmError, UecmResult};
 use serde::Serialize;
 
@@ -23,6 +23,10 @@ pub fn handle(ctx: &mut Ctx<'_>, action: WinrmAction) -> UecmResult<()> {
             let password = read_bootstrap_password(pass.as_deref(), pass_stdin)?;
             bootstrap_remote(ctx, &host, &user, &password, enable_local_admin)
         }
+        WinrmAction::Preflight { host, user, pass, pass_stdin, probe: with_probe } => {
+            let password = read_bootstrap_password(pass.as_deref(), pass_stdin)?;
+            preflight_path_b(ctx, &host, &user, &password, with_probe)
+        }
     }
 }
 
@@ -39,7 +43,7 @@ fn read_bootstrap_password(pass_inline: Option<&str>, pass_stdin: bool) -> UecmR
         return Ok(line.trim_end_matches(['\r', '\n']).to_string());
     }
     Err(UecmError::InvalidInput(
-        "winrm bootstrap requires --pass or --pass-stdin".into(),
+        "this command requires --pass or --pass-stdin".into(),
     ))
 }
 
@@ -108,6 +112,30 @@ fn bootstrap_remote(
         return Err(UecmError::OperationFailed(format!(
             "winrm bootstrap of {} reported failure: {}",
             host, message
+        )));
+    }
+    Ok(())
+}
+
+fn preflight_path_b(
+    ctx: &mut Ctx<'_>,
+    host: &str,
+    user: &str,
+    pass: &str,
+    with_probe: bool,
+) -> UecmResult<()> {
+    let result = preflight::preflight_path_b(host, user, pass, with_probe)?;
+    ctx.emitter.emit_result(&result).ok();
+    // Exit code mapping:
+    //   viable / likely_viable → 0 (Path B is usable)
+    //   blocked                → non-zero (target rejects Path B)
+    //   uncertain              → non-zero (operator-side config issue — most
+    //                            commonly missing PsExec64; the verdict cannot
+    //                            be trusted, so do NOT let automation proceed)
+    if result.verdict == "blocked" || result.verdict == "uncertain" {
+        return Err(UecmError::OperationFailed(format!(
+            "Path B preflight of {} verdict={}: {}",
+            host, result.verdict, result.reason
         )));
     }
     Ok(())

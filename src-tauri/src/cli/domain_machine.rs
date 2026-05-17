@@ -143,6 +143,7 @@ fn scan(ctx: &mut Ctx<'_>, cidr: &str, timeout_ms: u64) -> UecmResult<()> {
                 ip: h.ip.clone(),
                 winrm_open: h.winrm_open,
                 smb_open: h.smb_open,
+                rpc_open: h.rpc_open,
             })
             .ok();
     }

@@ -21,6 +21,7 @@ pub enum Event {
         ip: String,
         winrm_open: bool,
         smb_open: bool,
+        rpc_open: bool,
     },
     Spawned {
         pid: i64,
@@ -246,11 +247,12 @@ impl<W: Write, E: Write> Emitter for HumanEmitter<W, E> {
             Event::Started { task_type, .. } => {
                 writeln!(self.stderr, "→ starting {}", task_type)?;
             }
-            Event::HostProbe { ip, winrm_open, smb_open } => {
+            Event::HostProbe { ip, winrm_open, smb_open, rpc_open } => {
                 let badges = format!(
-                    "winrm={} smb={}",
+                    "winrm={} smb={} rpc={}",
                     if *winrm_open { "✓" } else { "✗" },
-                    if *smb_open { "✓" } else { "✗" }
+                    if *smb_open { "✓" } else { "✗" },
+                    if *rpc_open { "✓" } else { "✗" }
                 );
                 writeln!(self.stdout, "  {}  {}", ip, badges)?;
             }
@@ -326,6 +328,7 @@ mod tests {
                     ip: "192.168.10.20".into(),
                     winrm_open: true,
                     smb_open: true,
+                    rpc_open: true,
                 })
                 .unwrap();
             emitter
@@ -341,6 +344,7 @@ mod tests {
         assert_eq!(parsed["kind"], "host_probe");
         assert_eq!(parsed["ip"], "192.168.10.20");
         assert_eq!(parsed["winrm_open"], true);
+        assert_eq!(parsed["rpc_open"], true);
     }
 
     #[test]
@@ -378,6 +382,7 @@ mod tests {
                     ip: "192.168.10.20".into(),
                     winrm_open: true,
                     smb_open: false,
+                    rpc_open: true,
                 })
                 .unwrap();
         }
@@ -385,5 +390,6 @@ mod tests {
         assert!(s.contains("192.168.10.20"));
         assert!(s.contains("winrm=✓"));
         assert!(s.contains("smb=✗"));
+        assert!(s.contains("rpc=✓"));
     }
 }

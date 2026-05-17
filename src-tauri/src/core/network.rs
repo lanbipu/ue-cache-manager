@@ -16,8 +16,9 @@ use tokio::time::timeout;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProbedHost {
     pub ip: String,
-    pub winrm_open: bool,   // port 5985
-    pub smb_open: bool,     // port 445
+    pub winrm_open: bool,   // port 5985 — UECM remote management
+    pub smb_open: bool,     // port 445  — SMB ADMIN$ + share access
+    pub rpc_open: bool,     // port 135  — DCE/RPC Endpoint Mapper, required by PsExec-based Path B
 }
 
 /// Default per-port connect timeout. Public so callers (and tests) can tune.
@@ -26,13 +27,17 @@ pub const DEFAULT_TIMEOUT_MS: u64 = 1000;
 /// Maximum hosts to scan in one call. Guard against accidentally scanning a /16.
 pub const MAX_HOSTS: usize = 1024;
 
-/// Cap on simultaneous in-flight `connect()` syscalls across the whole scan.
-/// Default macOS `ulimit -n` is 256; with 2 ports per host we'd otherwise hit
-/// EMFILE long before MAX_HOSTS — guard with a permit.
-const MAX_INFLIGHT: usize = 128;
+/// Cap on simultaneous in-flight hosts. Each permitted host opens 3 concurrent
+/// `connect()` syscalls (WinRM 5985 + SMB 445 + RPC 135), so effective socket
+/// inflight is `MAX_INFLIGHT * 3`. Default macOS `ulimit -n` is 256 — keeping
+/// `50 * 3 = 150` sockets leaves comfortable margin for stdin/out/err, DB
+/// handles, and stray temp files. Going above this risks EMFILE on dev macOS,
+/// which `TcpStream::connect` would report as a closed port (false negative).
+const MAX_INFLIGHT: usize = 50;
 
 const PORT_WINRM: u16 = 5985;
 const PORT_SMB: u16 = 445;
+const PORT_RPC: u16 = 135;
 
 pub async fn scan_cidr(cidr: &str, timeout_ms: u64) -> UecmResult<Vec<ProbedHost>> {
     let net = Ipv4Net::from_str(cidr)
@@ -65,7 +70,11 @@ pub async fn scan_cidr(cidr: &str, timeout_ms: u64) -> UecmResult<Vec<ProbedHost
         }
     }
 
-    // Only return hosts where at least one port responded.
+    // Only return hosts where UECM has at least one usable management path:
+    // WinRM (5985) for direct management, or SMB (445) for Path B remote
+    // bootstrap. TCP 135 alone is NOT enough — PsExec needs SMB ADMIN$ to push
+    // its service binary, and Refresh needs WinRM. RPC-only hosts have no
+    // actionable surface and would clutter discovery results.
     Ok(results
         .into_iter()
         .filter(|r| r.winrm_open || r.smb_open)
@@ -73,14 +82,16 @@ pub async fn scan_cidr(cidr: &str, timeout_ms: u64) -> UecmResult<Vec<ProbedHost
 }
 
 async fn probe_host(ip: IpAddr, timeout_ms: u64) -> ProbedHost {
-    let (winrm, smb) = tokio::join!(
+    let (winrm, smb, rpc) = tokio::join!(
         probe_port(ip, PORT_WINRM, timeout_ms),
         probe_port(ip, PORT_SMB, timeout_ms),
+        probe_port(ip, PORT_RPC, timeout_ms),
     );
     ProbedHost {
         ip: ip.to_string(),
         winrm_open: winrm,
         smb_open: smb,
+        rpc_open: rpc,
     }
 }
 
