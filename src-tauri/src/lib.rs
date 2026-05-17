@@ -1,9 +1,17 @@
+pub mod cli;
 pub mod commands;
 pub mod core;
 pub mod data;
 pub mod error;
+pub mod startup;
 
-use std::path::PathBuf;
+/// Crate-wide lock for tests that mutate process-global env vars (`UECM_*`).
+/// Multiple modules touch the same env vars; without a single shared mutex,
+/// parallel tests in different modules can interleave set/remove calls and
+/// produce flaky reads. Acquire this lock at the top of any env-mutating test.
+#[cfg(test)]
+pub(crate) static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -17,18 +25,10 @@ pub fn run() {
 
     tauri::Builder::default()
         .setup(|app| {
-            let db_path: PathBuf = app
-                .path()
-                .app_data_dir()
-                .expect("failed to resolve app_data_dir")
-                .join("uecm.sqlite");
-
-            std::fs::create_dir_all(db_path.parent().unwrap())?;
-            let db = data::open(&db_path)?;
-            {
-                let mut conn = db.lock().unwrap();
-                data::schema::migrate(&mut conn)?;
-            }
+            let db_path = crate::startup::resolve_db_path()
+                .expect("failed to resolve DB path");
+            let db = crate::startup::open_and_migrate_db(&db_path)
+                .expect("failed to open / migrate DB");
             app.manage(db);
             app.manage(commands::ddc_pak::UeJobRegistry::default());
             tracing::info!("UECM started, database at {}", db_path.display());

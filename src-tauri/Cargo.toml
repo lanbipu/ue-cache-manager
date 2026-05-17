@@ -5,10 +5,19 @@ description = "UE Cache Manager"
 authors = ["lanbipu"]
 edition = "2021"
 rust-version = "1.75"
+default-run = "uecm"
 
 [lib]
 name = "uecm_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "uecm"
+path = "src/main.rs"
+
+[[bin]]
+name = "uecm-cli"
+path = "src/bin/uecm-cli.rs"
 
 [build-dependencies]
 tauri-build = { version = "2.0.0", features = [] }
@@ -27,6 +36,10 @@ base64 = "0.22"
 rand = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 encoding_rs = "0.8"
+sha2 = "0.10"
+clap = { version = "~4.5", features = ["derive", "env"] }
+directories = "5.0"
+atty = "0.2"
 
 [dev-dependencies]
 tempfile = "3.10"

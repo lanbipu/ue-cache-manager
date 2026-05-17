@@ -20,6 +20,9 @@ pub enum UecmError {
 
     #[error("operation failed: {0}")]
     OperationFailed(String),
+
+    #[error("configuration error: {0}")]
+    Configuration(String),
 }
 
 /// Frontend-friendly error representation.
@@ -37,6 +40,7 @@ impl From<UecmError> for ErrorPayload {
             UecmError::PowerShell(_) => "POWERSHELL",
             UecmError::InvalidInput(_) => "INVALID_INPUT",
             UecmError::OperationFailed(_) => "OPERATION_FAILED",
+            UecmError::Configuration(_) => "CONFIGURATION",
         };
         ErrorPayload {
             code: code.to_string(),
@@ -59,6 +63,7 @@ impl Serialize for UecmError {
                 UecmError::PowerShell(_) => "POWERSHELL",
                 UecmError::InvalidInput(_) => "INVALID_INPUT",
                 UecmError::OperationFailed(_) => "OPERATION_FAILED",
+                UecmError::Configuration(_) => "CONFIGURATION",
             }
             .to_string(),
             message: self.to_string(),

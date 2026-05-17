@@ -26,6 +26,18 @@ pub fn probe(host: &str) -> UecmResult<ProbeResult> {
     powershell::run_json::<ProbeResult>(&script, &["-HostName", host])
 }
 
+/// Probe a single host's WinRM availability with explicit credentials.
+///
+/// `test-winrm.ps1` uses `Test-WSMan` which is an unauthenticated connectivity
+/// check — it does not forward credentials to the remote endpoint. Passing
+/// `user`/`pass` here therefore has no effect on the probe outcome; the
+/// credential pair is accepted for API symmetry but intentionally ignored so
+/// callers can treat probe as a uniform first-step check regardless of auth mode.
+pub fn probe_with_credential(host: &str, user: &str, pass: &str) -> UecmResult<ProbeResult> {
+    let _ = (user, pass);
+    probe(host)
+}
+
 /// Invoke a PowerShell scriptblock on a remote host. Returns combined stdout.
 /// The script body is passed via stdin (no escaping required).
 #[cfg(windows)]
@@ -251,6 +263,13 @@ mod tests {
     #[test]
     fn invoke_with_credential_returns_error_on_non_windows() {
         let result = invoke_with_credential("RENDER-01", "Get-Date", "admin", "p@ss");
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), UecmError::PowerShell(_)));
+    }
+
+    #[test]
+    fn probe_with_credential_returns_error_on_non_windows() {
+        let result = probe_with_credential("RENDER-01", "u", "p");
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), UecmError::PowerShell(_)));
     }
