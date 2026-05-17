@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import { useMachinesStore } from "@/stores/machines";
@@ -72,10 +72,114 @@ function onKey(e: KeyboardEvent) {
   }
 }
 
+// --- Detail outline (Figma v7 path) ---------------------------------------
+// Article outline is a single SVG path: rounded rectangle + triangle bump
+// pointing at the selected card. Geometry parameters come from the Figma
+// design (file Kx953RiISgI99lIbWH7cPE, node 35:2).
+const BUMP_HEIGHT = 22;                     // gap above article rect for triangle
+const CORNER_R = 16;                        // rounded corner radius
+const KAPPA = 0.5523 * CORNER_R;            // cubic-bezier kappa (~8.84)
+const TRIANGLE_HALF_WIDTH = 35;             // base opening half-width
+const DETAIL_PANEL_MAX_WIDTH = 1000;        // detail panel max width (px); ~0.6 of full frame
+
+const gridRef = ref<HTMLUListElement | null>(null);
+const detailLiRef = ref<HTMLLIElement | null>(null);
+const detailContentEl = ref<HTMLElement | null>(null);
+const arrowLeft = ref<number | null>(null);
+const panelLeft = ref(0);
+const articleSize = reactive({ w: 0, h: 0 });
+
+function setDetailLi(el: unknown) {
+  detailLiRef.value = (el as HTMLLIElement | null) ?? null;
+}
+
+function setDetailContentEl(el: unknown) {
+  detailContentEl.value = (el as HTMLElement | null) ?? null;
+}
+
+function updateArticleSize() {
+  const el = detailContentEl.value;
+  if (el) {
+    articleSize.w = el.offsetWidth;
+    articleSize.h = el.offsetHeight;
+  } else {
+    articleSize.w = 0;
+    articleSize.h = 0;
+  }
+}
+
+function updateArrowPosition() {
+  const li = detailLiRef.value;
+  const grid = gridRef.value;
+  const id = expandedId.value;
+  if (!li || !grid || id == null) {
+    arrowLeft.value = null;
+    panelLeft.value = 0;
+    return;
+  }
+  const card = grid.querySelector<HTMLElement>(
+    `[data-machine-card][data-machine-id="${id}"]`,
+  );
+  if (!card) {
+    arrowLeft.value = null;
+    panelLeft.value = 0;
+    return;
+  }
+  const cardRect = card.getBoundingClientRect();
+  const liRect = li.getBoundingClientRect();
+  const cardCenterX = cardRect.left + cardRect.width / 2 - liRect.left;
+  const panelWidth = Math.min(DETAIL_PANEL_MAX_WIDTH, liRect.width);
+  // Center panel on selected card, clamp to li bounds
+  const rawLeft = cardCenterX - panelWidth / 2;
+  panelLeft.value = Math.max(0, Math.min(liRect.width - panelWidth, rawLeft));
+  // arrowLeft is cx relative to article's own coord system
+  arrowLeft.value = cardCenterX - panelLeft.value;
+}
+
+const detailOutlinePath = computed(() => {
+  const w = articleSize.w;
+  const h = articleSize.h;
+  if (w === 0) return "";
+  const top = BUMP_HEIGHT;
+  const bottom = BUMP_HEIGHT + h;
+  const rawCx = arrowLeft.value ?? w / 2;
+  // Clamp so triangle stays clear of the rounded corners
+  const cx = Math.max(
+    CORNER_R + TRIANGLE_HALF_WIDTH,
+    Math.min(w - CORNER_R - TRIANGLE_HALF_WIDTH, rawCx),
+  );
+  return [
+    `M ${CORNER_R} ${top}`,
+    `L ${cx - 35} ${top}`,
+    `C ${cx - 29.22} ${top} ${cx - 26.44} ${top - 1.99} ${cx - 20.24} ${top - 5.95}`,
+    `L ${cx - 8} ${top - 14.46}`,
+    `C ${cx - 2} ${top - 18.42} ${cx + 2} ${top - 18.42} ${cx + 8} ${top - 14.46}`,
+    `L ${cx + 20.24} ${top - 5.95}`,
+    `C ${cx + 26.44} ${top - 1.99} ${cx + 29.22} ${top} ${cx + 35} ${top}`,
+    `L ${w - CORNER_R} ${top}`,
+    `C ${w - CORNER_R + KAPPA} ${top} ${w} ${top + CORNER_R - KAPPA} ${w} ${top + CORNER_R}`,
+    `L ${w} ${bottom - CORNER_R}`,
+    `C ${w} ${bottom - CORNER_R + KAPPA} ${w - CORNER_R + KAPPA} ${bottom} ${w - CORNER_R} ${bottom}`,
+    `L ${CORNER_R} ${bottom}`,
+    `C ${CORNER_R - KAPPA} ${bottom} 0 ${bottom - CORNER_R + KAPPA} 0 ${bottom - CORNER_R}`,
+    `L 0 ${top + CORNER_R}`,
+    `C 0 ${top + CORNER_R - KAPPA} ${CORNER_R - KAPPA} ${top} ${CORNER_R} ${top}`,
+    "Z",
+  ].join(" ");
+});
+
+let resizeObserver: ResizeObserver | null = null;
+let articleResizeObserver: ResizeObserver | null = null;
+
 onMounted(() => {
   store.loadMachines();
   if (typeof window !== "undefined") {
     window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", updateArrowPosition);
+    window.addEventListener("resize", updateArticleSize);
+  }
+  if (typeof ResizeObserver !== "undefined") {
+    resizeObserver = new ResizeObserver(() => updateArrowPosition());
   }
 });
 
@@ -108,10 +212,46 @@ watch(
   { deep: true },
 );
 
+watch(
+  [
+    expandedId,
+    gridRef,
+    detailLiRef,
+    // join IDs so rename-induced reordering (same length, different positions)
+    // still triggers arrow recalculation
+    () => store.machines.map((m) => m.id ?? m.ip).join(","),
+  ],
+  async () => {
+    await nextTick();
+    if (resizeObserver) {
+      resizeObserver.disconnect();
+      if (gridRef.value) resizeObserver.observe(gridRef.value);
+    }
+    updateArrowPosition();
+  },
+);
+
+watch(detailContentEl, async (el) => {
+  articleResizeObserver?.disconnect();
+  if (el && typeof ResizeObserver !== "undefined") {
+    articleResizeObserver = new ResizeObserver(updateArticleSize);
+    articleResizeObserver.observe(el);
+    await nextTick();
+    updateArticleSize();
+  } else {
+    articleSize.w = 0;
+    articleSize.h = 0;
+  }
+});
+
 onBeforeUnmount(() => {
   if (typeof window !== "undefined") {
     window.removeEventListener("keydown", onKey);
+    window.removeEventListener("resize", updateArrowPosition);
+    window.removeEventListener("resize", updateArticleSize);
   }
+  resizeObserver?.disconnect();
+  articleResizeObserver?.disconnect();
 });
 
 const online = computed(() =>
@@ -256,11 +396,16 @@ function closeDetail() {
       />
       <ul
         v-else
+        ref="gridRef"
         data-machines-grid
         class="grid grid-flow-dense gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6"
       >
         <template v-for="machine in store.machines" :key="machine.id ?? machine.ip">
-          <li data-machine-card class="group/card relative">
+          <li
+            data-machine-card
+            :data-machine-id="machine.id ?? undefined"
+            class="group/card relative"
+          >
             <input
               v-if="machine.id != null"
               data-machine-check
@@ -300,11 +445,30 @@ function closeDetail() {
           </li>
           <li
             v-if="machine.id === expandedId"
+            :ref="setDetailLi"
             data-machine-detail
-            class="col-start-1 col-span-full"
+            class="relative col-start-1 col-span-full mt-2"
           >
+            <svg
+              v-if="articleSize.w > 0"
+              aria-hidden="true"
+              class="pointer-events-none absolute overflow-visible drop-shadow-lg"
+              :style="{ top: `-${BUMP_HEIGHT}px`, left: `${panelLeft}px` }"
+              :width="articleSize.w"
+              :height="articleSize.h + BUMP_HEIGHT"
+              :viewBox="`0 0 ${articleSize.w} ${articleSize.h + BUMP_HEIGHT}`"
+            >
+              <path
+                :d="detailOutlinePath"
+                class="fill-popover stroke-primary"
+                stroke-width="2"
+                stroke-linejoin="round"
+              />
+            </svg>
             <article
-              class="flex max-h-[70vh] flex-col overflow-hidden rounded-2xl border-2 border-primary/30 bg-popover text-popover-foreground shadow-lg"
+              :ref="setDetailContentEl"
+              :style="{ marginLeft: `${panelLeft}px`, maxWidth: `${DETAIL_PANEL_MAX_WIDTH}px` }"
+              class="relative flex max-h-[70vh] flex-col overflow-hidden pb-[2px] pl-[2px] pr-[2px] text-popover-foreground"
             >
               <header class="flex items-center justify-between gap-4 border-b px-6 py-4">
                 <div class="flex min-w-0 items-center gap-3">
