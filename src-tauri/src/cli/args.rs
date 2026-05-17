@@ -68,6 +68,11 @@ pub enum Domain {
         #[command(subcommand)]
         action: HealthAction,
     },
+    /// GPU consistency matrix across the cluster.
+    Gpu {
+        #[command(subcommand)]
+        action: GpuAction,
+    },
 }
 
 // ---------- system ----------
@@ -387,6 +392,13 @@ pub enum HealthAction {
     },
     /// List per-row health results for a scan run.
     Results { scan_run_id: i64 },
+}
+
+// ---------- gpu ----------
+#[derive(Subcommand, Debug)]
+pub enum GpuAction {
+    /// Show GPU consistency matrix across all machines in inventory.
+    Matrix,
 }
 
 #[cfg(test)]
