@@ -7,7 +7,7 @@
 # - Enable Windows Remote Management firewall rules.
 # - Change active Public network profiles to Private unless -NetworkCategory Skip is used.
 #
-# Optional changes (off by default — UECM-Bootstrap.cmd wrapper enables all of these):
+# Optional changes (off by default - UECM-Bootstrap.cmd wrapper enables all of these):
 # - -AllowedRemoteAddress restricts WinRM firewall rules to specific source IPs/CIDRs.
 # - -TrustedHosts sets WSMan Client TrustedHosts on this machine.
 # - -EnableLocalAccountRemoteAdmin enables remote admin tokens for local admin accounts.
@@ -18,7 +18,7 @@
 # - -EnableLongPaths sets HKLM:\...\FileSystem\LongPathsEnabled=1 (required for UE
 #   asset paths > 260 chars).
 # - -PowerProfile <HighPerformance|Balanced|Skip> activates a built-in power scheme;
-#   HighPerformance is hidden on some Win11 builds — the script restores it via
+#   HighPerformance is hidden on some Win11 builds - the script restores it via
 #   powercfg /duplicatescheme before activating.
 #
 # This script does not enable SSH, Basic auth, CredSSP, AllowUnencrypted, or WinRM HTTPS.
@@ -274,10 +274,10 @@ function Enable-UecmSmbServer {
     }
 
     # UECM only needs SMB-In (TCP 445). Enabling the full 'File and Printer Sharing'
-    # group would also open NetBIOS 137-139, LLMNR/mDNS, Spooler RPC etc — unnecessary
+    # group would also open NetBIOS 137-139, LLMNR/mDNS, Spooler RPC etc - unnecessary
     # attack surface.
     #
-    # Use the stable rule Name 'FPS-SMB-In-TCP' (NOT DisplayName which is localized —
+    # Use the stable rule Name 'FPS-SMB-In-TCP' (NOT DisplayName which is localized -
     # on zh-CN Windows the DisplayName is "文件和打印机共享(SMB-入站)" and a
     # DisplayName-based lookup would silently fail and leave SMB 445 closed).
     $smbRule = $null
@@ -285,7 +285,7 @@ function Enable-UecmSmbServer {
         $smbRule = Get-NetFirewallRule -Name 'FPS-SMB-In-TCP' -ErrorAction Stop
     } catch {
         # Fallback: enumerate inbound TCP Allow rules with LocalPort 445.
-        # MUST filter by Protocol=TCP + Action=Allow — otherwise we could pick a
+        # MUST filter by Protocol=TCP + Action=Allow - otherwise we could pick a
         # disabled Block rule and "enable" it, which would silently block SMB
         # while reporting success.
         try {
@@ -360,7 +360,7 @@ function Set-UecmLocalExecutionPolicy {
         Set-ExecutionPolicy -ExecutionPolicy $SetExecutionPolicy -Scope LocalMachine -Force -ErrorAction Stop
         Add-UecmChange $Changes "LocalMachine execution policy set to $SetExecutionPolicy (was $current)"
     } catch {
-        # GPO may override LocalMachine — record but do not fail bootstrap.
+        # GPO may override LocalMachine - record but do not fail bootstrap.
         Add-UecmChange $Changes "WARNING: could not set LocalMachine execution policy (likely GPO-managed): $($_.Exception.Message)"
     }
 }
@@ -416,7 +416,7 @@ function Set-UecmPowerPlan {
     }
 
     if (-not $activeGuid) {
-        # Case 3: actually missing — duplicate, capture new GUID, rename for next-run match.
+        # Case 3: actually missing - duplicate, capture new GUID, rename for next-run match.
         $dupOutput = (& powercfg /duplicatescheme $guid 2>&1) -join "`n"
         if ($LASTEXITCODE -ne 0) {
             Add-UecmChange $Changes "WARNING: power plan $PowerProfile GUID not found and duplicatescheme failed; keeping current plan"

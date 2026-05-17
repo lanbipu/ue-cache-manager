@@ -2,7 +2,7 @@
 # Output: JSON array of { gpu_model, driver_version, vendor, vram_mb }
 # Designed to run via `invoke-remote.ps1`.
 #
-# VRAM source order (closes Plan 2 lesson L7 — RTX 3080 reporting 4095 MB):
+# VRAM source order (closes Plan 2 lesson L7 - RTX 3080 reporting 4095 MB):
 #   1. Display class registry HardwareInformation.qwMemorySize (REG_QWORD,
 #      authoritative on modern drivers; not subject to WMI's 4 GB cap)
 #   2. HardwareInformation.MemorySize (REG_DWORD, older driver fallback)

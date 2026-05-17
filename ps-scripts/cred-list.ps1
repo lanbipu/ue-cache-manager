@@ -1,5 +1,5 @@
 # Lists all credentials matching prefix UECM:* (we never list system creds).
-# Output: JSON array of { alias, target_type } — note: passwords are NOT exposed.
+# Output: JSON array of { alias, target_type } - note: passwords are NOT exposed.
 
 [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
 

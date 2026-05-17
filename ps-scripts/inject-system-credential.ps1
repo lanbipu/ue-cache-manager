@@ -10,7 +10,7 @@
 #   [-PsExecPath <string>]      override path to PsExec64.exe; defaults to
 #                               ../vendor/PsExec64.exe relative to this script
 # Output: JSON { ok, message }
-# Caveat: PsExec64.exe must exist on the CLIENT machine — Invoke-Command runs
+# Caveat: PsExec64.exe must exist on the CLIENT machine - Invoke-Command runs
 # the scriptblock there, so the operator must pre-stage it (or rely on UECM's
 # Tauri resource bundling which places it at <exe-dir>\vendor\PsExec64.exe).
 

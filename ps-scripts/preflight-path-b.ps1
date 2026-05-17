@@ -1,11 +1,11 @@
 # Preflight check whether Path B (remote PsExec bootstrap) is viable for a target host.
 #
 # Steps (executed in order, with early-exit on hard failures):
-#   1. tcp_135           — DCE/RPC Endpoint Mapper port reachability
-#   2. tcp_445           — SMB port reachability
-#   3. admin_share_mount — actually mount \\<HostName>\ADMIN$ with given credential
-#   4. admin_share_write — copy + delete a small probe file under ADMIN$\Temp
-#   5. psexec_probe      — (opt-in via -WithPsExec) run `cmd /c exit 0` via PsExec64
+#   1. tcp_135           - DCE/RPC Endpoint Mapper port reachability
+#   2. tcp_445           - SMB port reachability
+#   3. admin_share_mount - actually mount \\<HostName>\ADMIN$ with given credential
+#   4. admin_share_write - copy + delete a small probe file under ADMIN$\Temp
+#   5. psexec_probe      - (opt-in via -WithPsExec) run `cmd /c exit 0` via PsExec64
 #                          to verify SCM service registration is not blocked by
 #                          UAC remote token filter. Writes one service install
 #                          + one service remove entry to target machine's Event Log.
@@ -117,7 +117,7 @@ if ($mounted) {
             New-Item -Path $remoteTempDir -ItemType Directory -Force | Out-Null
         }
         Set-Content -LiteralPath $remoteProbePath -Value 'uecm preflight probe - safe to delete' -ErrorAction Stop
-        # Write succeeded — that's what makes ADMIN$ "writable" from preflight's
+        # Write succeeded - that's what makes ADMIN$ "writable" from preflight's
         # perspective. Cleanup is best-effort; if Remove-Item fails (AV scan, ACL,
         # file lock) we surface the residual file path in the message so the
         # operator can clean up manually. Keep status=ok because the writability
@@ -140,7 +140,7 @@ if ($mounted) {
 # verdict logic short-circuits to 'uncertain' regardless of -WithPsExec.
 if ($WithPsExec) {
     if (-not $PsExecAvailable) {
-        # Should not reach verdict 'blocked' from here — script-init handles the
+        # Should not reach verdict 'blocked' from here - script-init handles the
         # operator-side case. Still record it for transparency in the results list.
         Add-Result 'psexec_probe' 'fail' "operator-side: PsExec64.exe not found at '$PsExecPath'"
     } else {
@@ -196,22 +196,22 @@ if (-not $PsExecAvailable) {
     # Returning 'uncertain' (not 'blocked') because the issue is on the operator side,
     # not the target. CLI handler maps both blocked + uncertain to non-zero exit.
     $verdict = 'uncertain'
-    $reason  = "operator-side: PsExec64.exe missing (expected at '$PsExecPath'). Path B cannot run from this operator install — reinstall UECM or pass a valid --PsExecPath."
+    $reason  = "operator-side: PsExec64.exe missing (expected at '$PsExecPath'). Path B cannot run from this operator install - reinstall UECM or pass a valid --PsExecPath."
 } elseif ($tcp135Result.status -ne 'ok') {
     $verdict = 'blocked'
-    $reason  = 'TCP 135 (RPC EPM) unreachable — PsExec cannot reach Service Control Manager'
+    $reason  = 'TCP 135 (RPC EPM) unreachable - PsExec cannot reach Service Control Manager'
 } elseif ($tcp445Result.status -ne 'ok') {
     $verdict = 'blocked'
-    $reason  = 'TCP 445 (SMB) unreachable — PsExec cannot push its service binary'
+    $reason  = 'TCP 445 (SMB) unreachable - PsExec cannot push its service binary'
 } elseif ($mountResult.status -ne 'ok') {
     $verdict = 'blocked'
-    $reason  = 'cannot mount ADMIN$ — credential rejected or share access denied'
+    $reason  = 'cannot mount ADMIN$ - credential rejected or share access denied'
 } elseif ($writeResult.status -ne 'ok') {
     $verdict = 'blocked'
-    $reason  = 'mounted ADMIN$ but cannot write Temp file — permission issue under ADMIN$'
+    $reason  = 'mounted ADMIN$ but cannot write Temp file - permission issue under ADMIN$'
 } elseif ($probeResult.status -eq 'ok') {
     $verdict = 'viable'
-    $reason  = 'all checks passed including PsExec SCM probe — Path B is fully viable'
+    $reason  = 'all checks passed including PsExec SCM probe - Path B is fully viable'
 } elseif ($probeResult.status -eq 'fail') {
     # Distinguish operator-side failure (PsExec64 missing on this machine) from
     # target-side blocker (UAC remote token filter / SCM access denied).
@@ -220,12 +220,12 @@ if (-not $PsExecAvailable) {
         $reason  = "SCM probe could not run: $($probeResult.message). Target appears reachable but Path B viability cannot be confirmed without a working PsExec64."
     } else {
         $verdict = 'blocked'
-        $reason  = 'TCP + SMB + ADMIN$ all OK but PsExec SCM probe failed — UAC remote token filter is the most likely cause; use Path A (USB bootstrap)'
+        $reason  = 'TCP + SMB + ADMIN$ all OK but PsExec SCM probe failed - UAC remote token filter is the most likely cause; use Path A (USB bootstrap)'
     }
 } else {
     # probe was 'skipped' (user did not pass -WithPsExec). All non-probe checks ok.
     $verdict = 'likely_viable'
-    $reason  = 'network + SMB + ADMIN$ all reachable; SCM probe was skipped — run again with --probe for a definitive verdict'
+    $reason  = 'network + SMB + ADMIN$ all reachable; SCM probe was skipped - run again with --probe for a definitive verdict'
 }
 
 @{

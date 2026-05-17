@@ -6,7 +6,7 @@
 # Output: JSON { ok: bool, data: string, message: string }
 #   `data` is base64 of ciphertext (protect) or plaintext (unprotect).
 # Notes:
-#   Argv exposes the base64 to Process Explorer — same risk profile as
+#   Argv exposes the base64 to Process Explorer - same risk profile as
 #   cred-set.ps1's -Password argv. The plaintext window is one Invoke call.
 
 param(
