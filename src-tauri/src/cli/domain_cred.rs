@@ -57,6 +57,10 @@ fn save(
     let password = read_password(pass_inline, pass_stdin)?;
     let username = core_creds::normalize_username_for_storage(user);
 
+    // Validate --kind BEFORE any side effects (cmdkey / DPAPI). A typo here
+    // used to silently fall back to Winrm and persist under the wrong type.
+    let _validated_kind = parse_credential_kind(kind)?;
+
     // Step 2: cmdkey first. If this fails, nothing else gets written.
     core_creds::store(alias, &username, &password)?;
 
@@ -77,8 +81,8 @@ fn save(
     if data_creds::find_by_alias(db, alias)?.is_some() {
         data_creds::delete_by_alias(db, alias)?;
     }
-    // Build record. Parse kind from string with safe default.
-    let record = build_credential_record(alias, &username, kind);
+    // Build record (kind already validated above, so unwrap is sound).
+    let record = build_credential_record(alias, &username, kind)?;
     let id = data_creds::insert(db, &record)?;
 
     ctx.emitter
@@ -89,24 +93,31 @@ fn save(
     Ok(())
 }
 
+fn parse_credential_kind(kind_str: &str) -> UecmResult<data_creds::CredentialKind> {
+    use data_creds::CredentialKind;
+    match kind_str.to_lowercase().as_str() {
+        "winrm" => Ok(CredentialKind::Winrm),
+        "share" => Ok(CredentialKind::Share),
+        other => Err(UecmError::InvalidInput(format!(
+            "unknown credential kind '{}'; expected 'winrm' or 'share'",
+            other
+        ))),
+    }
+}
+
 fn build_credential_record(
     alias: &str,
     username: &str,
     kind_str: &str,
-) -> data_creds::CredentialRecord {
-    use data_creds::{CredentialKind, CredentialRecord};
-    // Parse kind string; default to Winrm (the most common).
-    let kind: CredentialKind = match kind_str.to_lowercase().as_str() {
-        "winrm" => CredentialKind::Winrm,
-        "share" => CredentialKind::Share,
-        _ => CredentialKind::Winrm, // safe default
-    };
-    CredentialRecord {
+) -> UecmResult<data_creds::CredentialRecord> {
+    use data_creds::CredentialRecord;
+    let kind = parse_credential_kind(kind_str)?;
+    Ok(CredentialRecord {
         id: None,
         alias: alias.to_string(),
         kind,
         username: username.to_string(),
-    }
+    })
 }
 
 fn delete(ctx: &mut Ctx<'_>, alias: &str) -> UecmResult<()> {
