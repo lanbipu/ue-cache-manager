@@ -1,0 +1,706 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>UECM 核心功能 · Operator's Manual</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: oklch(0.985 0.002 240);
+    --fg: oklch(0.22 0.01 240);
+    --card: oklch(1 0 0);
+    --muted: oklch(0.955 0.005 240);
+    --muted-strong: oklch(0.93 0.005 240);
+    --muted-fg: oklch(0.5 0.01 240);
+    --border: oklch(0.9 0.005 240);
+    --primary: oklch(0.58 0.13 210);
+    --primary-fg: oklch(0.985 0.002 240);
+    --primary-soft: oklch(0.58 0.13 210 / 0.10);
+    --primary-line: oklch(0.58 0.13 210 / 0.30);
+    --warning: oklch(0.65 0.16 75);
+    --warning-soft: oklch(0.65 0.16 75 / 0.10);
+    --warning-line: oklch(0.65 0.16 75 / 0.30);
+    --healthy: oklch(0.55 0.15 152);
+    --ring: oklch(0.58 0.13 210);
+    --sidebar: oklch(0.97 0.005 240);
+  }
+  html.dark {
+    --bg: oklch(0.16 0.005 240);
+    --fg: oklch(0.96 0 0);
+    --card: oklch(0.195 0.005 240);
+    --muted: oklch(0.235 0.005 240);
+    --muted-strong: oklch(0.27 0.005 240);
+    --muted-fg: oklch(0.68 0.01 240);
+    --border: oklch(0.27 0.005 240);
+    --primary: oklch(0.78 0.13 200);
+    --primary-fg: oklch(0.16 0.005 240);
+    --primary-soft: oklch(0.78 0.13 200 / 0.14);
+    --primary-line: oklch(0.78 0.13 200 / 0.32);
+    --warning: oklch(0.78 0.16 75);
+    --warning-soft: oklch(0.78 0.16 75 / 0.14);
+    --warning-line: oklch(0.78 0.16 75 / 0.32);
+    --healthy: oklch(0.72 0.16 152);
+    --ring: oklch(0.78 0.13 200);
+    --sidebar: oklch(0.175 0.005 240);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font: 400 14px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
+    font-feature-settings: "cv11", "ss01", "ss03";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .display { font-family: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; font-feature-settings: "cv11", "ss01"; }
+  .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-feature-settings: "zero", "ss01";
+  }
+  .label {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted-fg);
+  }
+
+  a { color: var(--primary); text-decoration: none; }
+  a:hover { text-decoration: underline; text-underline-offset: 3px; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: 4px; }
+
+  /* === Shell =============================================== */
+  .shell { max-width: 1100px; margin: 0 auto; padding: 28px 40px 120px; }
+
+  /* === Topbar ============================================== */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-bottom: 20px;
+    margin-bottom: 56px;
+    border-bottom: 1px solid var(--border);
+  }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand .glyph {
+    width: 28px; height: 28px; border-radius: 6px;
+    background: var(--primary); color: var(--primary-fg);
+    display: grid; place-items: center;
+    font-family: "Manrope", sans-serif; font-weight: 800; font-size: 12px;
+    letter-spacing: 0.02em;
+  }
+  .brand .name { font-family: "Manrope", sans-serif; font-weight: 800; font-size: 14px; letter-spacing: 0.01em; }
+  .brand .sep { width: 1px; height: 18px; background: var(--border); }
+  .brand .crumb { color: var(--muted-fg); font-size: 12px; }
+
+  .toggle {
+    appearance: none; background: var(--card); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 6px;
+    height: 32px; padding: 0 12px;
+    display: inline-flex; align-items: center; gap: 8px;
+    font: inherit; font-size: 12px;
+    cursor: pointer;
+  }
+  .toggle:hover { background: var(--muted); }
+  .toggle svg { width: 14px; height: 14px; }
+
+  /* === Intro =============================================== */
+  .intro { margin-bottom: 56px; }
+  .intro .eyebrow { color: var(--muted-fg); font-size: 12px; font-family: ui-monospace, monospace; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 16px; }
+  .intro h1 {
+    font-family: "Manrope", sans-serif; font-weight: 800;
+    font-size: clamp(32px, 4vw, 42px); line-height: 1.1;
+    margin: 0 0 18px; letter-spacing: -0.012em;
+  }
+  .intro h1 .accent { color: var(--primary); }
+  .intro .lead {
+    font-size: 16px; line-height: 1.7;
+    color: var(--muted-fg);
+    max-width: 70ch;
+    margin: 0;
+  }
+
+  /* === Tiers (三层缓存) ==================================== */
+  .tiers {
+    margin-top: 40px;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    display: grid; grid-template-columns: repeat(3, 1fr);
+  }
+  .tier { padding: 20px 24px; }
+  .tier + .tier { border-left: 1px solid var(--border); }
+  .tier .layer { color: var(--primary); font-family: ui-monospace, monospace; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; margin-bottom: 10px; }
+  .tier .tname { font-family: "Manrope", sans-serif; font-weight: 800; font-size: 17px; margin: 0 0 6px; line-height: 1.25; }
+  .tier .tdesc { color: var(--muted-fg); font-size: 13px; line-height: 1.6; margin: 0; }
+
+  /* === Index strip ========================================= */
+  .index { margin: 72px 0 24px; }
+  .index .label { margin-bottom: 16px; display: block; }
+  .index ol {
+    list-style: none; margin: 0; padding: 0;
+    display: grid; grid-template-columns: repeat(5, 1fr);
+    border-top: 1px solid var(--border);
+  }
+  .index li { padding: 14px 0; border-bottom: 1px solid var(--border); padding-right: 16px; }
+  .index li + li { padding-left: 16px; border-left: 1px solid var(--border); }
+  .index a { display: block; color: var(--fg); }
+  .index a:hover { text-decoration: none; color: var(--primary); }
+  .index a:hover .ix-name { color: var(--primary); }
+  .index .ix-num { font-family: "Manrope", sans-serif; font-weight: 800; font-size: 13px; color: var(--primary); display: block; margin-bottom: 4px; letter-spacing: 0.02em; }
+  .index .ix-name { font-size: 13px; font-weight: 500; line-height: 1.4; }
+
+  /* === Feature block ======================================= */
+  .feature { margin-top: 88px; }
+  .feature[id] { scroll-margin-top: 24px; }
+
+  .feature-head {
+    display: grid; grid-template-columns: 110px 1fr;
+    gap: 32px;
+    align-items: baseline;
+    padding-bottom: 22px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 28px;
+  }
+  .feature-num {
+    font-family: "Manrope", sans-serif; font-weight: 800;
+    font-size: 88px; line-height: 0.9;
+    color: var(--primary);
+    letter-spacing: -0.04em;
+    font-variant-numeric: tabular-nums;
+  }
+  .feature-title { display: flex; flex-direction: column; gap: 12px; }
+  .feature-title h2 { font-family: "Manrope", sans-serif; font-weight: 800; font-size: 26px; margin: 0; line-height: 1.2; letter-spacing: -0.005em; }
+  .feature-title .domains { display: flex; flex-wrap: wrap; gap: 6px; }
+  .domain {
+    font-family: ui-monospace, monospace;
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 4px 9px;
+    background: var(--muted);
+    color: var(--muted-fg);
+    border-radius: 9999px;
+  }
+  .domain.accent { background: var(--primary-soft); color: var(--primary); }
+
+  .gist {
+    font-size: 16.5px; line-height: 1.7;
+    max-width: 68ch;
+    margin: 0 0 28px;
+  }
+  .gist strong { font-weight: 700; color: var(--fg); }
+
+  /* Workflow: horizontal flow */
+  .workflow {
+    display: flex; flex-wrap: wrap; align-items: center;
+    gap: 10px 14px;
+    background: var(--muted);
+    border-radius: 10px;
+    padding: 18px 20px;
+    margin: 0 0 24px;
+  }
+  .workflow .step { font-size: 13.5px; line-height: 1.5; }
+  .workflow .step .k { font-family: ui-monospace, monospace; color: var(--fg); }
+  .workflow .arrow { color: var(--muted-fg); flex: 0 0 auto; display: inline-flex; }
+  .workflow .arrow svg { width: 16px; height: 16px; }
+
+  /* Commands block */
+  .commands {
+    background: var(--muted);
+    border-radius: 10px;
+    padding: 16px 20px;
+    font-family: ui-monospace, monospace;
+    font-size: 13px; line-height: 1.85;
+    overflow-x: auto;
+  }
+  .commands .line { display: flex; gap: 10px; white-space: pre; }
+  .commands .prompt { color: var(--muted-fg); user-select: none; }
+  .commands .cmd { color: var(--fg); }
+  .commands .arg { color: var(--primary); }
+
+  /* Success criterion pill */
+  .criterion {
+    margin-top: 18px;
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 8px 14px;
+    background: var(--primary-soft);
+    border: 1px solid var(--primary-line);
+    border-radius: 9999px;
+    font-size: 12.5px;
+  }
+  .criterion .ck { color: var(--primary); display: inline-flex; }
+  .criterion .ck svg { width: 14px; height: 14px; }
+  .criterion .from { color: var(--muted-fg); font-family: ui-monospace, monospace; font-size: 11.5px; }
+  .criterion .arrow-mini { color: var(--muted-fg); }
+  .criterion .to { color: var(--primary); font-family: "Manrope", sans-serif; font-weight: 800; font-size: 13px; }
+  .criterion .src { color: var(--muted-fg); margin-left: 4px; padding-left: 10px; border-left: 1px solid var(--primary-line); font-size: 11.5px; }
+
+  /* Two-mode compare */
+  .modes {
+    display: grid; grid-template-columns: 1fr 1fr;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 0 0 24px;
+  }
+  .mode { padding: 22px 24px; background: var(--card); }
+  .mode + .mode { border-left: 1px solid var(--border); }
+  .mode .mkind { color: var(--primary); font-family: ui-monospace, monospace; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; margin-bottom: 10px; text-transform: uppercase; }
+  .mode .mtitle { font-family: "Manrope", sans-serif; font-weight: 800; font-size: 17px; margin: 0 0 6px; }
+  .mode .msub { color: var(--muted-fg); font-size: 13px; margin: 0 0 14px; }
+  .mode .mech { font-size: 13.5px; line-height: 1.65; }
+  .mode .mech .k { font-family: ui-monospace, monospace; color: var(--fg); background: var(--muted); padding: 1px 6px; border-radius: 4px; }
+  .mode-note { font-size: 13px; color: var(--muted-fg); margin: 16px 0 0; }
+  .mode-note strong { color: var(--fg); font-weight: 700; }
+
+  /* Callout (warning) */
+  .callout {
+    display: flex; gap: 12px;
+    padding: 14px 18px;
+    background: var(--warning-soft);
+    border: 1px solid var(--warning-line);
+    border-radius: 10px;
+    margin: 18px 0 0;
+  }
+  .callout .glyph { color: var(--warning); flex: 0 0 auto; margin-top: 2px; }
+  .callout .glyph svg { width: 16px; height: 16px; }
+  .callout .body { font-size: 13.5px; line-height: 1.65; }
+  .callout .body strong { color: var(--fg); font-weight: 700; }
+  .callout .body .why { color: var(--muted-fg); font-size: 12.5px; display: block; margin-top: 4px; }
+
+  /* Split (feature 5) */
+  .split {
+    display: grid; grid-template-columns: 1fr 1fr;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 0 0 24px;
+  }
+  .split .pane { padding: 22px 24px; background: var(--card); display: flex; flex-direction: column; gap: 14px; }
+  .split .pane + .pane { border-left: 1px solid var(--border); }
+  .split .pane .pkind { color: var(--primary); font-family: ui-monospace, monospace; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+  .split .pane .ptitle { font-family: "Manrope", sans-serif; font-weight: 800; font-size: 17px; margin: 0; }
+  .split .pane .pdesc { font-size: 13.5px; line-height: 1.65; color: var(--fg); margin: 0; }
+  .split .pane .pdesc .k { font-family: ui-monospace, monospace; background: var(--muted); padding: 1px 6px; border-radius: 4px; }
+  .split .pane .pstat { font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted-fg); line-height: 1.6; }
+  .split .pane .pstat .n { color: var(--primary); font-weight: 700; }
+  .split .pane .pcmd { background: var(--muted); border-radius: 8px; padding: 10px 14px; font-family: ui-monospace, monospace; font-size: 12.5px; line-height: 1.85; }
+  .split .pane .pcmd .prompt { color: var(--muted-fg); user-select: none; margin-right: 8px; }
+  .split .pane .pcmd .arg { color: var(--primary); }
+
+  /* Footnote / foundations */
+  .foundations {
+    margin-top: 88px;
+    padding-top: 28px;
+    border-top: 1px solid var(--border);
+  }
+  .foundations .label { margin-bottom: 14px; display: block; }
+  .foundations p { font-size: 13.5px; color: var(--muted-fg); max-width: 68ch; margin: 0 0 18px; line-height: 1.7; }
+  .foundations .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font-family: ui-monospace, monospace;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 5px 10px;
+    background: var(--muted);
+    color: var(--muted-fg);
+    border-radius: 9999px;
+  }
+
+  /* Colophon */
+  .colophon {
+    margin-top: 56px;
+    padding-top: 22px;
+    border-top: 1px solid var(--border);
+    color: var(--muted-fg);
+    font-size: 12px;
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+  }
+  .colophon .meta-row { display: flex; gap: 18px; flex-wrap: wrap; }
+  .colophon .k { font-family: ui-monospace, monospace; }
+
+  /* Responsive */
+  @media (max-width: 880px) {
+    .shell { padding: 24px 24px 80px; }
+    .tiers { grid-template-columns: 1fr; }
+    .tier + .tier { border-left: 0; border-top: 1px solid var(--border); }
+    .index ol { grid-template-columns: repeat(2, 1fr); }
+    .index li + li { border-left: 0; padding-left: 0; }
+    .index li:nth-child(even) { padding-left: 16px; border-left: 1px solid var(--border); }
+    .feature-head { grid-template-columns: 1fr; gap: 8px; }
+    .feature-num { font-size: 56px; }
+    .modes, .split { grid-template-columns: 1fr; }
+    .mode + .mode, .split .pane + .pane { border-left: 0; border-top: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- Topbar -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="glyph">U</span>
+      <span class="name">UE Cache Manager</span>
+      <span class="sep" aria-hidden="true"></span>
+      <span class="crumb">Operator's Manual · Core Functions</span>
+    </div>
+    <button class="toggle" id="theme-toggle" aria-label="切换主题" type="button">
+      <svg id="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path></svg>
+      <svg id="theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+      <span id="theme-label">Light</span>
+    </button>
+  </header>
+
+  <!-- Intro -->
+  <section class="intro">
+    <div class="eyebrow">UECM · 三层缓存定位</div>
+    <h1>把 UE 工程在多机集群上的<br/><span class="accent">零编译启动、零卡顿运行</span>集中化、自动化、可视化。</h1>
+    <p class="lead">
+      面向 VP / XR 渲染集群的 TD 和 IT 运维：5–20 台 Windows render node，操作直接对接拍摄现场。
+      下面 5 个核心功能覆盖 UECM 的全部主路径；其余 system / winrm / cred / env / gpu / project / 单条 INI 编辑等域是底层支撑，不单独成核心。
+    </p>
+
+    <div class="tiers" role="list" aria-label="三层缓存">
+      <div class="tier" role="listitem">
+        <div class="layer">L1 · DDC</div>
+        <h3 class="tname">Derived Data Cache</h3>
+        <p class="tdesc">消除 Shader 重编译，让所有机器开工程时直接读共享缓存。</p>
+      </div>
+      <div class="tier" role="listitem">
+        <div class="layer">L2 · PSO Precaching</div>
+        <h3 class="tname">引擎主动预创建</h3>
+        <p class="tdesc">UE 5.1+ 加载关卡时主动预创建 GPU pipeline state，消除场景切换卡顿。</p>
+      </div>
+      <div class="tier" role="listitem">
+        <div class="layer">L3 · PSO Cache 文件</div>
+        <h3 class="tname">兜底缓存</h3>
+        <p class="tdesc">采集 .upipelinecache / .stablepc.csv，兜底 Precaching 漏掉的边缘组合。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Index -->
+  <nav class="index" aria-label="功能索引">
+    <span class="label">5 个核心功能</span>
+    <ol>
+      <li>
+        <a href="#f1">
+          <span class="ix-num">01</span>
+          <span class="ix-name">机器集群接入与状态刷新</span>
+        </a>
+      </li>
+      <li>
+        <a href="#f2">
+          <span class="ix-num">02</span>
+          <span class="ix-name">SMB 共享配置</span>
+        </a>
+      </li>
+      <li>
+        <a href="#f3">
+          <span class="ix-num">03</span>
+          <span class="ix-name">DDC Pak 工作流</span>
+        </a>
+      </li>
+      <li>
+        <a href="#f4">
+          <span class="ix-num">04</span>
+          <span class="ix-name">PSO Cache 工作流</span>
+        </a>
+      </li>
+      <li>
+        <a href="#f5">
+          <span class="ix-num">05</span>
+          <span class="ix-name">集群诊断（INI + Health）</span>
+        </a>
+      </li>
+    </ol>
+  </nav>
+
+  <!-- Feature 01 -->
+  <article class="feature" id="f1">
+    <header class="feature-head">
+      <div class="feature-num">01</div>
+      <div class="feature-title">
+        <h2>机器集群接入与状态刷新</h2>
+        <div class="domains">
+          <span class="domain accent">machine</span>
+          <span class="domain">winrm</span>
+          <span class="domain">cred</span>
+        </div>
+      </div>
+    </header>
+
+    <p class="gist">
+      把一台从未纳管过的 Windows render node，从「发现」一路带到「可远程操作 + 状态可读」。
+      <strong>整个过程零手工，凭据存本机 DPAPI</strong>，TD 不用记任何明文密码。
+    </p>
+
+    <div class="workflow" aria-label="接入流程">
+      <span class="step">扫 CIDR<span class="k">（5985 / 445）</span></span>
+      <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
+      <span class="step">WinRM bootstrap</span>
+      <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
+      <span class="step">存凭据<span class="k">（DPAPI + cmdkey）</span></span>
+      <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
+      <span class="step">刷新读 UE 版本<span class="k">（注册表）</span>+ GPU 型号 / 显存 / 驱动<span class="k">（WMI）</span></span>
+    </div>
+
+    <div class="commands" aria-label="典型命令">
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine scan <span class="arg">--cidr 192.168.10.0/24</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli winrm bootstrap <span class="arg">--host lanpc</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine refresh <span class="arg">--all</span></span></div>
+    </div>
+
+    <div class="criterion" role="note">
+      <span class="ck"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></span>
+      <span class="from mono">新机接入</span>
+      <span>30 min</span>
+      <span class="arrow-mini" aria-hidden="true">→</span>
+      <span class="to">5 min</span>
+      <span class="src">PRODUCT.md · 成功标准</span>
+    </div>
+  </article>
+
+  <!-- Feature 02 -->
+  <article class="feature" id="f2">
+    <header class="feature-head">
+      <div class="feature-num">02</div>
+      <div class="feature-title">
+        <h2>SMB 共享配置</h2>
+        <div class="domains">
+          <span class="domain accent">share</span>
+        </div>
+      </div>
+    </header>
+
+    <p class="gist">
+      在目标机上把 DDC 路径开成 SMB 共享，<strong>是后面所有缓存分发的物理基础</strong>。两种模式按集群信任度选：
+    </p>
+
+    <div class="modes" role="list" aria-label="两种共享模式">
+      <div class="mode" role="listitem">
+        <div class="mkind">Mode A</div>
+        <h3 class="mtitle">信任内网</h3>
+        <p class="msub">最快上手，适合封闭 VP 棚。</p>
+        <p class="mech">开启 <span class="k">Guest</span> 账户，把目标目录的 NTFS / Share 权限都开成 <span class="k">Everyone : Full</span>。集群内任何机器、任何用户都能直接读写。</p>
+      </div>
+      <div class="mode" role="listitem">
+        <div class="mkind">Mode B</div>
+        <h3 class="mtitle">严格凭据 + SYSTEM 注入</h3>
+        <p class="msub">区别于「手撕 net share」的关键能力。</p>
+        <p class="mech">新建本地账号 <span class="k">ddc-svc</span>，把凭据同时写到当前用户 Credential Manager 和 <strong>SYSTEM 凭据空间</strong>，让 LocalSystem 启动的服务（如 RenderStream Service）也能在无人登录时挂载共享。</p>
+      </div>
+    </div>
+
+    <p class="mode-note">
+      <strong>选择依据：</strong>如果集群里跑了 RenderStream 这类 SYSTEM 服务，必须用 Mode B；否则服务进程拿不到任何用户凭据，路径会被解析为本地不存在。
+    </p>
+
+    <div class="commands" aria-label="典型命令" style="margin-top:24px">
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli share create <span class="arg">--host lanpc --mode A</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli share inject-system-cred <span class="arg">--host lanpc --user ddc-svc</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli share list <span class="arg">--all</span></span></div>
+    </div>
+  </article>
+
+  <!-- Feature 03 -->
+  <article class="feature" id="f3">
+    <header class="feature-head">
+      <div class="feature-num">03</div>
+      <div class="feature-title">
+        <h2>DDC Pak 工作流</h2>
+        <div class="domains">
+          <span class="domain accent">ddc</span>
+          <span class="domain">L1 缓存层</span>
+        </div>
+      </div>
+    </header>
+
+    <p class="gist">
+      调 UE runner 生成 <span class="mono">.ddp</span> pak，校验文件完整性后用 Robocopy 扇出到全集群。<strong>三层缓存里的第一层，消除 Shader 重编译。</strong>
+    </p>
+
+    <div class="workflow" aria-label="DDC Pak 工作流">
+      <span class="step"><span class="k">UE runner</span> 生成 .ddp pak</span>
+      <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
+      <span class="step">验证文件完整性</span>
+      <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
+      <span class="step">Robocopy 扇出到全集群</span>
+    </div>
+
+    <div class="commands" aria-label="典型命令">
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli ddc generate <span class="arg">--project MyVPShow --engine 5.5</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli ddc verify <span class="arg">--pak ./MyVPShow.ddp</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli ddc distribute <span class="arg">--pak ./MyVPShow.ddp --targets all</span></span></div>
+    </div>
+  </article>
+
+  <!-- Feature 04 -->
+  <article class="feature" id="f4">
+    <header class="feature-head">
+      <div class="feature-num">04</div>
+      <div class="feature-title">
+        <h2>PSO Cache 工作流</h2>
+        <div class="domains">
+          <span class="domain accent">pso</span>
+          <span class="domain">L2 + L3 缓存层</span>
+        </div>
+      </div>
+    </header>
+
+    <p class="gist">
+      先体检 precaching CVar 配置，再用 UE <span class="mono">-game</span> 模式跑采集，得到 <span class="mono">*.upipelinecache</span> / <span class="mono">*.stablepc.csv</span>，最后<strong>带 GPU 一致性检测再分发</strong>。
+    </p>
+
+    <div class="workflow" aria-label="PSO Cache 工作流">
+      <span class="step">验 <span class="k">R008–R010</span> precaching CVar</span>
+      <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
+      <span class="step">UE <span class="k">-game</span> 跑采集</span>
+      <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
+      <span class="step">持久化 <span class="k">.upipelinecache / .stablepc.csv</span></span>
+      <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
+      <span class="step">GPU 一致性检测后扇出分发</span>
+    </div>
+
+    <div class="commands" aria-label="典型命令">
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli pso verify <span class="arg">--host lanpc</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli pso collect <span class="arg">--project MyVPShow --map MainStage</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli pso distribute <span class="arg">--source lanpc --targets all --check-gpu</span></span></div>
+    </div>
+
+    <div class="callout" role="note">
+      <span class="glyph" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+          <line x1="12" y1="9" x2="12" y2="13"></line>
+          <line x1="12" y1="17" x2="12.01" y2="17"></line>
+        </svg>
+      </span>
+      <div class="body">
+        <strong>GPU mismatch 检测必须先过。</strong>把 RDNA 上采集的 PSO 推给 Ampere（或反过来）会触发首帧 pipeline 重建，肉眼可见 hitch。
+        <span class="why">分发前 UECM 会对比源机和目标机的 GPU vendor / family / driver，不一致直接拒绝。</span>
+      </div>
+    </div>
+  </article>
+
+  <!-- Feature 05 -->
+  <article class="feature" id="f5">
+    <header class="feature-head">
+      <div class="feature-num">05</div>
+      <div class="feature-title">
+        <h2>集群诊断</h2>
+        <div class="domains">
+          <span class="domain accent">ini</span>
+          <span class="domain accent">health</span>
+        </div>
+      </div>
+    </header>
+
+    <p class="gist">
+      两个互补的子模块：一个查<strong>配置正确性</strong>，一个查<strong>运行可达性</strong>。组合起来回答「集群健康吗 / 哪里不对 / 怎么修」。
+    </p>
+
+    <div class="split" role="list" aria-label="诊断子模块">
+      <div class="pane" role="listitem">
+        <div class="pkind">5a · INI Scanner</div>
+        <h3 class="ptitle">配置正确性</h3>
+        <p class="pdesc">
+          <strong>7 条规则 R001–R007</strong>，扫 project / user / engine 三级 INI，找硬编码 <span class="k">DDC Path=</span>、user 级覆盖、mapped drive 路径、deprecated CVar 等问题。
+          支持带<strong>自动备份</strong>的一键修复。
+        </p>
+        <div class="pstat"><span class="n">7</span> 条规则 · <span class="n">3</span> 级 INI · 一键 apply（含 .bak）</div>
+        <div class="pcmd">
+          <div><span class="prompt">$</span> uecm-cli ini scan <span class="arg">--host lanpc</span></div>
+          <div><span class="prompt">$</span> uecm-cli ini apply-finding <span class="arg">--id R003</span></div>
+        </div>
+      </div>
+
+      <div class="pane" role="listitem">
+        <div class="pkind">5b · Health Check</div>
+        <h3 class="ptitle">运行可达性</h3>
+        <p class="pdesc">
+          <strong>8 个 PowerShell active probe</strong>（<span class="k">smb</span> / <span class="k">le</span> / <span class="k">ntfs_perm</span> / <span class="k">cred_user</span> / <span class="k">cred_system</span> / <span class="k">env_vars</span> / <span class="k">system_write</span>）+ 3 个 derived 指标（<span class="k">ini_consistency</span> / <span class="k">pso_precaching</span> / <span class="k">gpu_consistency</span>），输出 <strong>N 机 × 11 行</strong>矩阵。
+        </p>
+        <div class="pstat"><span class="n">8</span> active · <span class="n">3</span> derived · N×<span class="n">11</span> 矩阵</div>
+        <div class="pcmd">
+          <div><span class="prompt">$</span> uecm-cli health run <span class="arg">--all</span></div>
+          <div><span class="prompt">$</span> uecm-cli health results <span class="arg">--format matrix</span></div>
+        </div>
+      </div>
+    </div>
+  </article>
+
+  <!-- Foundations -->
+  <section class="foundations">
+    <span class="label">底层支撑（不单独成核心）</span>
+    <p>
+      下面这些域是上面 5 个核心功能能跑起来的「水电煤」：单独看不构成完整业务，但每个 CLI / GUI 操作都会经过它们。出问题时 health 矩阵会先点出来。
+    </p>
+    <div class="chips">
+      <span class="chip">system</span>
+      <span class="chip">winrm</span>
+      <span class="chip">cred</span>
+      <span class="chip">env</span>
+      <span class="chip">gpu</span>
+      <span class="chip">project</span>
+      <span class="chip">ini · 单条编辑</span>
+    </div>
+  </section>
+
+  <!-- Colophon -->
+  <footer class="colophon">
+    <div class="meta-row">
+      <span><span class="k">Document</span> · UECM Core Functions Overview</span>
+      <span><span class="k">Source</span> · PRODUCT.md + 用户梳理</span>
+    </div>
+    <div class="meta-row">
+      <span><span class="k">Theme</span> · Light / Dark via toggle</span>
+    </div>
+  </footer>
+
+</div>
+
+<script>
+  (function () {
+    const root = document.documentElement;
+    const btn = document.getElementById("theme-toggle");
+    const iconSun = document.getElementById("theme-icon-sun");
+    const iconMoon = document.getElementById("theme-icon-moon");
+    const label = document.getElementById("theme-label");
+
+    const stored = (() => {
+      try { return localStorage.getItem("uecm-doc-theme"); } catch (e) { return null; }
+    })();
+    const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const initial = stored || (prefersDark ? "dark" : "light");
+    apply(initial);
+
+    btn.addEventListener("click", () => {
+      const next = root.classList.contains("dark") ? "light" : "dark";
+      apply(next);
+      try { localStorage.setItem("uecm-doc-theme", next); } catch (e) {}
+    });
+
+    function apply(theme) {
+      if (theme === "dark") {
+        root.classList.add("dark");
+        iconSun.style.display = "none";
+        iconMoon.style.display = "";
+        label.textContent = "Dark";
+      } else {
+        root.classList.remove("dark");
+        iconSun.style.display = "";
+        iconMoon.style.display = "none";
+        label.textContent = "Light";
+      }
+    }
+  })();
+</script>
+</body>
+</html>
