@@ -90,7 +90,24 @@ pub fn refresh_machine(db: State<'_, Db>, machine_id: i64) -> UecmResult<Refresh
         Ok(v) => v,
         Err(e) => return Ok(refresh_err(machine_id, true, format!("UE detection failed: {}", e))),
     };
-    for d in &detected_ue {
+    // Numerical primary selection (mirrors cli/domain_machine.rs::refresh):
+    // string-compare puts "4.9" > "4.27" and would put "5.10" < "5.8" once UE 5.10 ships.
+    fn parse_version(v: &str) -> (u32, u32) {
+        let mut parts = v.split('.');
+        let major = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let minor = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        (major, minor)
+    }
+    let primary_idx = detected_ue
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, d)| parse_version(&d.version))
+        .map(|(i, _)| i);
+    // Replace the whole set so removed installs (e.g. Launcher stub previously
+    // recorded as version "4.0") get cleared, and a stale `is_primary` flag
+    // from an earlier refresh cannot survive a hardware/install change.
+    machine_ue_installs::delete_for_machine(&db, machine_id)?;
+    for (idx, d) in detected_ue.iter().enumerate() {
         machine_ue_installs::upsert(
             &db,
             &UeInstall {
@@ -98,7 +115,7 @@ pub fn refresh_machine(db: State<'_, Db>, machine_id: i64) -> UecmResult<Refresh
                 machine_id,
                 version: d.version.clone(),
                 install_path: d.install_path.clone(),
-                is_primary: false,
+                is_primary: Some(idx) == primary_idx,
             },
         )?;
     }
