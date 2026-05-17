@@ -63,6 +63,11 @@ pub enum Domain {
         #[command(subcommand)]
         action: ProjectAction,
     },
+    /// Cluster health check (probes + derived consistency checks).
+    Health {
+        #[command(subcommand)]
+        action: HealthAction,
+    },
 }
 
 // ---------- system ----------
@@ -363,6 +368,25 @@ pub enum ProjectAction {
         #[arg(long)]
         yes: bool,
     },
+}
+
+// ---------- health ----------
+#[derive(Subcommand, Debug)]
+pub enum HealthAction {
+    /// Run health probes across one or more machines.
+    Run {
+        #[arg(long, value_name = "M1,M2,...", value_delimiter = ',')]
+        machine_ids: Vec<i64>,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// List recent health scan runs.
+    Runs {
+        #[arg(long, default_value_t = 10)]
+        limit: i64,
+    },
+    /// List per-row health results for a scan run.
+    Results { scan_run_id: i64 },
 }
 
 #[cfg(test)]
