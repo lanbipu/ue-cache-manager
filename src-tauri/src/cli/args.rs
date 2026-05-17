@@ -58,6 +58,11 @@ pub enum Domain {
         #[command(subcommand)]
         action: ShareAction,
     },
+    /// uproject discovery + cross-machine identity.
+    Project {
+        #[command(subcommand)]
+        action: ProjectAction,
+    },
 }
 
 // ---------- system ----------
@@ -270,6 +275,59 @@ pub enum ShareAction {
         svc_user: String,
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
+    },
+}
+
+// ---------- project ----------
+#[derive(Subcommand, Debug)]
+pub enum ProjectAction {
+    /// List all projects.
+    List,
+    /// List all locations (machine + abs_path) for a project.
+    Locations { project_id: i64 },
+    /// Discover .uproject files on a remote machine under given search roots.
+    Discover {
+        #[arg(long)]
+        machine_id: i64,
+        #[arg(long, value_name = "R1,R2,...", value_delimiter = ',')]
+        roots: Vec<String>,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Create a project manually (no discovery); yields a project_id.
+    CreateManual {
+        #[arg(long)]
+        uproject_name: String,
+        #[arg(long)]
+        display_name: Option<String>,
+    },
+    /// Add or update a location for an existing project.
+    SetLocation {
+        #[arg(long)]
+        project_id: i64,
+        #[arg(long)]
+        machine_id: i64,
+        /// Absolute path to the directory containing the .uproject file.
+        #[arg(long)]
+        abs_path: String,
+        /// Relative path (from abs_path root) to the .uproject file.
+        #[arg(long)]
+        uproject_path: String,
+        /// Use ManualPath status instead of ManualAlias.
+        #[arg(long)]
+        manual_path: bool,
+    },
+    /// Delete a project (and cascade its locations).
+    Delete {
+        id: i64,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Delete a single project_location row.
+    DeleteLocation {
+        id: i64,
+        #[arg(long)]
+        yes: bool,
     },
 }
 

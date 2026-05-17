@@ -1,0 +1,193 @@
+//! `uecm-cli project <action>` handlers.
+
+use crate::cli::args::ProjectAction;
+use crate::cli::output::{EmitSerialize, Event};
+use crate::cli::run::Ctx;
+use crate::core::project_identity::stem_lower;
+use crate::data::{
+    machines as data_machines, project_locations as data_locations, projects as data_projects,
+    DiscoveryStatus, Project, ProjectLocation,
+};
+use crate::error::{UecmError, UecmResult};
+
+pub fn handle(ctx: &mut Ctx<'_>, action: ProjectAction) -> UecmResult<()> {
+    match action {
+        ProjectAction::List => list(ctx),
+        ProjectAction::Locations { project_id } => locations(ctx, project_id),
+        ProjectAction::Discover { machine_id, roots, cred } => {
+            discover(ctx, machine_id, &roots, &cred)
+        }
+        ProjectAction::CreateManual { uproject_name, display_name } => {
+            create_manual(ctx, &uproject_name, display_name)
+        }
+        ProjectAction::SetLocation { project_id, machine_id, abs_path, uproject_path, manual_path } => {
+            set_location(ctx, project_id, machine_id, &abs_path, &uproject_path, manual_path)
+        }
+        ProjectAction::Delete { id, yes } => delete(ctx, id, yes),
+        ProjectAction::DeleteLocation { id, yes } => delete_location(ctx, id, yes),
+    }
+}
+
+fn list(ctx: &mut Ctx<'_>) -> UecmResult<()> {
+    let db = ctx.require_db()?;
+    let rows = data_projects::list(db)?;
+    ctx.emitter.emit_result(&rows).ok();
+    Ok(())
+}
+
+fn locations(ctx: &mut Ctx<'_>, project_id: i64) -> UecmResult<()> {
+    let db = ctx.require_db()?;
+    let rows = data_locations::list_by_project(db, project_id)?;
+    ctx.emitter.emit_result(&rows).ok();
+    Ok(())
+}
+
+fn discover(
+    ctx: &mut Ctx<'_>,
+    machine_id: i64,
+    roots: &[String],
+    cred: &crate::cli::credential_args::CredentialArgs,
+) -> UecmResult<()> {
+    // Look up host IP via machine_id.
+    let host = {
+        let db = ctx.require_db()?;
+        let machine = data_machines::find_by_id(db, machine_id)?.ok_or_else(|| {
+            UecmError::InvalidInput(format!("machine id={} not found", machine_id))
+        })?;
+        machine.ip.clone()
+    };
+    let creds = {
+        let db = ctx.require_db()?;
+        cred.resolve(db)?
+    };
+    let (op_user, op_pass) = match &creds {
+        Some((u, p)) => (Some(u.clone()), Some(p.clone())),
+        None => (None, None),
+    };
+
+    ctx.emitter
+        .emit_event(&Event::Started {
+            task_type: "project_discover".into(),
+            task_id: Some(format!("machine:{}", machine_id)),
+            metadata: serde_json::json!({ "host": host, "roots": roots.len() }),
+        })
+        .ok();
+
+    let db = ctx.require_db()?;
+    let items = crate::core::project_discovery::run_discovery(
+        db,
+        machine_id,
+        &host,
+        roots,
+        op_user.as_deref(),
+        op_pass.as_deref(),
+    )?;
+
+    let summary = serde_json::json!({
+        "discovered": items.len(),
+        "items": items,
+    });
+    ctx.emitter.emit_event(&Event::Completed { summary }).ok();
+    Ok(())
+}
+
+fn create_manual(
+    ctx: &mut Ctx<'_>,
+    uproject_name: &str,
+    display_name: Option<String>,
+) -> UecmResult<()> {
+    let db = ctx.require_db()?;
+    let project_id = data_projects::upsert(
+        db,
+        &Project {
+            id: None,
+            uproject_stem_lower: stem_lower(uproject_name),
+            uproject_name: uproject_name.to_string(),
+            uproject_guid: None,
+            display_name,
+            first_seen_at: None,
+            last_seen_at: None,
+        },
+    )?;
+    ctx.emitter
+        .emit_event(&Event::Completed {
+            summary: serde_json::json!({
+                "project_id": project_id,
+                "uproject_name": uproject_name,
+            }),
+        })
+        .ok();
+    Ok(())
+}
+
+fn set_location(
+    ctx: &mut Ctx<'_>,
+    project_id: i64,
+    machine_id: i64,
+    abs_path: &str,
+    uproject_path: &str,
+    manual_path: bool,
+) -> UecmResult<()> {
+    let discovery_status = if manual_path {
+        DiscoveryStatus::ManualPath
+    } else {
+        DiscoveryStatus::ManualAlias
+    };
+    let db = ctx.require_db()?;
+    let location_id = data_locations::upsert(
+        db,
+        &ProjectLocation {
+            id: None,
+            project_id,
+            machine_id,
+            abs_path: abs_path.to_string(),
+            uproject_path: uproject_path.to_string(),
+            discovery_status,
+            discovered_at: None,
+        },
+    )?;
+    ctx.emitter
+        .emit_event(&Event::Completed {
+            summary: serde_json::json!({
+                "project_id": project_id,
+                "location_id": location_id,
+            }),
+        })
+        .ok();
+    Ok(())
+}
+
+fn delete(ctx: &mut Ctx<'_>, id: i64, yes: bool) -> UecmResult<()> {
+    if !yes {
+        return Err(UecmError::InvalidInput(
+            "project delete is destructive; pass --yes to confirm".into(),
+        ));
+    }
+    let db = ctx.require_db()?;
+    if data_projects::get(db, id)?.is_none() {
+        return Err(UecmError::InvalidInput(format!("project id={} not found", id)));
+    }
+    data_projects::delete(db, id)?;
+    ctx.emitter
+        .emit_event(&Event::Completed {
+            summary: serde_json::json!({ "id": id, "deleted": true }),
+        })
+        .ok();
+    Ok(())
+}
+
+fn delete_location(ctx: &mut Ctx<'_>, id: i64, yes: bool) -> UecmResult<()> {
+    if !yes {
+        return Err(UecmError::InvalidInput(
+            "project delete-location is destructive; pass --yes to confirm".into(),
+        ));
+    }
+    let db = ctx.require_db()?;
+    data_locations::delete(db, id)?;
+    ctx.emitter
+        .emit_event(&Event::Completed {
+            summary: serde_json::json!({ "id": id, "deleted": true }),
+        })
+        .ok();
+    Ok(())
+}
