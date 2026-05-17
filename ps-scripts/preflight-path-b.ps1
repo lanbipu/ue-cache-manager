@@ -110,24 +110,23 @@ try {
 # ----- Step 4: Write + delete a probe file under ADMIN$\Temp -----
 if ($mounted) {
     $probeName = "uecm-preflight-$(Get-Random).probe"
-    $tempDir = "${driveName}:\Temp"
-    $probePath = "$tempDir\$probeName"
-    $remoteProbePath = "$adminShare\Temp\$probeName"
+    $remoteTempDir = "$adminShare\Temp"
+    $remoteProbePath = "$remoteTempDir\$probeName"
     try {
-        if (-not (Test-Path $tempDir)) {
-            New-Item -Path $tempDir -ItemType Directory -Force | Out-Null
+        if (-not (Test-Path -LiteralPath $remoteTempDir)) {
+            New-Item -Path $remoteTempDir -ItemType Directory -Force | Out-Null
         }
-        Set-Content -Path $probePath -Value 'uecm preflight probe — safe to delete' -ErrorAction Stop
+        Set-Content -LiteralPath $remoteProbePath -Value 'uecm preflight probe - safe to delete' -ErrorAction Stop
         # Write succeeded — that's what makes ADMIN$ "writable" from preflight's
         # perspective. Cleanup is best-effort; if Remove-Item fails (AV scan, ACL,
         # file lock) we surface the residual file path in the message so the
         # operator can clean up manually. Keep status=ok because the writability
         # claim is still true.
         try {
-            Remove-Item -Path $probePath -Force -ErrorAction Stop
+            Remove-Item -LiteralPath $remoteProbePath -Force -ErrorAction Stop
             Add-Result 'admin_share_write' 'ok' "wrote + removed probe under $adminShare\Temp"
         } catch {
-            Add-Result 'admin_share_write' 'ok' "wrote probe under $adminShare\Temp but FAILED to clean up (please delete manually): $remoteProbePath — $($_.Exception.Message)"
+            Add-Result 'admin_share_write' 'ok' "wrote probe under $adminShare\Temp but FAILED to clean up (please delete manually): $remoteProbePath - $($_.Exception.Message)"
         }
     } catch {
         Add-Result 'admin_share_write' 'fail' "could not write probe under $adminShare\Temp : $($_.Exception.Message)"
