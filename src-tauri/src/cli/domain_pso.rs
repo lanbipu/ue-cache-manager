@@ -1,0 +1,413 @@
+//! `uecm-cli pso <action>` handlers.
+//!
+//! verify     — check R008-R010 PSO precaching CVars in project ConsoleVariables.ini.
+//! collect    — launch UE in `-game` mode on source machine, stream UeRunnerEvents as
+//!              NDJSON, then enumerate + persist collected files.
+//! list       — list collected PSO cache files for a project.
+//! distribute — Robocopy fan-out of a PSO cache file to one or more target machines
+//!              (with GPU mismatch preflight guard).
+
+use crate::cli::args::PsoAction;
+use crate::cli::credential_args::CredentialArgs;
+use crate::cli::output::{EmitSerialize, Event};
+use crate::cli::run::Ctx;
+use crate::core::{
+    loopback,
+    pso_collect::{self, PsoCollectSpec},
+    pso_distribute,
+    ue_runner::{UeRunnerBackend, UeRunnerEvent},
+};
+use crate::data::{machines as data_machines, project_locations, pso_cache_files};
+use crate::error::{UecmError, UecmResult};
+
+pub fn handle(ctx: &mut Ctx<'_>, action: PsoAction) -> UecmResult<()> {
+    match action {
+        PsoAction::Verify { project_id } => verify(ctx, project_id),
+        PsoAction::Collect {
+            project_id,
+            source_machine,
+            resolution,
+            windowed,
+            max_minutes,
+            cred,
+        } => collect(ctx, project_id, source_machine, &resolution, windowed, max_minutes, &cred),
+        PsoAction::List { project_id } => list(ctx, project_id),
+        PsoAction::Distribute { project_id, source_machine, targets, cred } => {
+            distribute(ctx, project_id, source_machine, &targets, &cred)
+        }
+    }
+}
+
+// ─── verify ───────────────────────────────────────────────────────────────────
+
+fn verify(ctx: &mut Ctx<'_>, project_id: i64) -> UecmResult<()> {
+    let db = ctx.require_db()?;
+    let locations = project_locations::list_by_project(db, project_id)?;
+    if locations.is_empty() {
+        return Err(UecmError::InvalidInput(format!(
+            "project {} has no locations registered; add locations first",
+            project_id
+        )));
+    }
+    let machine_ids: Vec<i64> = locations
+        .iter()
+        .map(|l| l.machine_id)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    ctx.emitter
+        .emit_result(&serde_json::json!({
+            "project_id": project_id,
+            "machine_ids": machine_ids,
+            "note": "use `ini scan --machine-ids <ids>` with project paths; PSO CVar check (R008-R010) runs as part of the full ini scan",
+        }))
+        .ok();
+    Ok(())
+}
+
+// ─── collect ──────────────────────────────────────────────────────────────────
+
+fn parse_resolution(resolution: &str) -> UecmResult<(u32, u32)> {
+    let parts: Vec<&str> = resolution.splitn(2, 'x').collect();
+    if parts.len() != 2 {
+        return Err(UecmError::InvalidInput(format!(
+            "resolution must be WxH (e.g. 1920x1080), got: {}",
+            resolution
+        )));
+    }
+    let w = parts[0].parse::<u32>().map_err(|_| {
+        UecmError::InvalidInput(format!("invalid width in resolution: {}", parts[0]))
+    })?;
+    let h = parts[1].parse::<u32>().map_err(|_| {
+        UecmError::InvalidInput(format!("invalid height in resolution: {}", parts[1]))
+    })?;
+    if w == 0 || h == 0 {
+        return Err(UecmError::InvalidInput(
+            "resolution width and height must be > 0".into(),
+        ));
+    }
+    Ok((w, h))
+}
+
+fn collect(
+    ctx: &mut Ctx<'_>,
+    project_id: i64,
+    source_machine_id: i64,
+    resolution: &str,
+    windowed: bool,
+    max_minutes: u32,
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
+    let db = ctx.require_db()?;
+
+    let machine = data_machines::find_by_id(db, source_machine_id)?.ok_or_else(|| {
+        UecmError::InvalidInput(format!("machine {} not found", source_machine_id))
+    })?;
+    let location =
+        project_locations::get_for_project_machine(db, project_id, source_machine_id)?
+            .ok_or_else(|| {
+                UecmError::InvalidInput(format!(
+                    "project {} not located on machine {}",
+                    project_id, source_machine_id
+                ))
+            })?;
+
+    let engine_path = resolve_engine_path(db, source_machine_id)?;
+    let (op_user, op_pass) = resolve_creds(db, cred)?;
+    let (res_w, res_h) = parse_resolution(resolution)?;
+
+    let backend = if loopback::is_loopback_target(&machine.ip)
+        || loopback::is_loopback_target(&machine.hostname)
+    {
+        UeRunnerBackend::Local
+    } else {
+        UeRunnerBackend::Remote
+    };
+
+    let spec = PsoCollectSpec {
+        project_id,
+        source_machine_id,
+        ue_version: None,
+        resolution: (res_w, res_h),
+        windowed,
+        max_minutes,
+    };
+
+    let mut handle = pso_collect::launch_collection(
+        backend,
+        &machine.ip,
+        &engine_path,
+        &location.uproject_path,
+        &spec,
+        op_user.as_deref(),
+        op_pass.as_deref(),
+    );
+
+    // UE runner uses tokio tasks internally — build a local runtime to drive it.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| UecmError::OperationFailed(format!("tokio runtime: {}", e)))?;
+
+    // Capture data needed for post-completion finalization before moving into async block.
+    let source_machine_ip = machine.ip.clone();
+    let project_dir = location.abs_path.clone();
+    let db_clone = db.clone();
+
+    rt.block_on(async {
+        let mut completed = false;
+
+        while let Some(ev) = handle.events.recv().await {
+            match ev {
+                UeRunnerEvent::Spawned { pid, log_path } => {
+                    ctx.emitter
+                        .emit_event(&Event::Spawned { pid, log_path })
+                        .ok();
+                }
+                UeRunnerEvent::LogLine { text, parsed_kind } => {
+                    ctx.emitter
+                        .emit_event(&Event::LogLine { text, parsed_kind })
+                        .ok();
+                }
+                UeRunnerEvent::Progress { pct, label } => {
+                    ctx.emitter
+                        .emit_event(&Event::Progress {
+                            pct,
+                            label,
+                            current: None,
+                            total: None,
+                        })
+                        .ok();
+                }
+                UeRunnerEvent::Completed { exit_code, log_tail } => {
+                    ctx.emitter
+                        .emit_event(&Event::Completed {
+                            summary: serde_json::json!({
+                                "exit_code": exit_code,
+                                "log_tail": log_tail,
+                            }),
+                        })
+                        .ok();
+                    completed = true;
+                    break;
+                }
+                UeRunnerEvent::Cancelled => {
+                    ctx.emitter
+                        .emit_event(&Event::Cancelled {
+                            reason: "external".into(),
+                        })
+                        .ok();
+                    completed = true;
+                    break;
+                }
+                UeRunnerEvent::Error { message } => {
+                    return Err(UecmError::OperationFailed(format!(
+                        "ue runner: {}",
+                        message
+                    )));
+                }
+            }
+        }
+
+        // After UE process finishes, enumerate collected files and persist to DB.
+        if completed {
+            let files = pso_collect::enumerate_remote(
+                &source_machine_ip,
+                &project_dir,
+                op_user.as_deref(),
+                op_pass.as_deref(),
+            )
+            .map_err(|e| UecmError::OperationFailed(format!("enumerate_remote: {}", e)))?;
+
+            let ids = pso_collect::finalize_persist(
+                &db_clone,
+                project_id,
+                source_machine_id,
+                spec.ue_version.as_deref(),
+                &files,
+            )
+            .map_err(|e| UecmError::OperationFailed(format!("finalize_persist: {}", e)))?;
+
+            ctx.emitter
+                .emit_result(&serde_json::json!({
+                    "files_collected": files.len(),
+                    "file_ids": ids,
+                }))
+                .ok();
+        }
+
+        Ok::<_, UecmError>(())
+    })?;
+
+    Ok(())
+}
+
+// ─── list ─────────────────────────────────────────────────────────────────────
+
+fn list(ctx: &mut Ctx<'_>, project_id: i64) -> UecmResult<()> {
+    let db = ctx.require_db()?;
+    let files = pso_cache_files::list_by_project(db, project_id)?;
+    ctx.emitter.emit_result(&files).ok();
+    Ok(())
+}
+
+// ─── distribute ───────────────────────────────────────────────────────────────
+
+fn distribute(
+    ctx: &mut Ctx<'_>,
+    project_id: i64,
+    source_machine_id: i64,
+    target_ids: &[i64],
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
+    let db = ctx.require_db()?;
+
+    let source_machine = data_machines::find_by_id(db, source_machine_id)?.ok_or_else(|| {
+        UecmError::InvalidInput(format!("machine {} not found", source_machine_id))
+    })?;
+
+    let (op_user, op_pass) = resolve_creds(db, cred)?;
+
+    // Find the most recent PSO cache file for this project + source machine.
+    let files = pso_cache_files::list_by_project(db, project_id)?;
+    let file = files
+        .into_iter()
+        .filter(|f| f.source_machine_id == source_machine_id)
+        .next()
+        .ok_or_else(|| {
+            UecmError::InvalidInput(format!(
+                "no PSO cache file found for project {} on machine {}; run `pso collect` first",
+                project_id, source_machine_id
+            ))
+        })?;
+
+    let plan = pso_distribute::plan(
+        db,
+        &source_machine.ip,
+        &file,
+        target_ids,
+        None, // named_share_unc not exposed in CLI
+        op_user.clone(),
+        op_pass.clone(),
+        op_user.clone(),
+        op_pass.clone(),
+    )?;
+
+    if plan.is_empty() {
+        return Err(UecmError::InvalidInput(
+            "distribution plan has no non-source targets".into(),
+        ));
+    }
+
+    let total = plan.len() as i64;
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| UecmError::OperationFailed(format!("tokio runtime: {}", e)))?;
+
+    rt.block_on(async {
+        for (idx, item) in plan.into_iter().enumerate() {
+            let item_id = format!("machine:{}", item.target_machine_id);
+
+            ctx.emitter
+                .emit_event(&Event::ItemStarted {
+                    item_id: item_id.clone(),
+                    index: idx as i64,
+                    total,
+                })
+                .ok();
+
+            // GPU mismatch preflight guard — surface as a non-ok completion rather than panic.
+            if let Err(e) = pso_distribute::preflight_one(&item).await {
+                ctx.emitter
+                    .emit_event(&Event::ItemCompleted {
+                        item_id,
+                        index: idx as i64,
+                        ok: false,
+                        message: Some(format!("gpu mismatch preflight: {}", e)),
+                    })
+                    .ok();
+                return Err(UecmError::OperationFailed(format!(
+                    "preflight failed for machine {}: {}",
+                    item.target_machine_id, e
+                )));
+            }
+
+            let outcome = pso_distribute::run_one(item).await;
+
+            match outcome {
+                Ok(out) => {
+                    let msg = if out.ok {
+                        None
+                    } else {
+                        Some(out.message.unwrap_or_else(|| out.stdout_tail.clone()))
+                    };
+                    ctx.emitter
+                        .emit_event(&Event::ItemCompleted {
+                            item_id,
+                            index: idx as i64,
+                            ok: out.ok,
+                            message: msg,
+                        })
+                        .ok();
+                    if !out.ok {
+                        return Err(UecmError::OperationFailed(format!(
+                            "robocopy exit {} on machine {}",
+                            out.exit_code, out.target_machine_id
+                        )));
+                    }
+                }
+                Err(e) => {
+                    ctx.emitter
+                        .emit_event(&Event::ItemCompleted {
+                            item_id,
+                            index: idx as i64,
+                            ok: false,
+                            message: Some(e.to_string()),
+                        })
+                        .ok();
+                    return Err(e);
+                }
+            }
+        }
+        Ok::<_, UecmError>(())
+    })?;
+
+    ctx.emitter
+        .emit_event(&Event::Completed {
+            summary: serde_json::json!({"distributed": true}),
+        })
+        .ok();
+
+    Ok(())
+}
+
+// ─── helpers ──────────────────────────────────────────────────────────────────
+
+fn resolve_creds(
+    db: &crate::data::Db,
+    cred: &CredentialArgs,
+) -> UecmResult<(Option<String>, Option<String>)> {
+    match cred.resolve(db)? {
+        Some((u, p)) => Ok((Some(u), Some(p))),
+        None => Ok((None, None)),
+    }
+}
+
+fn resolve_engine_path(db: &crate::data::Db, machine_id: i64) -> UecmResult<String> {
+    let installs = crate::data::machine_ue_installs::list_for_machine(db, machine_id)?;
+    if installs.is_empty() {
+        return Err(UecmError::InvalidInput(format!(
+            "machine {} has no detected UE installs",
+            machine_id
+        )));
+    }
+    let install = installs
+        .iter()
+        .find(|i| i.is_primary)
+        .cloned()
+        .unwrap_or_else(|| installs[0].clone());
+    Ok(install.install_path)
+}

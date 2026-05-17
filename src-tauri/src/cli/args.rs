@@ -78,6 +78,11 @@ pub enum Domain {
         #[command(subcommand)]
         action: DdcAction,
     },
+    /// PSO cache workflow (verify / collect / list / distribute).
+    Pso {
+        #[command(subcommand)]
+        action: PsoAction,
+    },
 }
 
 // ---------- system ----------
@@ -428,6 +433,47 @@ pub enum DdcAction {
         cred: crate::cli::credential_args::CredentialArgs,
     },
     /// Distribute the DDC pak to one or more target machines via Robocopy.
+    Distribute {
+        #[arg(long)]
+        project_id: i64,
+        #[arg(long)]
+        source_machine: i64,
+        #[arg(long, value_name = "M1,M2,...", value_delimiter = ',')]
+        targets: Vec<i64>,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+}
+
+// ---------- pso ----------
+#[derive(Subcommand, Debug)]
+pub enum PsoAction {
+    /// Verify PSO precaching CVars (R008-R010) are set in the project's ConsoleVariables.ini.
+    Verify {
+        #[arg(long)]
+        project_id: i64,
+    },
+    /// Run UE `-game` to collect PSO cache files. Long-running NDJSON stream.
+    Collect {
+        #[arg(long)]
+        project_id: i64,
+        #[arg(long)]
+        source_machine: i64,
+        #[arg(long, value_name = "WxH", default_value = "1920x1080")]
+        resolution: String,
+        #[arg(long, default_value_t = true)]
+        windowed: bool,
+        #[arg(long, default_value_t = 10)]
+        max_minutes: u32,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// List collected PSO cache files for a project.
+    List {
+        #[arg(long)]
+        project_id: i64,
+    },
+    /// Distribute PSO cache files to one or more target machines (with GPU mismatch preflight guard).
     Distribute {
         #[arg(long)]
         project_id: i64,
