@@ -14,7 +14,7 @@ pub fn handle(ctx: &mut Ctx<'_>, action: MachineAction) -> UecmResult<()> {
         MachineAction::List => list(ctx),
         MachineAction::Scan { cidr, timeout_ms } => scan(ctx, &cidr, timeout_ms),
         MachineAction::Add { ip, hostname } => add(ctx, ip, hostname),
-        MachineAction::Refresh { id } => refresh(ctx, id),
+        MachineAction::Refresh { id, cred } => refresh(ctx, id, &cred),
         MachineAction::Detail { id } => detail(ctx, id),
         MachineAction::Delete { id, yes } => delete(ctx, id, yes),
         MachineAction::Rename { id, hostname } => rename(ctx, id, hostname),
@@ -147,7 +147,7 @@ fn scan(ctx: &mut Ctx<'_>, cidr: &str, timeout_ms: u64) -> UecmResult<()> {
     Ok(())
 }
 
-fn refresh(ctx: &mut Ctx<'_>, id: i64) -> UecmResult<()> {
+fn refresh(ctx: &mut Ctx<'_>, id: i64, cred: &crate::cli::credential_args::CredentialArgs) -> UecmResult<()> {
     // Fetch machine, grab IP (canonical connect target — matches the UI's
     // `commands::discovery::refresh_machine`). Hostname can drift if the user
     // renames the row, so IP is the only reliable WinRM target.
@@ -158,11 +158,21 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64) -> UecmResult<()> {
         (machine.ip.clone(), machine.hostname.clone())
     };
 
+    // Resolve credentials once for the whole refresh (probe + UE detect + GPU detect).
+    let creds = {
+        let db = ctx.require_db()?;
+        cred.resolve(db)?
+    };
+
     ctx.emitter
         .emit_event(&Event::Started {
             task_type: "machine_refresh".into(),
             task_id: Some(format!("machine:{}", id)),
-            metadata: serde_json::json!({ "ip": host, "hostname": hostname_for_log }),
+            metadata: serde_json::json!({
+                "ip": host,
+                "hostname": hostname_for_log,
+                "authenticated": creds.is_some(),
+            }),
         })
         .ok();
 
@@ -177,7 +187,11 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64) -> UecmResult<()> {
             total: None,
         })
         .ok();
-    let probe = match crate::core::winrm::probe(&host) {
+    let probe_result = match &creds {
+        Some((u, p)) => crate::core::winrm::probe_with_credential(&host, u, p),
+        None => crate::core::winrm::probe(&host),
+    };
+    let probe = match probe_result {
         Ok(p) if p.ok => {
             {
                 let db = ctx.require_db()?;
@@ -216,7 +230,10 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64) -> UecmResult<()> {
             total: None,
         })
         .ok();
-    let detected_ue = crate::core::discovery::detect_ue_versions(&host)?;
+    let detected_ue = match &creds {
+        Some((u, p)) => crate::core::discovery::detect_ue_versions_with_credential(&host, u, p)?,
+        None => crate::core::discovery::detect_ue_versions(&host)?,
+    };
     // PowerShell `query-ue-versions.ps1` sorts version ascending, so picking
     // index 0 marks the OLDEST install as primary — wrong, downstream
     // DDC/PSO jobs that fall back to `is_primary` would pick the wrong engine.
@@ -258,7 +275,10 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64) -> UecmResult<()> {
             total: None,
         })
         .ok();
-    let detected_gpus = crate::core::discovery::detect_gpus(&host)?;
+    let detected_gpus = match &creds {
+        Some((u, p)) => crate::core::discovery::detect_gpus_with_credential(&host, u, p)?,
+        None => crate::core::discovery::detect_gpus(&host)?,
+    };
     {
         let db = ctx.require_db()?;
         // Convert DetectedGpu → GpuInfo
@@ -284,6 +304,7 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64) -> UecmResult<()> {
         "ue_versions": detected_ue.len(),
         "gpus": detected_gpus.len(),
         "latency_ms": probe.latency_ms,
+        "authenticated": creds.is_some(),
     });
     ctx.emitter.emit_event(&Event::Completed { summary }).ok();
     Ok(())

@@ -97,11 +97,14 @@ pub enum MachineAction {
     },
     /// Refresh a machine: WinRM probe + detect UE installs + GPUs.
     ///
-    /// Plan 1 inherits the UI's no-credential semantics: WinRM runs in the
-    /// caller's Kerberos/NTLM context.
+    /// Plan 3: now accepts credentials. When supplied, all three remote
+    /// calls (probe / detect_ue / detect_gpus) authenticate as the given
+    /// user. Without credentials, the caller's Kerberos/NTLM context is used.
     Refresh {
         /// Machine row id.
         id: i64,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
     },
     /// Show machine detail (UE installs, GPUs, last-seen).
     Detail { id: i64 },
@@ -298,8 +301,9 @@ mod tests {
     fn parses_machine_refresh_by_id() {
         let cli = Cli::try_parse_from(["uecm-cli", "machine", "refresh", "3"]).unwrap();
         match cli.command {
-            Domain::Machine { action: MachineAction::Refresh { id } } => {
+            Domain::Machine { action: MachineAction::Refresh { id, cred } } => {
                 assert_eq!(id, 3);
+                assert!(cred.cred_alias.is_none());
             }
             _ => panic!("wrong variant"),
         }
@@ -307,11 +311,25 @@ mod tests {
 
     #[test]
     fn refresh_rejects_unknown_flag() {
-        // Confirms we removed the credential flags in Plan 1 — extra flags must error.
         let res = Cli::try_parse_from([
-            "uecm-cli", "machine", "refresh", "3", "--cred-alias", "winrm-admin",
+            "uecm-cli", "machine", "refresh", "3", "--bogus-flag", "value",
         ]);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn parses_machine_refresh_with_cred_alias() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "machine", "refresh", "3", "--cred-alias", "winrm-admin",
+        ])
+        .unwrap();
+        match cli.command {
+            Domain::Machine { action: MachineAction::Refresh { id, cred } } => {
+                assert_eq!(id, 3);
+                assert_eq!(cred.cred_alias.as_deref(), Some("winrm-admin"));
+            }
+            _ => panic!("wrong variant"),
+        }
     }
 
     #[test]
