@@ -98,6 +98,12 @@ pub enum SystemAction {
     MigrateDb,
     /// Round-trip a message through the PowerShell bridge.
     Echo { message: String },
+    /// Dump the full clap command tree + exit-code table as JSON. Intended
+    /// for AI agents / automation to introspect this CLI's surface without
+    /// scraping help text.
+    Schema,
+    /// Print the documented process exit-code table.
+    ExitCodes,
 }
 
 // ---------- machine ----------
@@ -138,6 +144,8 @@ pub enum MachineAction {
         id: i64,
         #[arg(long)]
         yes: bool,
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Rename a machine.
     Rename { id: i64, hostname: String },
@@ -189,7 +197,13 @@ pub enum CredAction {
         kind: String,
     },
     /// Delete a credential alias.
-    Delete { alias: String },
+    Delete {
+        alias: String,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 // ---------- env ----------
@@ -212,6 +226,10 @@ pub enum EnvAction {
         name: String,
         #[arg(long)]
         value: String,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
@@ -243,6 +261,10 @@ pub enum IniAction {
         key: String,
         #[arg(long)]
         value: String,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
@@ -256,6 +278,10 @@ pub enum IniAction {
         section: String,
         #[arg(long)]
         key: String,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
@@ -283,6 +309,10 @@ pub enum IniAction {
     /// Apply (auto-fix) a finding's recommendation on the remote machine.
     Apply {
         finding_id: i64,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
@@ -305,6 +335,8 @@ pub enum ShareAction {
         id: i64,
         #[arg(long)]
         yes: bool,
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Create an SMB share (Mode A = open Guest+Everyone; Mode B = dedicated ddc-svc).
     Create {
@@ -316,6 +348,10 @@ pub enum ShareAction {
         share: String,
         #[arg(long)]
         local_path: String,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
@@ -327,6 +363,10 @@ pub enum ShareAction {
         target_host: String,
         #[arg(long, default_value = "ddc-svc")]
         svc_user: String,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
@@ -376,12 +416,16 @@ pub enum ProjectAction {
         id: i64,
         #[arg(long)]
         yes: bool,
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Delete a single project_location row.
     DeleteLocation {
         id: i64,
         #[arg(long)]
         yes: bool,
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -440,6 +484,10 @@ pub enum DdcAction {
         source_machine: i64,
         #[arg(long, value_name = "M1,M2,...", value_delimiter = ',')]
         targets: Vec<i64>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
@@ -481,6 +529,10 @@ pub enum PsoAction {
         source_machine: i64,
         #[arg(long, value_name = "M1,M2,...", value_delimiter = ',')]
         targets: Vec<i64>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },

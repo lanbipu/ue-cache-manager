@@ -2,6 +2,7 @@
 
 use crate::cli::args::IniAction;
 use crate::cli::credential_args::CredentialArgs;
+use crate::cli::destructive::{self, Outcome};
 use crate::cli::host_args::HostTarget;
 use crate::cli::output::{EmitSerialize, Event};
 use crate::cli::run::Ctx;
@@ -59,15 +60,67 @@ pub fn handle(ctx: &mut Ctx<'_>, action: IniAction) -> UecmResult<()> {
         IniAction::Read { host, file, section, cred } => {
             read(ctx, &host, &file, &section, &cred)
         }
-        IniAction::Set { target, file, section, key, value, cred } => {
+        IniAction::Set { target, file, section, key, value, yes, dry_run, cred } => {
             let t = target.require_one()?;
+            let outcome = destructive::check(yes, dry_run, "ini.set")?;
+            let db = ctx.require_db()?;
+            // Preflight only — see env.set for stdin-double-read rationale.
+            cred.preflight(db)?;
+            if outcome == Outcome::DryRun {
+                let hosts: Vec<String> = match &t {
+                    HostTarget::Single(h) => vec![h.clone()],
+                    HostTarget::Batch(hs) => hs.clone(),
+                };
+                destructive::emit_plan(
+                    ctx.emitter.as_mut(),
+                    "ini.set",
+                    serde_json::json!({
+                        "hosts": hosts,
+                        "file": file,
+                        "section": section,
+                        "key": key,
+                        "value_len": value.chars().count(),
+                        "value_sha256_prefix": value_sha256_prefix(&value),
+                    }),
+                );
+                return Ok(());
+            }
             match t {
                 HostTarget::Single(h) => set_single(ctx, &h, &file, &section, &key, &value, &cred),
                 HostTarget::Batch(hs) => set_batch(ctx, &hs, &file, &section, &key, &value, &cred),
             }
         }
-        IniAction::Remove { target, file, section, key, cred } => {
+        IniAction::Remove { target, file, section, key, yes, dry_run, cred } => {
             let t = target.require_one()?;
+            let outcome = destructive::check(yes, dry_run, "ini.remove")?;
+            let db = ctx.require_db()?;
+            // Preflight: alias / flag-shape only. Then require cred SUPPLIED
+            // (alias or --user --pass[-stdin] given) without consuming stdin.
+            cred.preflight(db)?;
+            let cred_supplied =
+                cred.cred_alias.is_some() || cred.user.is_some() || cred.pass_stdin;
+            if !cred_supplied {
+                return Err(UecmError::InvalidInput(
+                    "ini remove requires credentials (--cred-alias or --user --pass / --pass-stdin)".into(),
+                ));
+            }
+            if outcome == Outcome::DryRun {
+                let hosts: Vec<String> = match &t {
+                    HostTarget::Single(h) => vec![h.clone()],
+                    HostTarget::Batch(hs) => hs.clone(),
+                };
+                destructive::emit_plan(
+                    ctx.emitter.as_mut(),
+                    "ini.remove",
+                    serde_json::json!({
+                        "hosts": hosts,
+                        "file": file,
+                        "section": section,
+                        "key": key,
+                    }),
+                );
+                return Ok(());
+            }
             match t {
                 HostTarget::Single(h) => remove_single(ctx, &h, &file, &section, &key, &cred),
                 HostTarget::Batch(hs) => remove_batch(ctx, &hs, &file, &section, &key, &cred),
@@ -80,7 +133,85 @@ pub fn handle(ctx: &mut Ctx<'_>, action: IniAction) -> UecmResult<()> {
             list_findings(ctx, scan_run_id, severity.as_deref())
         }
         IniAction::GetFinding { finding_id } => get_finding(ctx, finding_id),
-        IniAction::Apply { finding_id, cred } => apply_finding(ctx, finding_id, &cred),
+        IniAction::Apply { finding_id, yes, dry_run, cred } => {
+            let outcome = destructive::check(yes, dry_run, "ini.apply")?;
+            // Mirror the --yes path's preconditions locally so dry-run cannot
+            // succeed on inputs that the real command would immediately reject:
+            // credentials are mandatory; finding row must exist.
+            let db = ctx.require_db()?;
+            cred.preflight(db)?;
+            let cred_supplied =
+                cred.cred_alias.is_some() || cred.user.is_some() || cred.pass_stdin;
+            if !cred_supplied {
+                return Err(UecmError::InvalidInput(
+                    "ini apply requires credentials (--cred-alias or --user --pass / --pass-stdin)".into(),
+                ));
+            }
+            let finding = ini_findings::find_by_id(db, finding_id)?.ok_or_else(|| {
+                UecmError::InvalidInput(format!("finding id={} not found", finding_id))
+            })?;
+            if outcome == Outcome::DryRun {
+                // Mirror `core::ini_apply::apply` validation so dry-run can
+                // only succeed on findings the real --yes path can actually
+                // execute. Manual / incomplete findings must reject in both
+                // paths to keep automation honest.
+                if finding.section.as_deref().is_none() {
+                    return Err(UecmError::InvalidInput(
+                        "finding has no section".into(),
+                    ));
+                }
+                match finding.recommended_action.as_str() {
+                    "set" => {
+                        if finding.key_name.is_none() {
+                            return Err(UecmError::InvalidInput(
+                                "finding has no key_name".into(),
+                            ));
+                        }
+                        if finding.recommended_value.is_none() {
+                            return Err(UecmError::InvalidInput(
+                                "finding has no recommended_value".into(),
+                            ));
+                        }
+                    }
+                    "remove" => {
+                        // R002 reads keys from snippet_before; others require key_name.
+                        if finding.rule_id != "R002" && finding.key_name.is_none() {
+                            return Err(UecmError::InvalidInput(
+                                "remove needs key_name".into(),
+                            ));
+                        }
+                    }
+                    "manual" => {
+                        return Err(UecmError::InvalidInput(
+                            "manual findings cannot be auto-applied; open the file directly"
+                                .into(),
+                        ));
+                    }
+                    other => {
+                        return Err(UecmError::InvalidInput(format!(
+                            "unknown action: {}",
+                            other
+                        )));
+                    }
+                }
+                destructive::emit_plan(
+                    ctx.emitter.as_mut(),
+                    "ini.apply",
+                    serde_json::json!({
+                        "finding_id": finding_id,
+                        "rule_id": finding.rule_id,
+                        "severity": finding.severity,
+                        "machine_id": finding.machine_id,
+                        "file_path": finding.file_path,
+                        "section": finding.section,
+                        "key": finding.key_name,
+                        "recommended_action": finding.recommended_action,
+                    }),
+                );
+                return Ok(());
+            }
+            apply_finding(ctx, finding_id, &cred)
+        }
         IniAction::Skip { finding_id } => skip_finding(ctx, finding_id),
         IniAction::VerifyPsoPrecaching { project_id } => verify_pso_precaching(ctx, project_id),
     }

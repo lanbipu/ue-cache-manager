@@ -26,6 +26,8 @@ pub fn handle(ctx: &mut Ctx<'_>, action: SystemAction) -> UecmResult<()> {
         SystemAction::PsDir => ps_dir(ctx),
         SystemAction::MigrateDb => migrate_db(ctx),
         SystemAction::Echo { message } => echo(ctx, &message),
+        SystemAction::Schema => schema(ctx),
+        SystemAction::ExitCodes => exit_codes(ctx),
     }
 }
 
@@ -65,6 +67,90 @@ fn echo(ctx: &mut Ctx<'_>, message: &str) -> UecmResult<()> {
     )?;
     ctx.emitter.emit_value(&result).ok();
     Ok(())
+}
+
+fn schema(ctx: &mut Ctx<'_>) -> UecmResult<()> {
+    use clap::CommandFactory;
+    let cmd = crate::cli::args::Cli::command();
+    let tree = command_to_json(&cmd);
+    let payload = serde_json::json!({
+        "binary": "uecm-cli",
+        "version": env!("CARGO_PKG_VERSION"),
+        "spec_version": 1,
+        "command_tree": tree,
+        "exit_codes": exit_code_table(),
+        "error_codes": error_code_table(),
+    });
+    ctx.emitter.emit_value(&payload).ok();
+    Ok(())
+}
+
+fn exit_codes(ctx: &mut Ctx<'_>) -> UecmResult<()> {
+    let payload = serde_json::json!({
+        "exit_codes": exit_code_table(),
+        "error_codes": error_code_table(),
+    });
+    ctx.emitter.emit_value(&payload).ok();
+    Ok(())
+}
+
+/// Documented exit-code table. Mirrors `cli::output::exit_code_for` plus the
+/// clap usage-error code (64) emitted from the bin entry point.
+fn exit_code_table() -> serde_json::Value {
+    serde_json::json!([
+        {"code": 0,  "name": "ok",                "meaning": "success"},
+        {"code": 1,  "name": "operation_failed",  "meaning": "runtime business-logic failure"},
+        {"code": 2,  "name": "invalid_input",     "meaning": "user-provided runtime data invalid (e.g. unknown id, bad cidr)"},
+        {"code": 3,  "name": "environment_error", "meaning": "configuration / database / IO problem the user must fix"},
+        {"code": 4,  "name": "powershell_failed", "meaning": "remote PowerShell sidecar invocation failed"},
+        {"code": 64, "name": "usage_error",       "meaning": "argv malformed: missing required flag, unknown subcommand, mutex violation (sysexits.h EX_USAGE)"},
+    ])
+}
+
+/// Documented `--json` error-envelope `code` field values.
+fn error_code_table() -> serde_json::Value {
+    serde_json::json!([
+        {"code": "invalid_input",     "exit": 2,  "source": "handler validation"},
+        {"code": "operation_failed",  "exit": 1,  "source": "handler runtime failure"},
+        {"code": "environment_error", "exit": 3,  "source": "config / database / IO"},
+        {"code": "powershell_failed", "exit": 4,  "source": "remote PowerShell"},
+        {"code": "usage_error",       "exit": 64, "source": "clap argv parse"},
+    ])
+}
+
+fn command_to_json(cmd: &clap::Command) -> serde_json::Value {
+    let args: Vec<serde_json::Value> = cmd
+        .get_arguments()
+        .filter(|a| a.get_id().as_str() != "help" && a.get_id().as_str() != "version")
+        .map(arg_to_json)
+        .collect();
+    let subs: Vec<serde_json::Value> = cmd
+        .get_subcommands()
+        .filter(|s| s.get_name() != "help")
+        .map(command_to_json)
+        .collect();
+    serde_json::json!({
+        "name": cmd.get_name(),
+        "about": cmd.get_about().map(|s| s.to_string()),
+        "args": args,
+        "subcommands": subs,
+    })
+}
+
+fn arg_to_json(arg: &clap::Arg) -> serde_json::Value {
+    let value_names: Option<Vec<String>> = arg
+        .get_value_names()
+        .map(|vs| vs.iter().map(|v| v.to_string()).collect());
+    serde_json::json!({
+        "id": arg.get_id().as_str(),
+        "long": arg.get_long(),
+        "short": arg.get_short(),
+        "help": arg.get_help().map(|s| s.to_string()),
+        "required": arg.is_required_set(),
+        "positional": arg.is_positional(),
+        "takes_value": arg.get_action().takes_values(),
+        "value_names": value_names,
+    })
 }
 
 #[cfg(test)]

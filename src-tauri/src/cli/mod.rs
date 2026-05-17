@@ -2,6 +2,7 @@
 
 pub mod args;
 pub mod credential_args;
+pub mod destructive;
 pub mod host_args;
 pub mod output;
 pub mod run;

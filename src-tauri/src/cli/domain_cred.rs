@@ -1,6 +1,7 @@
 //! `uecm-cli cred <action>` handlers.
 
 use crate::cli::args::CredAction;
+use crate::cli::destructive::{self, Outcome};
 use crate::cli::output::EmitSerialize;
 use crate::cli::run::Ctx;
 use crate::data::credentials as data_creds;
@@ -17,7 +18,7 @@ pub fn handle(ctx: &mut Ctx<'_>, action: CredAction) -> UecmResult<()> {
             pass_stdin,
             kind,
         } => save(ctx, &alias, &user, pass.as_deref(), pass_stdin, &kind),
-        CredAction::Delete { alias } => delete(ctx, &alias),
+        CredAction::Delete { alias, yes, dry_run } => delete(ctx, &alias, yes, dry_run),
     }
 }
 
@@ -120,14 +121,31 @@ fn build_credential_record(
     })
 }
 
-fn delete(ctx: &mut Ctx<'_>, alias: &str) -> UecmResult<()> {
+fn delete(ctx: &mut Ctx<'_>, alias: &str, yes: bool, dry_run: bool) -> UecmResult<()> {
     use crate::core::credentials as core_creds;
+
+    let outcome = destructive::check(yes, dry_run, "cred.delete")?;
+
+    let db = ctx.require_db()?;
+
+    if outcome == Outcome::DryRun {
+        let exists = data_creds::find_by_alias(db, alias)?.is_some();
+        destructive::emit_plan(
+            ctx.emitter.as_mut(),
+            "cred.delete",
+            serde_json::json!({
+                "alias": alias,
+                "exists_in_db": exists,
+                "side_effects": ["cmdkey delete", "SQLite delete", "DPAPI delete (best-effort)"],
+            }),
+        );
+        return Ok(());
+    }
 
     // Step 1: cmdkey delete — keep result, propagate at the end.
     let cm_result = core_creds::delete(alias);
 
     // Step 2: SQLite delete — environment error if this fails, propagate now.
-    let db = ctx.require_db()?;
     data_creds::delete_by_alias(db, alias)?;
 
     // Step 3: DPAPI best-effort.

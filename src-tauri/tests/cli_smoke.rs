@@ -75,8 +75,13 @@ fn env_set_without_target_returns_invalid_input() {
         .output()
         .expect("spawn");
     assert!(!out.status.success());
-    // clap exit code (2) for missing required arg group.
+    // host_args.require_one() runs in-handler (clap group doesn't mark either
+    // as required), so this is an InvalidInput (exit 2) not a clap usage error.
     assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(stderr.trim_end()).expect("stderr should be JSON envelope");
+    assert_eq!(v["code"], "invalid_input");
 }
 
 #[test]
@@ -170,7 +175,7 @@ fn ini_runs_on_fresh_db_returns_empty_array() {
 fn machine_refresh_accepts_cred_alias_flag_without_clap_error() {
     // Pure arg-parse check: clap should accept --cred-alias on machine refresh
     // now (Plan 3 wiring). The command will fail at the DB lookup since the
-    // machine doesn't exist, but clap must NOT reject the flag with exit 2.
+    // machine doesn't exist, but clap must NOT reject the flag.
     let tmp = tempfile::NamedTempFile::new().unwrap();
     let path = tmp.path().to_string_lossy().to_string();
     let out = Command::new(bin())
@@ -181,12 +186,19 @@ fn machine_refresh_accepts_cred_alias_flag_without_clap_error() {
         ])
         .output()
         .expect("spawn");
-    // Should fail with invalid_input (machine 999 not found) — NOT clap parse error (exit 2).
     assert!(!out.status.success());
-    // Specifically NOT clap's exit 2 due to argument problems — clap would emit
-    // "error: unexpected argument" to stderr. We expect our handler's
-    // invalid_input error (exit 2 also, but stdout has structured JSON).
-    let stdout = String::from_utf8(out.stdout).unwrap();
-    // If clap rejected the flag, stdout would be empty (clap writes to stderr).
-    assert!(!stdout.is_empty(), "clap rejected --cred-alias on machine refresh");
+    // Spec §4: --json errors are emitted as JSON envelopes to stderr.
+    // clap usage errors exit 64; runtime invalid_input exits 2.
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "expected invalid_input (exit 2), got: {:?}\nstderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(stderr.trim_end()).expect("stderr should be JSON envelope");
+    assert_eq!(v["kind"], "error");
+    assert_eq!(v["code"], "invalid_input");
 }

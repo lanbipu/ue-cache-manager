@@ -37,6 +37,34 @@ pub struct CredentialArgs {
 }
 
 impl CredentialArgs {
+    /// Validate the flag combination without reading stdin or DPAPI. Used by
+    /// destructive-command dry-run / preflight paths so calling `resolve` on
+    /// the real `--yes` path is not preempted (which would consume the
+    /// `--pass-stdin` line and leave the second `resolve` hanging or empty).
+    ///
+    /// Catches:
+    /// - `--cred-alias <X>` where X doesn't exist in SQLite metadata
+    /// - inconsistent flag combinations (`--pass` without `--user`, etc.)
+    ///
+    /// Does NOT read stdin and does NOT call DPAPI — those run only on the
+    /// real-execution path inside `resolve`.
+    pub fn preflight(&self, db: &Db) -> UecmResult<()> {
+        if let Some(alias) = &self.cred_alias {
+            data_creds::find_by_alias(db, alias)?.ok_or_else(|| {
+                UecmError::InvalidInput(format!("credential alias '{}' not found", alias))
+            })?;
+            return Ok(());
+        }
+        match (&self.user, &self.pass, self.pass_stdin) {
+            (Some(_), Some(_), false) => Ok(()),
+            (Some(_), None, true) => Ok(()), // stdin password read later by `resolve`
+            (None, None, false) => Ok(()),
+            _ => Err(UecmError::InvalidInput(
+                "inconsistent credential flags".into(),
+            )),
+        }
+    }
+
     /// Resolve to `(username, password)` if any credential was supplied;
     /// `None` means inherit the caller's Kerberos/NTLM context.
     pub fn resolve(&self, db: &Db) -> UecmResult<Option<(String, String)>> {

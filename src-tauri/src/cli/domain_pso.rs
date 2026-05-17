@@ -9,6 +9,7 @@
 
 use crate::cli::args::PsoAction;
 use crate::cli::credential_args::CredentialArgs;
+use crate::cli::destructive::{self, Outcome};
 use crate::cli::output::{EmitSerialize, Event};
 use crate::cli::run::Ctx;
 use crate::core::{
@@ -32,8 +33,16 @@ pub fn handle(ctx: &mut Ctx<'_>, action: PsoAction) -> UecmResult<()> {
             cred,
         } => collect(ctx, project_id, source_machine, &resolution, windowed, max_minutes, &cred),
         PsoAction::List { project_id } => list(ctx, project_id),
-        PsoAction::Distribute { project_id, source_machine, targets, cred } => {
-            distribute(ctx, project_id, source_machine, &targets, &cred)
+        PsoAction::Distribute { project_id, source_machine, targets, yes, dry_run, cred } => {
+            let outcome = destructive::check(yes, dry_run, "pso.distribute")?;
+            distribute(
+                ctx,
+                project_id,
+                source_machine,
+                &targets,
+                outcome == Outcome::DryRun,
+                &cred,
+            )
         }
     }
 }
@@ -156,7 +165,7 @@ fn collect(
     let db_clone = db.clone();
 
     rt.block_on(async {
-        let mut completed = false;
+        let mut ue_exit: Option<(i32, Vec<String>)> = None;
 
         while let Some(ev) = handle.events.recv().await {
             match ev {
@@ -181,15 +190,21 @@ fn collect(
                         .ok();
                 }
                 UeRunnerEvent::Completed { exit_code, log_tail } => {
+                    // Don't emit `Completed` yet — enumerate / persist still
+                    // need to run and can fail. The emitter treats `Completed`
+                    // as terminal, so emitting here would prevent a later
+                    // failure's `cancelled` marker from terminating the
+                    // stream. Surface UE exit as an informational LogLine.
                     ctx.emitter
-                        .emit_event(&Event::Completed {
-                            summary: serde_json::json!({
-                                "exit_code": exit_code,
-                                "log_tail": log_tail,
-                            }),
+                        .emit_event(&Event::LogLine {
+                            text: format!(
+                                "ue process exited (exit_code={:?})",
+                                exit_code
+                            ),
+                            parsed_kind: Some("ue_exit".into()),
                         })
                         .ok();
-                    completed = true;
+                    ue_exit = Some((exit_code, log_tail));
                     break;
                 }
                 UeRunnerEvent::Cancelled => {
@@ -198,8 +213,7 @@ fn collect(
                             reason: "external".into(),
                         })
                         .ok();
-                    completed = true;
-                    break;
+                    return Ok::<_, UecmError>(());
                 }
                 UeRunnerEvent::Error { message } => {
                     return Err(UecmError::OperationFailed(format!(
@@ -210,8 +224,10 @@ fn collect(
             }
         }
 
-        // After UE process finishes, enumerate collected files and persist to DB.
-        if completed {
+        // After UE process finishes, enumerate collected files and persist to
+        // DB. Only here, once everything succeeded, do we emit the terminal
+        // Completed event so consumers can rely on it as "no failure later".
+        if let Some((exit_code, log_tail)) = ue_exit {
             let files = pso_collect::enumerate_remote(
                 &source_machine_ip,
                 &project_dir,
@@ -230,10 +246,14 @@ fn collect(
             .map_err(|e| UecmError::OperationFailed(format!("finalize_persist: {}", e)))?;
 
             ctx.emitter
-                .emit_result(&serde_json::json!({
-                    "files_collected": files.len(),
-                    "file_ids": ids,
-                }))
+                .emit_event(&Event::Completed {
+                    summary: serde_json::json!({
+                        "exit_code": exit_code,
+                        "log_tail": log_tail,
+                        "files_collected": files.len(),
+                        "file_ids": ids,
+                    }),
+                })
                 .ok();
         }
 
@@ -259,6 +279,7 @@ fn distribute(
     project_id: i64,
     source_machine_id: i64,
     target_ids: &[i64],
+    dry_run: bool,
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
     let db = ctx.require_db()?;
@@ -267,7 +288,14 @@ fn distribute(
         UecmError::InvalidInput(format!("machine {} not found", source_machine_id))
     })?;
 
-    let (op_user, op_pass) = resolve_creds(db, cred)?;
+    // Dry-run must not consume `--pass-stdin` or decrypt DPAPI; see
+    // `domain_ddc::distribute` for rationale.
+    let (op_user, op_pass) = if dry_run {
+        cred.preflight(db)?;
+        (None, None)
+    } else {
+        resolve_creds(db, cred)?
+    };
 
     // Find the most recent PSO cache file for this project + source machine.
     let files = pso_cache_files::list_by_project(db, project_id)?;
@@ -298,6 +326,29 @@ fn distribute(
         return Err(UecmError::InvalidInput(
             "distribution plan has no non-source targets".into(),
         ));
+    }
+
+    if dry_run {
+        let summary_targets: Vec<serde_json::Value> = plan
+            .iter()
+            .map(|i| serde_json::json!({
+                "target_machine_id": i.target_machine_id,
+                "target_host": i.target_host,
+                "target_local": i.target_local,
+                "source_unc": i.source_unc,
+            }))
+            .collect();
+        destructive::emit_plan(
+            ctx.emitter.as_mut(),
+            "pso.distribute",
+            serde_json::json!({
+                "project_id": project_id,
+                "source_machine": source_machine_id,
+                "pso_cache_file_id": file.id,
+                "targets": summary_targets,
+            }),
+        );
+        return Ok(());
     }
 
     let total = plan.len() as i64;

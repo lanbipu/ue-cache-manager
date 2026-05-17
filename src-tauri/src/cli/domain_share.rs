@@ -2,6 +2,7 @@
 
 use crate::cli::args::ShareAction;
 use crate::cli::credential_args::CredentialArgs;
+use crate::cli::destructive::{self, Outcome};
 use crate::cli::output::{EmitSerialize, Event};
 use crate::cli::run::Ctx;
 use crate::data::share_configs::{self as data_shares, ShareMode};
@@ -10,11 +11,86 @@ use crate::error::{UecmError, UecmResult};
 pub fn handle(ctx: &mut Ctx<'_>, action: ShareAction) -> UecmResult<()> {
     match action {
         ShareAction::List => list(ctx),
-        ShareAction::Forget { id, yes } => forget(ctx, id, yes),
-        ShareAction::Create { mode, host, share, local_path, cred } => {
+        ShareAction::Forget { id, yes, dry_run } => forget(ctx, id, yes, dry_run),
+        ShareAction::Create { mode, host, share, local_path, yes, dry_run, cred } => {
+            let outcome = destructive::check(yes, dry_run, "share.create")?;
+            // Validate mode + credential + host inventory locally before
+            // reporting any dry-run success. The real `create()` path does a
+            // `machines::find_by_ip` lookup AFTER side effects; we want
+            // dry-run preview to fail-fast on host typos.
+            let resolved_mode = match mode.as_str() {
+                "a" | "A" => "open (Mode A, Guest+Everyone)",
+                "b" | "B" => "managed (Mode B, dedicated ddc-svc)",
+                other => {
+                    return Err(UecmError::InvalidInput(format!(
+                        "unknown share mode '{}'; expected 'a' or 'b'",
+                        other
+                    )));
+                }
+            };
+            let db = ctx.require_db()?;
+            // Preflight only — see env.set for stdin-double-read rationale.
+            cred.preflight(db)?;
+            // Mirror `create()` host resolution: IP first, then hostname fallback.
+            let host_found = crate::data::machines::find_by_ip(db, &host)?.is_some()
+                || crate::data::machines::list_all(db)
+                    .ok()
+                    .is_some_and(|rows| rows.iter().any(|m| m.hostname == host));
+            if !host_found {
+                return Err(UecmError::InvalidInput(format!(
+                    "host '{}' is not in the machine inventory; run `machine add` first",
+                    host
+                )));
+            }
+            if outcome == Outcome::DryRun {
+                destructive::emit_plan(
+                    ctx.emitter.as_mut(),
+                    "share.create",
+                    serde_json::json!({
+                        "mode": mode,
+                        "mode_resolved": resolved_mode,
+                        "host": host,
+                        "share": share,
+                        "local_path": local_path,
+                    }),
+                );
+                return Ok(());
+            }
             create(ctx, &mode, &host, &share, &local_path, &cred)
         }
-        ShareAction::InjectSystemCred { client_host, target_host, svc_user, cred } => {
+        ShareAction::InjectSystemCred { client_host, target_host, svc_user, yes, dry_run, cred } => {
+            let outcome = destructive::check(yes, dry_run, "share.inject-system-cred")?;
+            let db = ctx.require_db()?;
+            cred.preflight(db)?;
+            if outcome == Outcome::DryRun {
+                // Dry-run validates that a Mode-B share alias EXISTS for the
+                // target, without decrypting it. The real `--yes` path runs
+                // `find_share_svc_password` which calls DPAPI; doing that
+                // here would make `--dry-run` fail on non-Windows and read
+                // secret material unnecessarily.
+                let alias_prefix = format!("share-{}-", target_host);
+                let alias_present = data_shares::list_all(db)?.into_iter().any(|s| {
+                    s.credential_alias
+                        .as_deref()
+                        .is_some_and(|a| a.starts_with(&alias_prefix))
+                });
+                if !alias_present {
+                    return Err(UecmError::InvalidInput(format!(
+                        "no Mode B share found for host '{}'; create one via `share create --mode b` first",
+                        target_host
+                    )));
+                }
+                destructive::emit_plan(
+                    ctx.emitter.as_mut(),
+                    "share.inject-system-cred",
+                    serde_json::json!({
+                        "client_host": client_host,
+                        "target_host": target_host,
+                        "svc_user": svc_user,
+                    }),
+                );
+                return Ok(());
+            }
             inject_system_cred(ctx, &client_host, &target_host, &svc_user, &cred)
         }
     }
@@ -27,16 +103,30 @@ fn list(ctx: &mut Ctx<'_>) -> UecmResult<()> {
     Ok(())
 }
 
-fn forget(ctx: &mut Ctx<'_>, id: i64, yes: bool) -> UecmResult<()> {
-    if !yes {
-        return Err(UecmError::InvalidInput(
-            "share forget is destructive; pass --yes to confirm. \
-             Note: the remote SMB share is NOT removed by this command — \
-             use ssh + Remove-SmbShare for that."
-                .into(),
-        ));
-    }
+fn forget(ctx: &mut Ctx<'_>, id: i64, yes: bool, dry_run: bool) -> UecmResult<()> {
+    let outcome = destructive::check(yes, dry_run, "share.forget")?;
     let db = ctx.require_db()?;
+    // Mirror `machine delete` / `project delete`: refuse to pretend success
+    // on a typo'd id, in either --yes or --dry-run mode.
+    let existing = data_shares::list_all(db)?
+        .into_iter()
+        .find(|s| s.id == Some(id))
+        .ok_or_else(|| {
+            UecmError::InvalidInput(format!("share id={} not found in local inventory", id))
+        })?;
+    if outcome == Outcome::DryRun {
+        destructive::emit_plan(
+            ctx.emitter.as_mut(),
+            "share.forget",
+            serde_json::json!({
+                "id": id,
+                "host_machine_id": existing.host_machine_id,
+                "share_name": existing.share_name,
+                "note": "local inventory only; remote SMB share is NOT removed by this command",
+            }),
+        );
+        return Ok(());
+    }
     data_shares::delete(db, id)?;
     ctx.emitter
         .emit_event(&Event::Completed {
@@ -244,7 +334,7 @@ mod tests {
         let db = fresh_db();
         let mut buf: Vec<u8> = Vec::new();
         let mut ctx = make_ctx(&mut buf, &db);
-        assert!(matches!(forget(&mut ctx, 1, false), Err(UecmError::InvalidInput(_))));
+        assert!(matches!(forget(&mut ctx, 1, false, false), Err(UecmError::InvalidInput(_))));
     }
 
     #[cfg(not(windows))]

@@ -7,6 +7,7 @@
 
 use crate::cli::args::DdcAction;
 use crate::cli::credential_args::CredentialArgs;
+use crate::cli::destructive::{self, Outcome};
 use crate::cli::output::{EmitSerialize, Event};
 use crate::cli::run::Ctx;
 use crate::core::ddc_pak;
@@ -23,8 +24,16 @@ pub fn handle(ctx: &mut Ctx<'_>, action: DdcAction) -> UecmResult<()> {
         DdcAction::Verify { project_id, source_machine, cred } => {
             verify(ctx, project_id, source_machine, &cred)
         }
-        DdcAction::Distribute { project_id, source_machine, targets, cred } => {
-            distribute(ctx, project_id, source_machine, &targets, &cred)
+        DdcAction::Distribute { project_id, source_machine, targets, yes, dry_run, cred } => {
+            let outcome = destructive::check(yes, dry_run, "ddc.distribute")?;
+            distribute(
+                ctx,
+                project_id,
+                source_machine,
+                &targets,
+                outcome == Outcome::DryRun,
+                &cred,
+            )
         }
     }
 }
@@ -189,6 +198,7 @@ fn distribute(
     project_id: i64,
     source_machine_id: i64,
     target_ids: &[i64],
+    dry_run: bool,
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
     let db = ctx.require_db()?;
@@ -205,7 +215,18 @@ fn distribute(
                 ))
             })?;
 
-    let (op_user, op_pass) = resolve_creds(db, cred)?;
+    // Dry-run must not consume `--pass-stdin` or decrypt DPAPI — preview
+    // paths are required to avoid any secret-reading side effects so they
+    // stay safe to run from CI / AI agents. `plan()` accepts None for the
+    // credential snippets without altering its validation logic; the result
+    // we emit back to the user lists target machines and UNC paths, never
+    // resolved passwords.
+    let (op_user, op_pass) = if dry_run {
+        cred.preflight(db)?;
+        (None, None)
+    } else {
+        resolve_creds(db, cred)?
+    };
 
     let profile = pak_distribute::DistributeProfile::ddc_pak();
     let plan = pak_distribute::plan(
@@ -227,6 +248,32 @@ fn distribute(
         return Err(UecmError::InvalidInput(
             "distribution plan has no non-source targets".into(),
         ));
+    }
+
+    // Dry-run reports the validated plan and exits without running Robocopy.
+    // Preflight checks above (machine / location / non-empty plan) have already
+    // run, so a successful dry-run means the real command would at least get
+    // past argument validation.
+    if dry_run {
+        let summary_targets: Vec<serde_json::Value> = plan
+            .iter()
+            .map(|i| serde_json::json!({
+                "target_machine_id": i.target_machine_id,
+                "target_host": i.target_host,
+                "target_local": i.target_local,
+                "source_unc": i.source_unc,
+            }))
+            .collect();
+        destructive::emit_plan(
+            ctx.emitter.as_mut(),
+            "ddc.distribute",
+            serde_json::json!({
+                "project_id": project_id,
+                "source_machine": source_machine_id,
+                "targets": summary_targets,
+            }),
+        );
+        return Ok(());
     }
 
     let total = plan.len() as i64;

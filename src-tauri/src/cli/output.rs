@@ -130,21 +130,67 @@ pub trait EmitSerialize: Emitter {
 
 impl<E: Emitter + ?Sized> EmitSerialize for E {}
 
-pub struct NdjsonEmitter<W: Write> {
+pub struct NdjsonEmitter<W: Write, E: Write = io::Stderr> {
     pub writer: W,
+    pub error_writer: E,
+    /// Tracks whether `emit_event` has written anything to `writer`. Used by
+    /// `emit_error` to decide whether to emit a stdout `cancelled` stream
+    /// terminator. One-shot JSON commands (`machine refresh 9999`) skip the
+    /// terminator and keep stdout empty; stream commands (`machine scan`
+    /// already emitted `started`) get a terminal marker so NDJSON consumers
+    /// can detect end-of-stream.
+    stream_started: bool,
+    /// Set when a terminal event (`completed` / `cancelled` / `error`) has
+    /// already been written to stdout. Suppresses a second terminator from
+    /// `emit_error` so NDJSON consumers don't see `completed` then `cancelled`
+    /// back-to-back (e.g. batch ops that summarize then return Err).
+    stream_terminated: bool,
 }
 
-impl<W: Write> NdjsonEmitter<W> {
+impl<W: Write> NdjsonEmitter<W, io::Stderr> {
+    /// Default constructor. Data events stream to `writer` (stdout in
+    /// production); error envelopes go to process stderr per spec §4.
     pub fn new(writer: W) -> Self {
-        Self { writer }
+        Self {
+            writer,
+            error_writer: io::stderr(),
+            stream_started: false,
+            stream_terminated: false,
+        }
     }
 }
 
-impl<W: Write> Emitter for NdjsonEmitter<W> {
+impl<W: Write, E: Write> NdjsonEmitter<W, E> {
+    /// Test / advanced use: pin both writers explicitly so error envelopes
+    /// can be captured.
+    pub fn with_error_writer(writer: W, error_writer: E) -> Self {
+        Self {
+            writer,
+            error_writer,
+            stream_started: false,
+            stream_terminated: false,
+        }
+    }
+}
+
+impl<W: Write, E: Write> Emitter for NdjsonEmitter<W, E> {
     fn emit_event(&mut self, event: &Event) -> io::Result<()> {
         serde_json::to_writer(&mut self.writer, event)?;
         self.writer.write_all(b"\n")?;
-        self.writer.flush()
+        self.writer.flush()?;
+        self.stream_started = true;
+        // `Completed` / `Cancelled` / `Error` all mean "no more events". Once
+        // any of them has been emitted, suppress a follow-up `cancelled` from
+        // `emit_error` so NDJSON consumers never see two terminal events.
+        // Handlers MUST NOT emit `Completed` while later steps could still
+        // fail (see `pso collect`, which delays Completed until persist).
+        if matches!(
+            event,
+            Event::Completed { .. } | Event::Cancelled { .. } | Event::Error { .. }
+        ) {
+            self.stream_terminated = true;
+        }
+        Ok(())
     }
 
     fn emit_value(&mut self, value: &serde_json::Value) -> io::Result<()> {
@@ -154,12 +200,31 @@ impl<W: Write> Emitter for NdjsonEmitter<W> {
     }
 
     fn emit_error(&mut self, err: &UecmError) {
-        let ev = Event::Error {
+        // Stream terminator only when a stream has already started AND has
+        // not already terminated. One-shot JSON commands keep stdout empty;
+        // batch commands that already emitted a `completed` summary before
+        // returning Err must not double-terminate with `cancelled`.
+        if self.stream_started && !self.stream_terminated {
+            let cancelled = Event::Cancelled {
+                reason: err.to_string(),
+            };
+            if serde_json::to_writer(&mut self.writer, &cancelled).is_ok() {
+                let _ = self.writer.write_all(b"\n");
+                let _ = self.writer.flush();
+                self.stream_terminated = true;
+            }
+        }
+
+        // Full error envelope to stderr per spec §4 always.
+        let envelope = Event::Error {
             code: error_code(err).into(),
             message: err.to_string(),
             details: serde_json::Value::Null,
         };
-        let _ = self.emit_event(&ev);
+        if serde_json::to_writer(&mut self.error_writer, &envelope).is_ok() {
+            let _ = self.error_writer.write_all(b"\n");
+            let _ = self.error_writer.flush();
+        }
     }
 }
 

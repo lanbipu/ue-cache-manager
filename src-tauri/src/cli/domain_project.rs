@@ -1,6 +1,7 @@
 //! `uecm-cli project <action>` handlers.
 
 use crate::cli::args::ProjectAction;
+use crate::cli::destructive::{self, Outcome};
 use crate::cli::output::{EmitSerialize, Event};
 use crate::cli::run::Ctx;
 use crate::core::project_identity::stem_lower;
@@ -9,6 +10,7 @@ use crate::data::{
     DiscoveryStatus, Project, ProjectLocation,
 };
 use crate::error::{UecmError, UecmResult};
+use rusqlite::OptionalExtension;
 
 pub fn handle(ctx: &mut Ctx<'_>, action: ProjectAction) -> UecmResult<()> {
     match action {
@@ -23,8 +25,8 @@ pub fn handle(ctx: &mut Ctx<'_>, action: ProjectAction) -> UecmResult<()> {
         ProjectAction::SetLocation { project_id, machine_id, abs_path, uproject_path, manual_path } => {
             set_location(ctx, project_id, machine_id, &abs_path, &uproject_path, manual_path)
         }
-        ProjectAction::Delete { id, yes } => delete(ctx, id, yes),
-        ProjectAction::DeleteLocation { id, yes } => delete_location(ctx, id, yes),
+        ProjectAction::Delete { id, yes, dry_run } => delete(ctx, id, yes, dry_run),
+        ProjectAction::DeleteLocation { id, yes, dry_run } => delete_location(ctx, id, yes, dry_run),
     }
 }
 
@@ -157,15 +159,23 @@ fn set_location(
     Ok(())
 }
 
-fn delete(ctx: &mut Ctx<'_>, id: i64, yes: bool) -> UecmResult<()> {
-    if !yes {
-        return Err(UecmError::InvalidInput(
-            "project delete is destructive; pass --yes to confirm".into(),
-        ));
-    }
+fn delete(ctx: &mut Ctx<'_>, id: i64, yes: bool, dry_run: bool) -> UecmResult<()> {
+    let outcome = destructive::check(yes, dry_run, "project.delete")?;
     let db = ctx.require_db()?;
     if data_projects::get(db, id)?.is_none() {
         return Err(UecmError::InvalidInput(format!("project id={} not found", id)));
+    }
+    if outcome == Outcome::DryRun {
+        let locations = data_locations::list_by_project(db, id)?;
+        destructive::emit_plan(
+            ctx.emitter.as_mut(),
+            "project.delete",
+            serde_json::json!({
+                "id": id,
+                "cascade_locations": locations.len(),
+            }),
+        );
+        return Ok(());
     }
     data_projects::delete(db, id)?;
     ctx.emitter
@@ -176,13 +186,38 @@ fn delete(ctx: &mut Ctx<'_>, id: i64, yes: bool) -> UecmResult<()> {
     Ok(())
 }
 
-fn delete_location(ctx: &mut Ctx<'_>, id: i64, yes: bool) -> UecmResult<()> {
-    if !yes {
-        return Err(UecmError::InvalidInput(
-            "project delete-location is destructive; pass --yes to confirm".into(),
-        ));
-    }
+fn delete_location(ctx: &mut Ctx<'_>, id: i64, yes: bool, dry_run: bool) -> UecmResult<()> {
+    let outcome = destructive::check(yes, dry_run, "project.delete-location")?;
     let db = ctx.require_db()?;
+    // Mirror `project delete` / `machine delete`: refuse to pretend success
+    // on a typo'd id, in both --yes and --dry-run paths. `project_locations`
+    // has no `find_by_id` helper in the data layer; query inline to avoid
+    // adding new data:: functions.
+    let row: Option<(i64, i64)> = {
+        let conn = db.lock().unwrap();
+        conn.query_row(
+            "SELECT project_id, machine_id FROM project_locations WHERE id = ?",
+            rusqlite::params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(crate::error::UecmError::from)?
+    };
+    let (project_id, machine_id) = row.ok_or_else(|| {
+        UecmError::InvalidInput(format!("project_location id={} not found", id))
+    })?;
+    if outcome == Outcome::DryRun {
+        destructive::emit_plan(
+            ctx.emitter.as_mut(),
+            "project.delete-location",
+            serde_json::json!({
+                "id": id,
+                "project_id": project_id,
+                "machine_id": machine_id,
+            }),
+        );
+        return Ok(());
+    }
     data_locations::delete(db, id)?;
     ctx.emitter
         .emit_event(&Event::Completed {

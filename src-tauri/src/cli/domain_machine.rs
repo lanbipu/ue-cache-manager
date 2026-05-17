@@ -1,6 +1,7 @@
 //! `uecm-cli machine <action>` handlers.
 
 use crate::cli::args::MachineAction;
+use crate::cli::destructive::{self, Outcome};
 use crate::cli::output::Event;
 use crate::cli::run::Ctx;
 use crate::cli::EmitSerialize;
@@ -16,7 +17,7 @@ pub fn handle(ctx: &mut Ctx<'_>, action: MachineAction) -> UecmResult<()> {
         MachineAction::Add { ip, hostname } => add(ctx, ip, hostname),
         MachineAction::Refresh { id, cred } => refresh(ctx, id, &cred),
         MachineAction::Detail { id } => detail(ctx, id),
-        MachineAction::Delete { id, yes } => delete(ctx, id, yes),
+        MachineAction::Delete { id, yes, dry_run } => delete(ctx, id, yes, dry_run),
         MachineAction::Rename { id, hostname } => rename(ctx, id, hostname),
     }
 }
@@ -77,12 +78,8 @@ fn detail(ctx: &mut Ctx<'_>, id: i64) -> UecmResult<()> {
     Ok(())
 }
 
-fn delete(ctx: &mut Ctx<'_>, id: i64, yes: bool) -> UecmResult<()> {
-    if !yes {
-        return Err(UecmError::InvalidInput(
-            "delete is destructive; pass --yes to confirm".into(),
-        ));
-    }
+fn delete(ctx: &mut Ctx<'_>, id: i64, yes: bool, dry_run: bool) -> UecmResult<()> {
+    let outcome = destructive::check(yes, dry_run, "machine.delete")?;
 
     let db = ctx.require_db()?;
     // Check existence first so a typo / repeated delete fails loudly instead
@@ -93,6 +90,16 @@ fn delete(ctx: &mut Ctx<'_>, id: i64, yes: bool) -> UecmResult<()> {
             id
         )));
     }
+
+    if outcome == Outcome::DryRun {
+        destructive::emit_plan(
+            ctx.emitter.as_mut(),
+            "machine.delete",
+            json!({ "id": id }),
+        );
+        return Ok(());
+    }
+
     machines::delete(db, id)?;
 
     let summary = json!({
@@ -352,7 +359,7 @@ mod tests {
         rename(&mut ctx, 1, "renamed-host".to_string()).expect("rename should succeed");
 
         // Delete should work
-        delete(&mut ctx, 1, true).expect("delete should succeed");
+        delete(&mut ctx, 1, true, false).expect("delete should succeed");
 
         // Verify that we got past all operations
         // (output checking omitted as NdjsonEmitter writes to a moved buffer)
@@ -369,9 +376,9 @@ mod tests {
             json_mode: true,
         };
 
-        // Try to delete without --yes
-        let result = delete(&mut ctx, 1, false);
-        assert!(result.is_err(), "delete without --yes should fail");
+        // Try to delete without --yes or --dry-run
+        let result = delete(&mut ctx, 1, false, false);
+        assert!(result.is_err(), "delete without --yes or --dry-run should fail");
 
         if let Err(UecmError::InvalidInput(msg)) = result {
             assert!(

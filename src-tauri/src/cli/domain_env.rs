@@ -2,6 +2,7 @@
 
 use crate::cli::args::EnvAction;
 use crate::cli::credential_args::CredentialArgs;
+use crate::cli::destructive::{self, Outcome};
 use crate::cli::host_args::HostTarget;
 use crate::cli::output::{EmitSerialize, Event};
 use crate::cli::run::Ctx;
@@ -33,8 +34,31 @@ struct EnvGetOut<'a> {
 pub fn handle(ctx: &mut Ctx<'_>, action: EnvAction) -> UecmResult<()> {
     match action {
         EnvAction::Get { host, name, cred } => get(ctx, &host, &name, &cred),
-        EnvAction::Set { target, name, value, cred } => {
+        EnvAction::Set { target, name, value, yes, dry_run, cred } => {
             let t = target.require_one()?;
+            let outcome = destructive::check(yes, dry_run, "env.set")?;
+            // Preflight: validate alias / flag combo WITHOUT reading stdin or
+            // DPAPI. The real --yes path's `cred.resolve()` consumes
+            // `--pass-stdin`, so we can't resolve here without breaking that.
+            let db = ctx.require_db()?;
+            cred.preflight(db)?;
+            if outcome == Outcome::DryRun {
+                let hosts: Vec<String> = match &t {
+                    HostTarget::Single(h) => vec![h.clone()],
+                    HostTarget::Batch(hs) => hs.clone(),
+                };
+                destructive::emit_plan(
+                    ctx.emitter.as_mut(),
+                    "env.set",
+                    serde_json::json!({
+                        "hosts": hosts,
+                        "name": name,
+                        "value_len": value.chars().count(),
+                        "value_sha256_prefix": value_sha256_prefix(&value),
+                    }),
+                );
+                return Ok(());
+            }
             match t {
                 HostTarget::Single(h) => set_single(ctx, &h, &name, &value, &cred),
                 HostTarget::Batch(hs) => set_batch(ctx, &hs, &name, &value, &cred),

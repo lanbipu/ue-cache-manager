@@ -133,6 +133,7 @@ pub fn run(cli: Cli) -> i32 {
 
 fn finish_error(err: &UecmError, json: bool) -> i32 {
     if json {
+        // `NdjsonEmitter::new` routes errors to stderr per spec §4.
         let mut e = NdjsonEmitter::new(io::stdout().lock());
         e.emit_error(err);
     } else {
