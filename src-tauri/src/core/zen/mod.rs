@@ -6,3 +6,4 @@
 //! we never produce CB ourselves.
 
 pub mod cb_parser;
+pub mod lockfile;
