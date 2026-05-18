@@ -117,7 +117,7 @@ pub fn run_health_check(
                 summary.offline += 1; summary.total += 8;
                 let mut row = HashMap::<String, CheckOutcome>::new();
                 for k in ["smb","firewall_445","share_reachable","ntfs_perm","cred_user","cred_system","env_vars","system_write"] {
-                    row.insert(k.into(), CheckOutcome { status: "offline".into(), message: e.to_string(), sample: "".into() });
+                    row.insert(k.into(), CheckOutcome { status: "offline".into(), message: e.to_string(), sample: "".into(), remediation: String::new() });
                 }
                 health_check_runs::upsert(&db, scan_id, mid, &serde_json::to_value(&row).unwrap())?;
                 continue;
@@ -132,7 +132,7 @@ pub fn run_health_check(
         );
 
         let gpu_outcome = gpu_report.outcomes.get(&mid).cloned()
-            .unwrap_or(CheckOutcome { status: "unknown".into(), message: "no GPU data".into(), sample: "".into() });
+            .unwrap_or(CheckOutcome { status: "unknown".into(), message: "no GPU data".into(), sample: "".into(), remediation: String::new() });
 
         let mut row: HashMap<String, CheckOutcome> = probes;
         row.insert("ini_consistency".into(), ini_outcome);
@@ -167,7 +167,7 @@ pub fn run_health_check(
 fn derive_ini_outcome(db: &Db, machine_id: i64) -> UecmResult<CheckOutcome> {
     let recent = scan_runs::list_recent(db, "ini", 1)?;
     let Some(latest) = recent.first() else {
-        return Ok(CheckOutcome { status: "unknown".into(), message: "no INI scan run yet".into(), sample: "".into() });
+        return Ok(CheckOutcome { status: "unknown".into(), message: "no INI scan run yet".into(), sample: "".into(), remediation: String::new() });
     };
     let counts = ini_findings::count_by_severity_for_machine(db, latest.id.unwrap(), machine_id)?;
     let status = if counts.critical > 0 { "critical" }
@@ -177,6 +177,7 @@ fn derive_ini_outcome(db: &Db, machine_id: i64) -> UecmResult<CheckOutcome> {
         status: status.into(),
         message: format!("{} critical / {} warning open", counts.critical, counts.warning),
         sample: format!("scan_run #{}", latest.id.unwrap()),
+        remediation: String::new(),
     })
 }
 
@@ -191,6 +192,7 @@ fn derive_pso_cvar_outcome(
             status: "na".into(),
             message: "no project paths supplied".into(),
             sample: "".into(),
+            remediation: String::new(),
         };
     }
     let target = ini_scanner::TargetFile {
@@ -199,17 +201,17 @@ fn derive_pso_cvar_outcome(
     };
     let parsed = match ini_scanner::read_file(host, &target, Some((username, password))) {
         Ok(Some(pf)) => pf,
-        Ok(None) => return CheckOutcome { status: "warning".into(), message: "ConsoleVariables.ini missing".into(), sample: target.path },
-        Err(e) => return CheckOutcome { status: "offline".into(), message: e.to_string(), sample: target.path },
+        Ok(None) => return CheckOutcome { status: "warning".into(), message: "ConsoleVariables.ini missing".into(), sample: target.path, remediation: String::new() },
+        Err(e) => return CheckOutcome { status: "offline".into(), message: e.to_string(), sample: target.path, remediation: String::new() },
     };
     let cvar_value = parsed.sections.iter()
         .flat_map(|s| s.keys.iter())
         .find(|k| k.name.eq_ignore_ascii_case("r.PSOPrecaching"))
         .map(|k| k.value.clone());
     match cvar_value.as_deref() {
-        Some("1") => CheckOutcome { status: "healthy".into(), message: "r.PSOPrecaching=1".into(), sample: parsed.path },
-        Some(other) => CheckOutcome { status: "warning".into(), message: format!("r.PSOPrecaching={}", other), sample: parsed.path },
-        None => CheckOutcome { status: "warning".into(), message: "r.PSOPrecaching not set".into(), sample: parsed.path },
+        Some("1") => CheckOutcome { status: "healthy".into(), message: "r.PSOPrecaching=1".into(), sample: parsed.path, remediation: String::new() },
+        Some(other) => CheckOutcome { status: "warning".into(), message: format!("r.PSOPrecaching={}", other), sample: parsed.path, remediation: String::new() },
+        None => CheckOutcome { status: "warning".into(), message: "r.PSOPrecaching not set".into(), sample: parsed.path, remediation: String::new() },
     }
 }
 

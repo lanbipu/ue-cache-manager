@@ -9,6 +9,8 @@ pub struct CheckOutcome {
     pub status: String,
     pub message: String,
     pub sample: String,
+    #[serde(default)]
+    pub remediation: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -51,6 +53,15 @@ pub fn aggregate_gpu_consistency(gpus: &[GpuInfo]) -> GpuConsistencyReport {
                 g.gpu_model, g.driver_version, same_combo, total
             ),
             sample: format!("{} / {}", g.gpu_model, g.driver_version),
+            remediation: if status == "critical" {
+                "Standardize GPU + driver across cluster, or split into compatible subgroups before PSO distribute"
+                    .into()
+            } else if status == "warning" {
+                "Align driver versions cluster-wide via `nvidia-smi --query` audit + matched installer rollout"
+                    .into()
+            } else {
+                String::new()
+            },
         });
     }
     GpuConsistencyReport { outcomes }
@@ -98,5 +109,24 @@ mod tests {
     fn machine_with_no_gpu_data_is_unknown() {
         let report = aggregate_gpu_consistency(&[]);
         assert!(report.outcomes.is_empty());
+    }
+
+    #[test]
+    fn check_outcome_serializes_remediation_field() {
+        let outcome = CheckOutcome {
+            status: "critical".into(),
+            message: "LanmanServer stopped".into(),
+            sample: "Stopped".into(),
+            remediation: "Start the service: Start-Service LanmanServer".into(),
+        };
+        let json = serde_json::to_string(&outcome).unwrap();
+        assert!(json.contains("\"remediation\":\"Start the service: Start-Service LanmanServer\""));
+    }
+
+    #[test]
+    fn check_outcome_deserializes_missing_remediation_as_empty() {
+        let json = r#"{"status":"healthy","message":"","sample":""}"#;
+        let outcome: CheckOutcome = serde_json::from_str(json).unwrap();
+        assert_eq!(outcome.remediation, "");
     }
 }

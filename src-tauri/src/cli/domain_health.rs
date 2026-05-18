@@ -128,6 +128,7 @@ fn run(ctx: &mut Ctx<'_>, machine_ids: &[i64], cred: &CredentialArgs) -> UecmRes
                             status: "offline".into(),
                             message: e.to_string(),
                             sample: "".into(),
+                            remediation: String::new(),
                         },
                     );
                 }
@@ -159,6 +160,7 @@ fn run(ctx: &mut Ctx<'_>, machine_ids: &[i64], cred: &CredentialArgs) -> UecmRes
             status: "na".into(),
             message: "no project paths supplied via CLI".into(),
             sample: "".into(),
+            remediation: String::new(),
         };
         let gpu_outcome = gpu_report
             .outcomes
@@ -168,6 +170,7 @@ fn run(ctx: &mut Ctx<'_>, machine_ids: &[i64], cred: &CredentialArgs) -> UecmRes
                 status: "unknown".into(),
                 message: "no GPU data".into(),
                 sample: "".into(),
+                remediation: String::new(),
             });
 
         let mut row = probes;
@@ -236,6 +239,7 @@ fn derive_ini_outcome(
             status: "unknown".into(),
             message: "no INI scan run yet".into(),
             sample: "".into(),
+            remediation: String::new(),
         });
     };
     let counts =
@@ -254,6 +258,7 @@ fn derive_ini_outcome(
             counts.critical, counts.warning
         ),
         sample: format!("scan_run #{}", latest.id.unwrap()),
+        remediation: String::new(),
     })
 }
 
