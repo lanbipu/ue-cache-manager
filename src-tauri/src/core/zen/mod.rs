@@ -10,6 +10,7 @@ pub mod cache_stats;
 pub mod cb_parser;
 pub mod endpoint;
 pub mod lockfile;
+pub mod lua_config;
 pub mod probe;
 pub mod retention;
 
