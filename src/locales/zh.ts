@@ -48,6 +48,7 @@ const messages: MessageSchema = {
     iniScanner: "INI 扫描",
     healthCheck: "健康检查",
     deploy: "DDC 部署",
+    diagnostics: "诊断",
   },
   shell: {
     appName: "UE 缓存管理器",
@@ -444,8 +445,8 @@ const messages: MessageSchema = {
     s1: { title: "1. 选择项目和机器", project: "项目", sourceHost: "开发机 / 预热机", targets: "目标 Render Node" },
     s2: { title: "2. Local DDC 配置", localPath: "Local 缓存目录" },
     s3: { title: "3. Shared SMB 共享", serverHost: "共享 server 主机", shareName: "共享名", sharePath: "server 本地路径", mode: "模式", modeOpen: "A — Open (Guest + Everyone:Full)", modeManaged: "B — Managed (ddc-svc)" },
-    s4: { title: "4. Pak / PSO / 验证", pak: "生成并分发 DDC Pak", pso: "采集并分发 PSO", psoRes: "PSO 分辨率", psoMinutes: "PSO 最大时长 (分钟)", verify: "运行启动日志验证", editorExe: "UnrealEditor.exe 路径", cred: "操作员凭据", stopOnFailure: "首个步骤失败即停止", preview: "预览计划" },
-    s5: { title: "5. 执行", run: "开始执行", running: "执行中..." },
+    s4: { title: "4. Pak / PSO / 验证", pak: "生成并分发 DDC Pak", pso: "采集并分发 PSO", psoRes: "PSO 分辨率", psoMinutes: "PSO 最大时长 (分钟)", verify: "运行启动日志验证", editorExe: "UnrealEditor.exe 路径", uproject: ".uproject 文件路径（可选）", cred: "操作员凭据", stopOnFailure: "首个步骤失败即停止", preview: "预览计划" },
+    s5: { title: "5. 执行", run: "开始执行", running: "执行中...", verifyResults: "启动日志验证结果" },
     step: {
       header: "步骤",
       okFail: "{ok} 成功 · {fail} 失败",
@@ -461,6 +462,14 @@ const messages: MessageSchema = {
       distribute_pso: "分发 PSO",
       verify_startup_logs: "启动日志验证",
     },
+  },
+  diagnostics: {
+    pageTitle: "诊断",
+    pageDesc: "对选中的机器跑 UE / GPU / 驱动 / RHI / RenderStream 一致性核查。",
+    selectHosts: "选择目标机器（至少 2 台）",
+    cred: "凭据",
+    runCheck: "运行一致性检查",
+    running: "运行中…",
   },
   consistency: {
     allMatch: "所有机器配置一致。",

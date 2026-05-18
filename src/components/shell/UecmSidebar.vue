@@ -13,6 +13,7 @@ const { t } = useI18n();
 const navItems = computed(() => [
   { to: "/machines", label: t("nav.machines"), icon: "server" },
   { to: "/deploy", label: t("nav.deploy"), icon: "send" },
+  { to: "/diagnostics", label: t("nav.diagnostics"), icon: "alert-triangle" },
 ]);
 
 const activePath = computed(() => route.path);

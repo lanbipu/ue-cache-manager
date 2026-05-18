@@ -46,6 +46,7 @@ const messages = {
     iniScanner: "INI Scanner",
     healthCheck: "Health Check",
     deploy: "DDC Deploy",
+    diagnostics: "Diagnostics",
   },
   shell: {
     appName: "UE Cache Manager",
@@ -442,8 +443,8 @@ const messages = {
     s1: { title: "1. Project & Machines", project: "Project", sourceHost: "Dev / warmup machine", targets: "Target Render Nodes" },
     s2: { title: "2. Local DDC config", localPath: "Local cache directory" },
     s3: { title: "3. Shared SMB share", serverHost: "Share server host", shareName: "Share name", sharePath: "Server local path", mode: "Mode", modeOpen: "A — Open (Guest + Everyone:Full)", modeManaged: "B — Managed (ddc-svc)" },
-    s4: { title: "4. Pak / PSO / Verify", pak: "Generate and distribute DDC Pak", pso: "Collect and distribute PSO", psoRes: "PSO resolution", psoMinutes: "PSO max duration (minutes)", verify: "Run startup log verify", editorExe: "UnrealEditor.exe path", cred: "Operator credential", stopOnFailure: "Stop on first step failure", preview: "Preview plan" },
-    s5: { title: "5. Execute", run: "Start execution", running: "Running..." },
+    s4: { title: "4. Pak / PSO / Verify", pak: "Generate and distribute DDC Pak", pso: "Collect and distribute PSO", psoRes: "PSO resolution", psoMinutes: "PSO max duration (minutes)", verify: "Run startup log verify", editorExe: "UnrealEditor.exe path", uproject: ".uproject file path (optional)", cred: "Operator credential", stopOnFailure: "Stop on first step failure", preview: "Preview plan" },
+    s5: { title: "5. Execute", run: "Start execution", running: "Running...", verifyResults: "Startup log verify results" },
     step: {
       header: "Step",
       okFail: "{ok} ok · {fail} fail",
@@ -459,6 +460,14 @@ const messages = {
       distribute_pso: "Distribute PSO",
       verify_startup_logs: "Startup log verify",
     },
+  },
+  diagnostics: {
+    pageTitle: "Diagnostics",
+    pageDesc: "Run UE / GPU / driver / RHI / RenderStream consistency check across selected machines.",
+    selectHosts: "Select target machines (at least 2)",
+    cred: "Credential",
+    runCheck: "Run consistency check",
+    running: "Running…",
   },
   consistency: {
     allMatch: "All machines are consistent.",

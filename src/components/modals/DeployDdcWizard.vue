@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "vue-i18n";
 import BaseModal from "./BaseModal.vue";
 import DeployStepIndicator from "@/components/deploy/DeployStepIndicator.vue";
 import DeployProgressTable from "@/components/deploy/DeployProgressTable.vue";
+import DeployVerifyReport from "@/components/deploy/DeployVerifyReport.vue";
 import { useDeployStore } from "@/stores/deploy";
 import { useMachinesStore } from "@/stores/machines";
 import { useProjectsStore } from "@/stores/projects";
@@ -34,8 +36,39 @@ const psoRes = ref("1920x1080");
 const psoMinutes = ref(10);
 const runVerify = ref(true);
 const editorExe = ref("C:\\Program Files\\Epic Games\\UE_5.5\\Engine\\Binaries\\Win64\\UnrealEditor.exe");
+const uproject = ref("");
 const credAlias = ref<string>("");
 const stopOnFailure = ref(true);
+const verifyReports = ref<Array<{ host: string; report: unknown }>>([]);
+
+watch(() => props.open, (isOpen) => {
+  if (isOpen) {
+    step.value = 1;
+    deploy.reset();
+    verifyReports.value = [];
+  }
+});
+
+watch(() => deploy.completed, async (done) => {
+  if (!done || !runVerify.value || !deploy.finalOk) return;
+  verifyReports.value = [];
+  for (const mid of targetMachineIds.value) {
+    const machine = machines.machines.find((m) => m.id === mid);
+    if (!machine) continue;
+    try {
+      const report = await invoke("run_log_verify", {
+        host: machine.hostname,
+        editorExe: editorExe.value,
+        project: uproject.value || `${localPath.value}\\.uproject`,
+        timeout: 180,
+        credentialAlias: credAlias.value || null,
+      });
+      verifyReports.value.push({ host: machine.hostname, report });
+    } catch (e) {
+      console.error(`verify for ${machine.hostname}:`, e);
+    }
+  }
+});
 
 const canRun = computed(() =>
   projectId.value !== null
@@ -148,8 +181,9 @@ async function onRun() { await deploy.run(buildPlan(), credAlias.value, stopOnFa
           </div>
         </div>
         <label class="flex items-center gap-2 text-sm mb-2"><input type="checkbox" v-model="runVerify" /> {{ t("deploy.s4.verify") }}</label>
-        <div v-if="runVerify" class="ml-6 mb-3">
+        <div v-if="runVerify" class="ml-6 mb-3 space-y-2">
           <input v-model="editorExe" :placeholder="t('deploy.s4.editorExe')" class="w-full rounded border border-input bg-transparent px-2 py-1 text-sm" />
+          <input v-model="uproject" :placeholder="t('deploy.s4.uproject')" class="w-full rounded border border-input bg-transparent px-2 py-1 text-sm" />
         </div>
         <label class="block text-sm mb-1 mt-3">{{ t("deploy.s4.cred") }}</label>
         <select v-model="credAlias" class="mb-3 w-full rounded border border-input bg-transparent px-2 py-1 text-sm">
@@ -173,6 +207,14 @@ async function onRun() { await deploy.run(buildPlan(), credAlias.value, stopOnFa
           <button v-if="!deploy.running && !deploy.completed" class="px-4 py-1.5 rounded bg-primary text-primary-foreground text-sm" @click="onRun">{{ t("deploy.s5.run") }}</button>
           <span v-if="deploy.running" class="text-sm text-status-info">{{ t("deploy.s5.running") }}</span>
           <span v-if="deploy.completed" :class="deploy.finalOk ? 'text-status-healthy' : 'text-status-critical'">{{ deploy.summary }}</span>
+        </div>
+        <div v-if="verifyReports.length" class="mt-4 space-y-2">
+          <h4 class="font-display text-sm">{{ t("deploy.s5.verifyResults") }}</h4>
+          <DeployVerifyReport
+            v-for="vr in verifyReports"
+            :key="vr.host"
+            :report="(vr.report as any)"
+          />
         </div>
         <div class="mt-3">
           <button class="px-3 py-1 rounded border border-border text-sm" @click="step = 4" :disabled="deploy.running">{{ t("common.back") }}</button>

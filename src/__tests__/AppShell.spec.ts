@@ -10,7 +10,7 @@ describe("AppShell", () => {
     setActivePinia(createPinia());
   });
 
-  it("renders the machines and deploy nav items in the sidebar", async () => {
+  it("renders the machines, deploy, and diagnostics nav items in the sidebar", async () => {
     const router = createRouter({
       history: createMemoryHistory(),
       routes,
@@ -23,9 +23,10 @@ describe("AppShell", () => {
     });
 
     const navItems = wrapper.findAll("[data-nav-item]");
-    expect(navItems).toHaveLength(2);
+    expect(navItems).toHaveLength(3);
     expect(navItems[0].attributes("href")).toContain("/machines");
     expect(navItems[1].attributes("href")).toContain("/deploy");
+    expect(navItems[2].attributes("href")).toContain("/diagnostics");
   });
 
   it("renders the current route's component in the slot", async () => {
