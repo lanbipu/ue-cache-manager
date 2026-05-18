@@ -63,8 +63,14 @@ fn run_dispatch(
             "health run requires exactly one of: --machine-ids, --cidr, or --all".into(),
         ));
     }
-    if let Some(_) = cidr {
-        return Err(crate::error::UecmError::InvalidInput("--cidr not yet implemented".into()));
+
+    // Build the Tokio runtime once. uecm-cli's main() is sync (uecm-cli.rs:17),
+    // so creating a new runtime here is safe (no outer runtime to conflict with).
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| crate::error::UecmError::OperationFailed(e.to_string()))?;
+
+    if let Some(cidr_str) = cidr {
+        return run_cidr(ctx, &rt, &cidr_str);
     }
     if all {
         let db = ctx.require_db()?.clone();
@@ -74,9 +80,9 @@ fn run_dispatch(
                 "--all requested but inventory is empty (run `uecm-cli machine scan` first)".into(),
             ));
         }
-        return run(ctx, &ids, cred);
+        return run_with_rt(ctx, &rt, &ids, cred);
     }
-    run(ctx, &machine_ids, cred)
+    run_with_rt(ctx, &rt, &machine_ids, cred)
 }
 
 fn resolve_all_machine_ids(db: &crate::data::Db) -> UecmResult<Vec<i64>> {
@@ -86,7 +92,12 @@ fn resolve_all_machine_ids(db: &crate::data::Db) -> UecmResult<Vec<i64>> {
         .collect())
 }
 
-fn run(ctx: &mut Ctx<'_>, machine_ids: &[i64], cred: &CredentialArgs) -> UecmResult<()> {
+fn run_with_rt(
+    ctx: &mut Ctx<'_>,
+    _rt: &tokio::runtime::Runtime,
+    machine_ids: &[i64],
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
     let db = ctx.require_db()?.clone();
 
     // Resolve credentials first (needs DB for alias lookup).
@@ -288,6 +299,94 @@ fn run(ctx: &mut Ctx<'_>, machine_ids: &[i64], cred: &CredentialArgs) -> UecmRes
     Ok(())
 }
 
+fn run_cidr(ctx: &mut Ctx<'_>, rt: &tokio::runtime::Runtime, cidr: &str) -> UecmResult<()> {
+    let outcomes = rt.block_on(scan_and_probe_l1(cidr, 1000))?;
+
+    ctx.emitter
+        .emit_event(&Event::Started {
+            task_type: "health_run_cidr".into(),
+            task_id: None,
+            metadata: serde_json::json!({
+                "cidr": cidr,
+                "hosts": outcomes.len(),
+                "note": "CIDR mode probes every IP in range (including all-closed). L1 only — no creds, no DB persistence."
+            }),
+        })
+        .ok();
+
+    let total = outcomes.len() as i64;
+    let mut hosts_with_any_open = 0i64;
+    for (idx, (ip, port_outcomes)) in outcomes.iter().enumerate() {
+        let any_open = port_outcomes.values().any(|o| o.status == "healthy");
+        if any_open { hosts_with_any_open += 1; }
+        ctx.emitter
+            .emit_event(&Event::ItemCompleted {
+                item_id: format!("ip:{}", ip),
+                index: idx as i64,
+                ok: any_open,
+                message: Some(serde_json::to_string(port_outcomes).unwrap_or_default()),
+            })
+            .ok();
+    }
+
+    let summary = serde_json::json!({
+        "mode": "cidr",
+        "cidr": cidr,
+        "hosts_total": total,
+        "hosts_with_any_open_port": hosts_with_any_open,
+        "persisted": false,
+        "next_step": "For deeper L2+L3 diagnosis, run `uecm-cli machine add --ip <X>` to inventory the host, then `uecm-cli health run --machine-ids <id> --cred-alias <alias>`."
+    });
+    ctx.emitter.emit_event(&Event::Completed { summary }).ok();
+    Ok(())
+}
+
+/// CIDR-mode L1 scan: probe every IP in the CIDR range (including fully-closed
+/// hosts), return outcomes per IP. Unlike `core::network::scan_cidr` which
+/// filters out fully-closed hosts, we keep them — operators want "this IP is
+/// dark" as an answer too.
+///
+/// Concurrency capped at 50 (same as scan_cidr) to avoid socket exhaustion.
+async fn scan_and_probe_l1(
+    cidr: &str,
+    timeout_ms: u64,
+) -> UecmResult<Vec<(String, std::collections::HashMap<String, crate::core::health_check::CheckOutcome>)>> {
+    use ipnet::Ipv4Net;
+    use std::str::FromStr;
+    use std::sync::Arc;
+    use tokio::sync::Semaphore;
+
+    let net = Ipv4Net::from_str(cidr).map_err(|e| {
+        crate::error::UecmError::InvalidInput(format!("invalid CIDR '{}': {}", cidr, e))
+    })?;
+    let hosts: Vec<String> = net.hosts().map(|ip| ip.to_string()).collect();
+    if hosts.len() > crate::core::network::MAX_HOSTS {
+        return Err(crate::error::UecmError::InvalidInput(format!(
+            "CIDR expands to {} hosts (max {})",
+            hosts.len(),
+            crate::core::network::MAX_HOSTS
+        )));
+    }
+
+    let semaphore = Arc::new(Semaphore::new(50));
+    let mut handles = Vec::with_capacity(hosts.len());
+    for ip in hosts {
+        let sem = semaphore.clone();
+        handles.push(tokio::spawn(async move {
+            let _permit = sem.acquire_owned().await.ok()?;
+            let outcomes = crate::core::health_check::probe_tcp_ports(&ip, timeout_ms).await;
+            Some((ip, outcomes))
+        }));
+    }
+    let mut out = Vec::with_capacity(handles.len());
+    for h in handles {
+        if let Ok(Some(pair)) = h.await {
+            out.push(pair);
+        }
+    }
+    Ok(out)
+}
+
 fn derive_ini_outcome(
     db: &crate::data::Db,
     machine_id: i64,
@@ -405,5 +504,27 @@ mod tests {
             schema::migrate(&mut conn).unwrap();
         }
         assert_eq!(super::resolve_all_machine_ids(&db).unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn scan_and_probe_l1_returns_one_outcome_set_per_ip() {
+        // /30 in TEST-NET-3 yields 2 usable hosts; all closed, all kept.
+        let outcomes = super::scan_and_probe_l1("203.0.113.0/30", 50).await.unwrap();
+        assert_eq!(outcomes.len(), 2, "expected /30 to yield 2 hosts, got {}", outcomes.len());
+        for (ip, port_outcomes) in &outcomes {
+            assert!(ip.starts_with("203.0.113."));
+            assert_eq!(port_outcomes.len(), 3, "expected 3 L1 keys per IP");
+            assert!(port_outcomes.contains_key("tcp_5985"));
+            assert!(port_outcomes.contains_key("tcp_445"));
+            assert!(port_outcomes.contains_key("tcp_135"));
+        }
+    }
+
+    #[test]
+    fn cidr_too_large_returns_invalid_input() {
+        // /16 = 65534 hosts, blocked by MAX_HOSTS guard.
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let r = rt.block_on(super::scan_and_probe_l1("10.0.0.0/16", 50));
+        assert!(matches!(r, Err(crate::error::UecmError::InvalidInput(_))));
     }
 }
