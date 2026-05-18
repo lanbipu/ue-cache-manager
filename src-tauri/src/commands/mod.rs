@@ -1,6 +1,7 @@
 pub mod batch;
 pub mod bootstrap;
 pub mod credentials;
+pub mod deploy;
 pub mod ddc_pak;
 pub mod discovery;
 pub mod env_vars;

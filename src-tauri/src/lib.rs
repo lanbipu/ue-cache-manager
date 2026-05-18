@@ -91,6 +91,8 @@ pub fn run() {
             commands::health_check::list_recent_health_runs,
             commands::health_check::list_health_results_for_run,
             commands::log_verify::run_log_verify,
+            commands::deploy::deploy_ddc_run,
+            commands::deploy::deploy_ddc_plan_preview,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
