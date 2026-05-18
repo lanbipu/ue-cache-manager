@@ -13,6 +13,7 @@ pub mod lockfile;
 pub mod lua_config;
 pub mod probe;
 pub mod redaction;
+pub mod rules_loader;
 pub mod retention;
 
 #[cfg(test)]
