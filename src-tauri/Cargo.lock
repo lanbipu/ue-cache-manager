@@ -4004,6 +4004,7 @@ dependencies = [
  "encoding_rs",
  "ipnet",
  "rand",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",
