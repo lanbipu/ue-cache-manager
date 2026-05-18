@@ -24,6 +24,7 @@ pub mod pso_collect;
 pub mod pso_distribute;
 pub mod psexec;
 pub mod shares;
+pub mod ue_log_parser;
 pub mod ue_runner;
 pub mod winrm;
 
