@@ -86,13 +86,16 @@ pub fn find(db: &Db, machine_id: i64) -> UecmResult<Option<MachineZenInstall>> {
     }
 }
 
-pub fn delete(db: &Db, machine_id: i64) -> UecmResult<()> {
+/// Returns true when a row was deleted, false when none existed for this
+/// machine. Callers use the bool to decide whether to log "cleared stale
+/// state" vs no-op (T1.6 install-uninstalled handling).
+pub fn delete(db: &Db, machine_id: i64) -> UecmResult<bool> {
     let conn = db.lock().unwrap();
-    conn.execute(
+    let rows = conn.execute(
         "DELETE FROM machine_zen_install WHERE machine_id = ?",
         params![machine_id],
     )?;
-    Ok(())
+    Ok(rows > 0)
 }
 
 fn machine_zen_install_from_row(

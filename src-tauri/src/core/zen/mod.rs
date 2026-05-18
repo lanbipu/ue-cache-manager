@@ -5,6 +5,7 @@
 //! format. Submodules here implement a read-only mini-parser for that format;
 //! we never produce CB ourselves.
 
+pub mod binary;
 pub mod cache_stats;
 pub mod cb_parser;
 pub mod lockfile;
