@@ -24,6 +24,7 @@ pub mod project_identity;
 pub mod pso_collect;
 pub mod pso_distribute;
 pub mod psexec;
+pub mod renderstream_service;
 pub mod shares;
 pub mod ue_log_parser;
 pub mod ue_log_verify;
