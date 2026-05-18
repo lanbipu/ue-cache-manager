@@ -9,6 +9,7 @@ pub mod cache_stats;
 pub mod cb_parser;
 pub mod lockfile;
 pub mod probe;
+pub mod retention;
 
 #[cfg(test)]
 pub mod test_http;
