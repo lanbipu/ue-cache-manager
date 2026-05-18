@@ -120,6 +120,33 @@ try {
             $status = if ($value -eq $Expected) { 'healthy' } else { 'critical' }
             @{ status = $status; message = "expected $Expected, got $value"; sample = "$value" }
         }
+        function Probe-RsService {
+            $patterns = @('d3service%','%RenderStream%','%disguise%')
+            $found = New-Object System.Collections.Generic.List[object]
+            foreach ($p in $patterns) {
+                $svcs = Get-CimInstance Win32_Service -Filter "Name LIKE '$p'" -ErrorAction SilentlyContinue
+                foreach ($svc in $svcs) {
+                    $exists = $found.Where({ $_.Name -eq $svc.Name }).Count -gt 0
+                    if (-not $exists) {
+                        $found.Add([pscustomobject]@{ Name = $svc.Name; StartName = $svc.StartName; State = $svc.State }) | Out-Null
+                    }
+                }
+            }
+            if ($found.Count -eq 0) {
+                return @{ status = 'na'; message = 'no RenderStream service detected'; sample = '' }
+            }
+            $risks = @()
+            foreach ($s in $found) {
+                $acct = $s.StartName.ToLower()
+                if ($acct -eq 'localsystem' -or $acct -eq '.\localsystem') {
+                    $risks += "$($s.Name) runs as LocalSystem"
+                }
+            }
+            $names = ($found | ForEach-Object { $_.Name }) -join ', '
+            $status = if ($risks.Count -gt 0) { 'warning' } else { 'healthy' }
+            $msg = if ($risks.Count -gt 0) { $risks -join '; ' } else { "services: $names" }
+            @{ status = $status; message = $msg; sample = $names }
+        }
         function Probe-SystemWrite {
             if ([string]::IsNullOrEmpty($ShareUnc)) {
                 return @{ status='na'; message='no share configured'; sample='' }
@@ -149,6 +176,7 @@ try {
             env_vars         = (Probe-EnvShared -Expected $ExpectedSharedDataCachePath)
             env_shared       = (Probe-EnvShared -Expected $ExpectedSharedDataCachePath)
             env_local        = (Probe-EnvLocal  -Expected $ExpectedLocalDataCachePath)
+            rs_service       = (Probe-RsService)
             system_write     = (Probe-SystemWrite)
         }
         return $results
