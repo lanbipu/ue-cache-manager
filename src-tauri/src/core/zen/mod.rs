@@ -5,6 +5,10 @@
 //! format. Submodules here implement a read-only mini-parser for that format;
 //! we never produce CB ourselves.
 
+pub mod cache_stats;
 pub mod cb_parser;
 pub mod lockfile;
 pub mod probe;
+
+#[cfg(test)]
+pub mod test_http;
