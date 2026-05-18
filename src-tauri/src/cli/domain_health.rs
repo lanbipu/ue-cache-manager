@@ -44,6 +44,42 @@ pub fn handle(ctx: &mut Ctx<'_>, action: HealthAction) -> UecmResult<()> {
             ctx.emitter.emit_result(&hits).ok();
             Ok(())
         }
+        HealthAction::FileStats { host, local_path, shared_path, cred } => {
+            let db = ctx.require_db()?;
+            let creds = cred.resolve(db)?;
+            let stats = crate::core::ddc_file_stats::run(
+                &host,
+                &local_path,
+                &shared_path,
+                creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
+            )?;
+            let imbalance = crate::core::ddc_file_stats::classify_imbalance(&stats);
+            ctx.emitter.emit_result(&serde_json::json!({
+                "stats": stats,
+                "imbalance": imbalance,
+            })).ok();
+            Ok(())
+        }
+        HealthAction::AnalyzeAdvisories {
+            host, editor_exe, project, local_path, shared_path, timeout, cred,
+        } => {
+            let db = ctx.require_db()?;
+            let creds = cred.resolve(db)?;
+            let creds_ref = creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str()));
+            let verify = crate::core::ue_log_verify::run_for_host(
+                &host, &editor_exe, &project, timeout, creds_ref,
+            )?;
+            let stats = crate::core::ddc_file_stats::run(
+                &host, &local_path, &shared_path, creds_ref,
+            ).ok();
+            let advisories = crate::core::ddc_symptom_recognizer::analyze(&verify, stats.as_ref());
+            ctx.emitter.emit_result(&serde_json::json!({
+                "verify": verify,
+                "stats": stats,
+                "advisories": advisories,
+            })).ok();
+            Ok(())
+        }
     }
 }
 

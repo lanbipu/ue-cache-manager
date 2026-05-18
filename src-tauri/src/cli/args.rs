@@ -574,6 +574,34 @@ pub enum HealthAction {
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
+    /// Local vs Shared DDC file count + total size probe, with imbalance classifier.
+    FileStats {
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        local_path: String,
+        #[arg(long)]
+        shared_path: String,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Run log verification + file stats then emit symptom advisories (S001-S005).
+    AnalyzeAdvisories {
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        editor_exe: String,
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        local_path: String,
+        #[arg(long)]
+        shared_path: String,
+        #[arg(long, default_value_t = 180)]
+        timeout: u32,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
 }
 
 // ---------- gpu ----------
@@ -956,6 +984,42 @@ mod tests {
         ]).unwrap();
         match cli.command {
             Domain::Health { action: HealthAction::ScanCommandLine { host, .. } } => {
+                assert_eq!(host, "RENDER-01");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_health_file_stats() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "health", "file-stats",
+            "--host", "RENDER-01",
+            "--local-path", r"D:\UE-DDC-Local",
+            "--shared-path", r"\\NAS\DDC",
+            "--cred-alias", "admin",
+        ]).unwrap();
+        match cli.command {
+            Domain::Health { action: HealthAction::FileStats { host, .. } } => {
+                assert_eq!(host, "RENDER-01");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_health_analyze_advisories() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "health", "analyze-advisories",
+            "--host", "RENDER-01",
+            "--editor-exe", r"C:\UE\UnrealEditor.exe",
+            "--project", r"D:\Proj\Foo.uproject",
+            "--local-path", r"D:\UE-DDC-Local",
+            "--shared-path", r"\\NAS\DDC",
+            "--cred-alias", "admin",
+        ]).unwrap();
+        match cli.command {
+            Domain::Health { action: HealthAction::AnalyzeAdvisories { host, .. } } => {
                 assert_eq!(host, "RENDER-01");
             }
             _ => panic!("wrong variant"),
