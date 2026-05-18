@@ -631,9 +631,9 @@
           <circle class="mm-leaf-dot" cx="740" cy="646" r="3" />
           <text x="752" y="650"><tspan class="mm-leaf-cmd">ini apply-finding</tspan><tspan class="mm-leaf-note" dx="6">· 一键修复，自动 .bak 备份</tspan></text>
           <circle class="mm-leaf-dot" cx="740" cy="674" r="3" />
-          <text x="752" y="678"><tspan class="mm-leaf-cmd">health run</tspan><tspan class="mm-leaf-note" dx="6">· 8 个 active probe + 3 个 derived 指标</tspan></text>
+          <text x="752" y="678"><tspan class="mm-leaf-cmd">health run</tspan><tspan class="mm-leaf-note" dx="6">· 3 模式（cidr/all/machine-ids）· 17 项 L1+L2+L3 + 修复建议</tspan></text>
           <circle class="mm-leaf-dot" cx="740" cy="702" r="3" />
-          <text x="752" y="706"><tspan class="mm-leaf-cmd">health results</tspan><tspan class="mm-leaf-note" dx="6">· 输出 N 机 × 11 行矩阵</tspan></text>
+          <text x="752" y="706"><tspan class="mm-leaf-cmd">health results</tspan><tspan class="mm-leaf-note" dx="6">· 输出 N 机 × 17 行矩阵</tspan></text>
         </g>
       </svg>
     </div>
@@ -864,11 +864,12 @@
         <div class="pkind">5b · Health Check</div>
         <h3 class="ptitle">运行可达性</h3>
         <p class="pdesc">
-          <strong>8 个 PowerShell active probe</strong>（<span class="k">smb</span> / <span class="k">le</span> / <span class="k">ntfs_perm</span> / <span class="k">cred_user</span> / <span class="k">cred_system</span> / <span class="k">env_vars</span> / <span class="k">system_write</span>）+ 3 个 derived 指标（<span class="k">ini_consistency</span> / <span class="k">pso_precaching</span> / <span class="k">gpu_consistency</span>），输出 <strong>N 机 × 11 行</strong>矩阵。
+          分三层垂直体检（共 17 项）：<strong>L1 端口</strong>（<span class="k">tcp_5985</span> / <span class="k">tcp_445</span> / <span class="k">tcp_135</span>）+ <strong>L2 Bootstrap</strong>（<span class="k">firewall_445</span> / <span class="k">local_account_token_filter</span> / <span class="k">long_paths_enabled</span> / <span class="k">lanman_server</span>）+ <strong>L3 业务</strong>（<span class="k">share_reachable</span> / <span class="k">ntfs_perm</span> / <span class="k">cred_user</span> / <span class="k">cred_system</span> / <span class="k">env_vars</span> / <span class="k">system_write</span> / <span class="k">winmgmt</span> + 3 derived <span class="k">ini_consistency</span> / <span class="k">pso_precaching</span> / <span class="k">gpu_consistency</span>）。每行红色状态自带 <span class="k">remediation</span> 文案，告诉操作员下一步该跑哪个 CLI。输出 <strong>N 机 × 17 行</strong>矩阵。
         </p>
-        <div class="pstat"><span class="n">8</span> active · <span class="n">3</span> derived · N×<span class="n">11</span> 矩阵</div>
+        <div class="pstat"><span class="n">3</span> L1 + <span class="n">4</span> L2 + <span class="n">7</span> L3 + <span class="n">3</span> derived · N×<span class="n">17</span> 矩阵 · 每行带 remediation</div>
         <div class="pcmd">
-          <div><span class="prompt">$</span> uecm-cli health run <span class="arg">--all</span></div>
+          <div><span class="prompt">$</span> uecm-cli health run <span class="arg">--cidr 192.168.10.0/24</span></div>
+          <div><span class="prompt">$</span> uecm-cli health run <span class="arg">--all --cred-alias prod</span></div>
           <div><span class="prompt">$</span> uecm-cli health results <span class="arg">--format matrix</span></div>
         </div>
       </div>
