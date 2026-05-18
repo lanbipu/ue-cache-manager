@@ -12,6 +12,32 @@ use crate::data::{
 use crate::error::UecmResult;
 use std::collections::HashMap;
 
+/// Tally health probe outcomes by status. `na` is segregated into `skipped` so
+/// the summary distinguishes "probe ran and succeeded" from "probe was not run
+/// (e.g. no creds, no share configured)".
+#[derive(Default, Debug)]
+pub(crate) struct Counters {
+    pub healthy: i64,
+    pub warning: i64,
+    pub critical: i64,
+    pub offline: i64,
+    pub skipped: i64,
+    pub total_ran: i64,
+}
+
+impl Counters {
+    pub fn tally(&mut self, outcome: &crate::core::health_check::CheckOutcome) {
+        match outcome.status.as_str() {
+            "healthy"  => { self.healthy  += 1; self.total_ran += 1; }
+            "warning"  => { self.warning  += 1; self.total_ran += 1; }
+            "critical" => { self.critical += 1; self.total_ran += 1; }
+            "offline"  => { self.offline  += 1; self.total_ran += 1; }
+            "na"       => { self.skipped  += 1; }
+            _          => { /* unknown/sample states ignored */ }
+        }
+    }
+}
+
 pub fn handle(ctx: &mut Ctx<'_>, action: HealthAction) -> UecmResult<()> {
     match action {
         HealthAction::Run { machine_ids, cred } => run(ctx, &machine_ids, &cred),
@@ -79,6 +105,7 @@ fn run(ctx: &mut Ctx<'_>, machine_ids: &[i64], cred: &CredentialArgs) -> UecmRes
     let mut warning: i64 = 0;
     let mut critical: i64 = 0;
     let mut offline: i64 = 0;
+    let mut skipped: i64 = 0;
     let mut total_checks: i64 = 0;
 
     for (idx, &mid) in machine_ids.iter().enumerate() {
@@ -112,23 +139,14 @@ fn run(ctx: &mut Ctx<'_>, machine_ids: &[i64], cred: &CredentialArgs) -> UecmRes
             Err(e) => {
                 // offline — fill all probe keys with "offline" status, same as UI command
                 let mut row: HashMap<String, crate::core::health_check::CheckOutcome> = HashMap::new();
-                for k in [
-                    "smb",
-                    "firewall_445",
-                    "share_reachable",
-                    "ntfs_perm",
-                    "cred_user",
-                    "cred_system",
-                    "env_vars",
-                    "system_write",
-                ] {
+                for k in crate::core::probe_keys::offline_probe_keys() {
                     row.insert(
                         k.into(),
                         crate::core::health_check::CheckOutcome {
                             status: "offline".into(),
                             message: e.to_string(),
                             sample: "".into(),
-                            remediation: String::new(),
+                            remediation: "Bring the host online (verify network + WinRM) before retrying.".into(),
                         },
                     );
                 }
@@ -139,7 +157,7 @@ fn run(ctx: &mut Ctx<'_>, machine_ids: &[i64], cred: &CredentialArgs) -> UecmRes
                     &serde_json::to_value(&row).unwrap(),
                 )?;
                 offline += 1;
-                total_checks += 8;
+                total_checks += crate::core::probe_keys::offline_probe_keys().len() as i64;
                 ctx.emitter
                     .emit_event(&Event::ItemCompleted {
                         item_id: format!("machine:{}", mid),
@@ -179,16 +197,16 @@ fn run(ctx: &mut Ctx<'_>, machine_ids: &[i64], cred: &CredentialArgs) -> UecmRes
         row.insert("gpu_consistency".into(), gpu_outcome);
 
         let machine_checks = row.len() as i64;
+        let mut row_counters = Counters::default();
         for v in row.values() {
-            total_checks += 1;
-            match v.status.as_str() {
-                "healthy" => healthy += 1,
-                "warning" => warning += 1,
-                "critical" => critical += 1,
-                "offline" => offline += 1,
-                _ => {}
-            }
+            row_counters.tally(v);
         }
+        healthy      += row_counters.healthy;
+        warning      += row_counters.warning;
+        critical     += row_counters.critical;
+        offline      += row_counters.offline;
+        skipped      += row_counters.skipped;
+        total_checks += row_counters.total_ran;
 
         health_check_runs::upsert(&db, scan_id, mid, &serde_json::to_value(&row).unwrap())?;
 
@@ -207,6 +225,7 @@ fn run(ctx: &mut Ctx<'_>, machine_ids: &[i64], cred: &CredentialArgs) -> UecmRes
         "warning": warning,
         "critical": critical,
         "offline": offline,
+        "skipped": skipped,
         "total": total_checks,
     });
     scan_runs::finish(&db, scan_id, &summary_json)?;
@@ -220,6 +239,7 @@ fn run(ctx: &mut Ctx<'_>, machine_ids: &[i64], cred: &CredentialArgs) -> UecmRes
                 "warning": warning,
                 "critical": critical,
                 "offline": offline,
+                "skipped": skipped,
                 "total_checks": total_checks,
             }),
         })
@@ -274,4 +294,45 @@ fn list_results(ctx: &mut Ctx<'_>, scan_run_id: i64) -> UecmResult<()> {
     let rows = health_check_runs::list_for_run(db, scan_run_id)?;
     ctx.emitter.emit_result(&rows).ok();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::core::health_check::CheckOutcome;
+
+    fn outcome(status: &str) -> CheckOutcome {
+        CheckOutcome {
+            status: status.into(),
+            message: "".into(),
+            sample: "".into(),
+            remediation: "".into(),
+        }
+    }
+
+    #[test]
+    fn na_outcomes_increment_skipped_not_other_counters() {
+        let mut counters = super::Counters::default();
+        counters.tally(&outcome("healthy"));
+        counters.tally(&outcome("warning"));
+        counters.tally(&outcome("na"));
+        counters.tally(&outcome("na"));
+        counters.tally(&outcome("critical"));
+
+        assert_eq!(counters.healthy, 1);
+        assert_eq!(counters.warning, 1);
+        assert_eq!(counters.critical, 1);
+        assert_eq!(counters.offline, 0);
+        assert_eq!(counters.skipped, 2, "na must increment skipped");
+        assert_eq!(counters.total_ran, 3);
+    }
+
+    #[test]
+    fn offline_probe_keys_derives_from_registry() {
+        let keys = crate::core::probe_keys::offline_probe_keys();
+        assert_eq!(keys.len(), 11);
+        assert!(keys.contains(&"lanman_server"));
+        assert!(keys.contains(&"firewall_445"));
+        assert!(!keys.contains(&"tcp_5985"), "L1 must not be in offline keys");
+        assert!(!keys.contains(&"ini_consistency"), "derived must not be in offline keys");
+    }
 }
