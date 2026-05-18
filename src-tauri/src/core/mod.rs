@@ -3,6 +3,7 @@ pub mod bootstrap;
 pub mod command_line_scanner;
 pub mod consistency_check;
 pub mod credentials;
+pub mod ddc_file_stats;
 pub mod ddc_pak;
 pub mod deploy_workflow;
 pub mod discovery;
