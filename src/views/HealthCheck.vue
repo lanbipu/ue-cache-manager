@@ -88,6 +88,14 @@ function layerLabel(layer: (typeof LAYER_ORDER)[number]): string {
   return translated === key ? LAYER_FALLBACK[layer] : translated;
 }
 
+function probeLabel(probeKey: string): string {
+  const i18nKey = `healthCheck.probe.${probeKey}`;
+  const translated = t(i18nKey);
+  // vue-i18n returns the key string itself when no entry matches —
+  // fall back to the raw probe key (still human-readable, e.g. "tcp_5985").
+  return translated === i18nKey ? probeKey : translated;
+}
+
 function toneFor(status: string): "healthy" | "warning" | "critical" | "offline" | "unknown" | "na" {
   switch (status) {
     case "healthy":
@@ -174,7 +182,10 @@ function toneFor(status: string): "healthy" | "warning" | "critical" | "offline"
                     :key="probe.key"
                   >
                     <tr class="border-t border-border" :data-probe-key="probe.key">
-                      <td class="px-2 py-1 font-mono text-xs text-muted-foreground">{{ probe.key }}</td>
+                      <td class="px-2 py-1 text-foreground">
+                        {{ probeLabel(probe.key) }}
+                        <span class="ml-2 font-mono text-xs text-muted-foreground">{{ probe.key }}</span>
+                      </td>
                       <td class="px-2 py-1">
                         <UecmStatusBadge :tone="toneFor(probe.outcome.status)" :label="probe.outcome.status" />
                       </td>
