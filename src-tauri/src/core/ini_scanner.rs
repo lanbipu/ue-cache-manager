@@ -290,3 +290,30 @@ mod tests {
         assert_eq!(parsed.sections[0].keys[0].value, "1");
     }
 }
+
+/// True if a raw value string looks like a `(K1=V1, K2=V2)` tuple.
+fn is_tuple_value(v: &str) -> bool {
+    let v = v.trim();
+    v.starts_with('(') && v.ends_with(')')
+}
+
+#[cfg(test)]
+mod tuple_detector_tests {
+    use super::is_tuple_value;
+
+    #[test]
+    fn detects_paren_wrapped() {
+        assert!(is_tuple_value("(Type=FileSystem)"));
+    }
+
+    #[test]
+    fn rejects_plain() {
+        assert!(!is_tuple_value("FileSystem"));
+    }
+
+    #[test]
+    fn rejects_half_open() {
+        assert!(!is_tuple_value("(Type=FileSystem"));
+        assert!(!is_tuple_value("Type=FileSystem)"));
+    }
+}
