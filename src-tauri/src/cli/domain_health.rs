@@ -34,6 +34,16 @@ pub fn handle(ctx: &mut Ctx<'_>, action: HealthAction) -> UecmResult<()> {
             })).ok();
             Ok(())
         }
+        HealthAction::ScanCommandLine { host, cred } => {
+            let db = ctx.require_db()?;
+            let creds = cred.resolve(db)?;
+            let hits = crate::core::command_line_scanner::scan(
+                &host,
+                creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
+            )?;
+            ctx.emitter.emit_result(&hits).ok();
+            Ok(())
+        }
     }
 }
 

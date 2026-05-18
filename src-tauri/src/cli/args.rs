@@ -567,6 +567,13 @@ pub enum HealthAction {
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
+    /// Scan shortcuts/bat/services for -LocalDataCachePath / -SharedDataCachePath overrides.
+    ScanCommandLine {
+        #[arg(long)]
+        host: String,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
 }
 
 // ---------- gpu ----------
@@ -935,6 +942,21 @@ mod tests {
         match cli.command {
             Domain::Ini { action: IniAction::GcResume { unused_file_age, .. } } => {
                 assert_eq!(unused_file_age, 30);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_health_scan_command_line() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "health", "scan-command-line",
+            "--host", "RENDER-01",
+            "--cred-alias", "admin",
+        ]).unwrap();
+        match cli.command {
+            Domain::Health { action: HealthAction::ScanCommandLine { host, .. } } => {
+                assert_eq!(host, "RENDER-01");
             }
             _ => panic!("wrong variant"),
         }
