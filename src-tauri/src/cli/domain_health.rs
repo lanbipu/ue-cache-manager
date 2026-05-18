@@ -67,9 +67,23 @@ fn run_dispatch(
         return Err(crate::error::UecmError::InvalidInput("--cidr not yet implemented".into()));
     }
     if all {
-        return Err(crate::error::UecmError::InvalidInput("--all not yet implemented".into()));
+        let db = ctx.require_db()?.clone();
+        let ids = resolve_all_machine_ids(&db)?;
+        if ids.is_empty() {
+            return Err(crate::error::UecmError::InvalidInput(
+                "--all requested but inventory is empty (run `uecm-cli machine scan` first)".into(),
+            ));
+        }
+        return run(ctx, &ids, cred);
     }
     run(ctx, &machine_ids, cred)
+}
+
+fn resolve_all_machine_ids(db: &crate::data::Db) -> UecmResult<Vec<i64>> {
+    Ok(crate::data::machines::list_all(db)?
+        .into_iter()
+        .filter_map(|m| m.id)
+        .collect())
 }
 
 fn run(ctx: &mut Ctx<'_>, machine_ids: &[i64], cred: &CredentialArgs) -> UecmResult<()> {
@@ -360,5 +374,36 @@ mod tests {
         assert!(keys.contains(&"firewall_445"));
         assert!(!keys.contains(&"tcp_5985"), "L1 must not be in offline keys");
         assert!(!keys.contains(&"ini_consistency"), "derived must not be in offline keys");
+    }
+
+    use crate::data::machines::{insert as insert_machine, Machine};
+    use crate::data::{open_in_memory, schema};
+
+    fn setup_db_with_two_machines() -> crate::data::Db {
+        let db = open_in_memory().unwrap();
+        {
+            let mut conn = db.lock().unwrap();
+            schema::migrate(&mut conn).unwrap();
+        }
+        let _ = insert_machine(&db, &Machine::new("RENDER-A", "192.168.10.21")).unwrap();
+        let _ = insert_machine(&db, &Machine::new("RENDER-B", "192.168.10.22")).unwrap();
+        db
+    }
+
+    #[test]
+    fn resolve_all_machine_ids_returns_both() {
+        let db = setup_db_with_two_machines();
+        let ids = super::resolve_all_machine_ids(&db).unwrap();
+        assert_eq!(ids.len(), 2);
+    }
+
+    #[test]
+    fn resolve_all_machine_ids_returns_empty_on_empty_inventory() {
+        let db = open_in_memory().unwrap();
+        {
+            let mut conn = db.lock().unwrap();
+            schema::migrate(&mut conn).unwrap();
+        }
+        assert_eq!(super::resolve_all_machine_ids(&db).unwrap().len(), 0);
     }
 }
