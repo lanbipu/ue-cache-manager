@@ -24,6 +24,7 @@ pub mod psexec;
 pub mod shares;
 pub mod ue_runner;
 pub mod winrm;
+pub mod zen;
 
 #[cfg(test)]
 mod bootstrap_contract_tests {

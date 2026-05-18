@@ -446,21 +446,22 @@ Base64（单行）:
 AoSFhwhEYXRhUm9vdBNcXD9cRjpcRXBpY1xERENcWmVuhwpBYnNMb2dQYXRoJlxcP1xGOlxFcGljXEREQ1xaZW5cbG9nc1x6ZW5zZXJ2ZXIubG9nhwxCdWlsZFZlcnNpb24wNS44LjEwLTIwMjYwNTA3MTkzOC13aW5kb3dzLXg2NC1yZWxlYXNlLWZiYWNkZWNkhw9IdHRwU2VydmVyQ2xhc3MEYXNpb4gEUG9ydKFuiANQaWTAfDCMC0lzRGVkaWNhdGVkiAtTdGFydFRpbWVNc/meObwl7IMNUnVudGltZUNvbmZpZ4Flhw1TeXN0ZW1Sb290RGlyF0M6XFByb2dyYW1EYXRhXEVwaWNcWmVuCkNvbnRlbnREaXIADUVmZmVjdGl2ZVBvcnQEODU1OAhCYXNlUG9ydAQ4NTU4CUNvcmVMaW1pdAEwD01lbW9yeUFsbG9jYXRvcg5taW1hbGxvYyAyLjIuNwtBc2lvVmVyc2lvbgYxLjM4LjAHSXNEZWJ1ZwVmYWxzZQxJc0NsZWFuU3RhcnQFZmFsc2UGSXNUZXN0BWZhbHNlBkRldGFjaAR0cnVlD05vQ29uc29sZU91dHB1dAVmYWxzZQxRdWlldENvbnNvbGUEdHJ1ZQdDaGlsZElkEVplbl8yNzMwNF9TdGFydHVwBUxvZ0lkAApTZW50cnkgRFNOB25vdCBzZXQSU2VudHJ5IEVudmlyb25tZW50AA5TdGF0c2QgRW5hYmxlZAVmYWxzZRJTZWN1cml0eUNvbmZpZ1BhdGgAggtCdWlsZENvbmZpZ4ELjBVaRU5fQUREUkVTU19TQU5JVElaRVKMFFpFTl9USFJFQURfU0FOSVRJWkVSjBRaRU5fTUVNT1JZX1NBTklUSVpFUowSWkVOX0xFQUtfU0FOSVRJWkVSjQ5aRU5fVVNFX1NFTlRSWYwOWkVOX1dJVEhfVEVTVFONEFpFTl9VU0VfTUlNQUxMT0ONEFpFTl9VU0VfUlBNQUxMT0ONEFpFTl9XSVRIX0hUVFBTWVONEVpFTl9XSVRIX01FTVRSQUNLjQ5aRU5fV0lUSF9UUkFDRYwZWkVOX1dJVEhfQ09NUFVURV9TRVJWSUNFU4wOWkVOX1dJVEhfSE9SREWMDlpFTl9XSVRIX05PTUFEhwhIb3N0bmFtZQVMQU5QQ4ULSXBBZGRyZXNzZXMQAQcNMTkyLjE2OC4xMC4yMIcIUGxhdGZvcm0Hd2luZG93c4cEQXJjaAN4NjSHAk9TGFdpbmRvd3MgMTAuMCBCdWlsZCAyNjIwMIMGU3lzdGVtgK6ICWNwdV9jb3VudAEKY29yZV9jb3VudBAIbHBfY291bnQgD3RvdGFsX21lbW9yeV9tYsD8QA9hdmFpbF9tZW1vcnlfbWLAjcgQdG90YWxfdmlydHVhbF9tYuf///8QYXZhaWxfdmlydHVhbF9tYuf/4pcRdG90YWxfcGFnZWZpbGVfbWLCPEARYXZhaWxfcGFnZWZpbGVfbWLBs58OdXB0aW1lX3NlY29uZHPAb70=
 ```
 
-字段断言（mini-parser 解码后单测对照）：
+字段断言（**值已用 T1.2b cb_parser 在真实 bytes 上验证，覆盖 doc 此前的猜测**）：
 
 | 字段路径 | 类型 | 期望值 |
 |---|---|---|
 | `DataRoot` | string | `\\?\F:\Epic\DDC\Zen` |
 | `AbsLogPath` | string | `\\?\F:\Epic\DDC\Zen\logs\zenserver.log` |
-| `BuildVersion` | string | `05.8.10-202605071938-windows-x64-release-fbacdecd` |
+| `BuildVersion` | string | `5.8.10-202605071938-windows-x64-release-fbacdecd` |
 | `HttpServerClass` | string | `asio` |
 | `Port` | uint16 | `8558` |
-| `Pid` | uint32 | `27304`（0x6c30 little-endian → 0x306c → 12396? 待 parser 验证字节序）|
-| `IsDedicated` | bool | `true` |
+| `Pid` | uint32 | `31792`（运行时 zen sponsor 的 zenserver PID）|
+| `IsDedicated` | bool | `false`（sponsor 模式而非 dedicated service）|
+| `StartTimeMs` | uint64 | `~1747613192812` (ms since epoch, dynamic) |
 | `RuntimeConfig.EffectivePort` | string | `8558` |
 | `RuntimeConfig.BasePort` | string | `8558` |
 | `RuntimeConfig.MemoryAllocator` | string | `mimalloc 2.2.7` |
-| `RuntimeConfig.ChildId` | string | `Zen_27304_Startup` |
+| `RuntimeConfig.ChildId` | string | `Zen_27304_Startup`（27304 是 UE editor parent PID）|
 | `Hostname` | string | `LANPC` |
 | `IpAddresses[0]` | string/bytes | `192.168.10.20` |
 | `Platform` | string | `windows` |
@@ -470,6 +471,8 @@ AoSFhwhEYXRhUm9vdBNcXD9cRjpcRXBpY1xERENcWmVuhwpBYnNMb2dQYXRoJlxcP1xGOlxFcGljXERE
 | `System.core_count` | uint | `16` |
 | `System.lp_count` | uint | `32` |
 | `System.uptime_seconds` | uint | `~3000+` (动态值) |
+
+> T1.2b 修正记录：原表此前对 `BuildVersion`（前导 `0`）、`Pid`（27304 = editor parent，非 zen PID）、`IsDedicated`（sponsor 模式实际 `false`）三个值是 doc 编写时的字节序 / 字符串猜测；mini-parser 实际解码以这里为准。
 
 ### C.4 `/stats` —— Compact Binary（fixture name: `stats.cb`）
 
@@ -501,20 +504,21 @@ Base64（单行）:
 AoHegghyZXF1ZXN0c4C3iAVjb3VudINZiwlyYXRlX21lYW4/sRvepVM8E4sGcmF0ZV8xMdJAynniMQGLBnJhdGVfNTzUFQfVPXqeiwdyYXRlXzE1PrFufSN0GBmLBXRfYXZnP/3Cj4aCHnaLBXRfbWluPuI+xuUsPyOLBXRfbWF4QEqkuVh7whiLBXRfcDc1P5dCyn/rcqqLBXRfcDk1QCeU9w+WdfiLBXRfcDk5QEPpUaeSgLKLBnRfcDk5OUBJ+/x3tUNDggVjYWNoZYDbiA9iYWRyZXF1ZXN0Y291bnQAggNycGNXiAVjb3VudIMpiANvcHOFhoMHcmVjb3Jkcw+IBWNvdW50gmgDb3BzhMWDBnZhbHVlcw+IBWNvdW50gMEDb3BzgMGDBmNodW5rcw2IBWNvdW50AANvcHMAgwRzaXplFYgEZGlza/Ajm9ljBm1lbW9yecVnMIgEaGl0c4VdiAZtaXNzZXMniAZ3cml0ZXMCiwloaXRfcmF0aW8/7x271Hy8jogHY2lkaGl0c4nHiAljaWRtaXNzZXMAiAljaWR3cml0ZXMAgwNjaWQxgwRzaXplKogEdGlueeBu5XEFc21hbGzwHJ6sUAVsYXJnZeWSyLEFdG90YWzwIqBacg==
 ```
 
-字段断言（关键 3 个用作 frozen extract baseline）：
+字段断言（**值已用 T1.2b cb_parser 解码验证**；顶层 fields = `{requests, cache, cid}`，**注意 `rpc.*` 嵌套在 `cache.rpc.*` 下，不是顶层**）：
 
 | 字段路径 | 类型 | 期望值 |
 |---|---|---|
 | `requests.count` | uint | `89` (0x59) |
-| `cache.size.disk` | uint64 | `largish disk bytes` (待 parser 解 ~0xf023... = 跨 GB) |
-| `cache.size.memory` | uint | `~0xc56730` ≈ 13 MB |
+| `cache.size.disk` | uint64 | `~9.4 GB` (跨 GB scale，bit-exact 见 parser test fixture) |
+| `cache.size.memory` | uint | `~13 MB` |
 | `cache.hits` | uint | `93` (0x5d) |
 | `cache.misses` | uint | `39` (0x27) |
 | `cache.writes` | uint | `2` |
-| `cache.hit_ratio` | float64 | `~0.971`（0x3fef1dbbd47cbc8e bit pattern, IEEE 754）|
-| `cache.cidhits` | uint16 | `0xc7c8` |
-| `cache.cid1.size.tiny` | uint? | `0xe06ee571` |
-| `rpc.count` | uint | `87` (0x57) |
+| `cache.hit_ratio` | float64 | `0.9723796033994334` (bit pattern `0x3fef1dbbd47cbc8e`, IEEE 754 — bit-exact 单测断言) |
+| `cache.cidhits` | uint | (运行时累计) |
+| `cache.rpc.count` | uint | `87` (0x57) — 注意 RPC 计数在 `cache.rpc` 下，不在顶层 |
+
+> T1.2b 修正记录：原表把 `rpc.count` 误标在顶层；实际 zen 在 `cache.rpc` 下嵌套。`cid` 顶层 field 的子结构细节（`cid1.size.tiny` 等）按 parser 真实解码补充，本表只列被 plan §1.1 frozen baseline 直接消费的字段。
 
 ### C.6 `.lock` lockfile —— 尚未抓到（M1 T1.3 implementation 时补）
 
