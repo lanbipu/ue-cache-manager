@@ -143,6 +143,15 @@ pub fn run_rules(file: &ParsedFile, env: &EnvVarState) -> Vec<Finding> {
         "Global shader PSO precaching is disabled or not configured.",
         "Global shader precaching helps keep runtime PSO cache behavior consistent across the cluster.",
     ));
+    out.extend(rule_r011(file)); out.extend(rule_r012(file)); out.extend(rule_r013(file));
+    out.extend(rule_r014(file)); out.extend(rule_r015(file)); out.extend(rule_r016(file));
+    out.extend(rule_r017(file)); out.extend(rule_r018(file)); out.extend(rule_r019(file));
+    out.extend(rule_r020(file)); out.extend(rule_r021(file)); out.extend(rule_r022(file));
+    out.extend(rule_r023(file));
+    out.extend(pso_cvar_rule(file, "R024", "r.ShaderPipelineCache.Enabled", Severity::Critical,
+        "PSO cache file loading is disabled or not configured.",
+        "Without this CVar collected PSO cache files are not loaded at runtime."));
+    out.extend(rule_r025(file, env));
     out
 }
 
@@ -396,6 +405,217 @@ fn pso_missing_finding(
     }
 }
 
+// ── BackendGraph helpers ─────────────────────────────────────────────────────
+
+fn find_shared_backend(file: &ParsedFile) -> Option<&crate::core::ini_backend_graph::BackendNode> {
+    file.sections.iter()
+        .find(|s| s.name.eq_ignore_ascii_case("DerivedDataBackendGraph"))?
+        .backend_nodes.iter().find(|n| n.name.eq_ignore_ascii_case("Shared"))
+}
+
+fn bg_finding(
+    file: &ParsedFile, node: &crate::core::ini_backend_graph::BackendNode,
+    rule_id: &str, severity: Severity, field: &str, current: &str,
+    recommended: &str, symptom: &str, rationale: &str, action: RecommendedAction,
+) -> Finding {
+    Finding {
+        rule_id: rule_id.into(), severity, category: file.category,
+        file_path: file.path.clone(),
+        section: Some("DerivedDataBackendGraph".into()),
+        key_name: Some(format!("Shared.{}", field)),
+        line_number: Some(node.line_number as i64),
+        snippet_before: format!("{}={}", field, current),
+        snippet_after: Some(format!("{}={}", field, recommended)),
+        recommended_action: action,
+        recommended_value: Some(recommended.into()),
+        symptom: symptom.into(),
+        rationale: rationale.into(),
+    }
+}
+
+fn rule_numeric_range(
+    file: &ParsedFile, n: &crate::core::ini_backend_graph::BackendNode,
+    rule_id: &str, severity: Severity, field: &str,
+    lo: i64, hi: i64, default_value: &str, symptom: &str, rationale: &str,
+) -> Vec<Finding> {
+    let Some(v) = crate::core::ini_backend_graph::get_field(n, field) else { return vec![]; };
+    let ok = v.parse::<i64>().map(|x| x >= lo && x <= hi).unwrap_or(false);
+    if ok { return vec![]; }
+    vec![bg_finding(file, n, rule_id, severity, field, v, default_value,
+        symptom, rationale, RecommendedAction::Set)]
+}
+
+// ── BackendGraph rules R011–R023 ─────────────────────────────────────────────
+
+use crate::core::ini_backend_graph::get_field;
+
+fn rule_r011(file: &ParsedFile) -> Vec<Finding> {
+    let Some(n) = find_shared_backend(file) else { return vec![]; };
+    let v = get_field(n, "Type").unwrap_or("");
+    if !v.eq_ignore_ascii_case("FileSystem") {
+        return vec![bg_finding(file, n, "R011", Severity::Critical, "Type",
+            v, "FileSystem",
+            "Shared backend Type missing or wrong (expected FileSystem).",
+            "Without Type=FileSystem UE may build a no-op backend and silently fall back to Local only.",
+            RecommendedAction::Set)];
+    }
+    vec![]
+}
+
+fn rule_r012(file: &ParsedFile) -> Vec<Finding> {
+    let Some(n) = find_shared_backend(file) else { return vec![]; };
+    match get_field(n, "ReadOnly") {
+        Some(v) if v.eq_ignore_ascii_case("true") => vec![bg_finding(file, n, "R012",
+            Severity::Warning, "ReadOnly", v, "false",
+            "Shared DDC marked ReadOnly; cluster cannot write back.",
+            "Render nodes must push first-run results so siblings hit cache.",
+            RecommendedAction::Set)],
+        _ => vec![],
+    }
+}
+
+fn rule_r013(file: &ParsedFile) -> Vec<Finding> {
+    let Some(n) = find_shared_backend(file) else { return vec![]; };
+    match get_field(n, "Clean") {
+        Some(v) if v.eq_ignore_ascii_case("true") => vec![bg_finding(file, n, "R013",
+            Severity::Critical, "Clean", v, "false",
+            "Clean=true wipes Shared DDC every launch.",
+            "Production Shared DDC must persist between sessions.",
+            RecommendedAction::Set)],
+        _ => vec![],
+    }
+}
+
+fn rule_r014(file: &ParsedFile) -> Vec<Finding> {
+    let Some(n) = find_shared_backend(file) else { return vec![]; };
+    match get_field(n, "Flush") {
+        Some(v) if v.eq_ignore_ascii_case("true") => vec![bg_finding(file, n, "R014",
+            Severity::Warning, "Flush", v, "false",
+            "Flush=true drops cache on exit.",
+            "Shared DDC must survive editor close.",
+            RecommendedAction::Set)],
+        _ => vec![],
+    }
+}
+
+fn rule_r015(file: &ParsedFile) -> Vec<Finding> {
+    let Some(n) = find_shared_backend(file) else { return vec![]; };
+    if get_field(n, "DeleteUnused").is_none() {
+        return vec![bg_finding(file, n, "R015", Severity::Warning, "DeleteUnused",
+            "(missing)", "true",
+            "DeleteUnused not configured; GC behaviour ambiguous.",
+            "Default may differ across UE versions; pin it.",
+            RecommendedAction::Set)];
+    }
+    vec![]
+}
+
+fn rule_r016(file: &ParsedFile) -> Vec<Finding> {
+    let Some(n) = find_shared_backend(file) else { return vec![]; };
+    rule_numeric_range(file, n, "R016", Severity::Warning, "UnusedFileAge",
+        1, 365, "10",
+        "UnusedFileAge out of 1–365 day range.",
+        "GC sweeps need a meaningful retention window.")
+}
+
+fn rule_r017(file: &ParsedFile) -> Vec<Finding> {
+    let Some(n) = find_shared_backend(file) else { return vec![]; };
+    rule_numeric_range(file, n, "R017", Severity::Warning, "FoldersToClean",
+        1, 100, "10",
+        "FoldersToClean out of 1–100 range.",
+        "GC sweep granularity off.")
+}
+
+fn rule_r018(file: &ParsedFile) -> Vec<Finding> {
+    let Some(n) = find_shared_backend(file) else { return vec![]; };
+    rule_numeric_range(file, n, "R018", Severity::Warning, "MaxFileChecksPerSec",
+        1, 100, "1",
+        "MaxFileChecksPerSec out of 1–100 range.",
+        "Too high stresses NAS; too low slows DDC reads.")
+}
+
+fn rule_r019(file: &ParsedFile) -> Vec<Finding> {
+    let Some(n) = find_shared_backend(file) else { return vec![]; };
+    rule_numeric_range(file, n, "R019", Severity::Warning, "ConsiderSlowAt",
+        10, 1000, "70",
+        "ConsiderSlowAt out of 10–1000 ms.",
+        "If wrong UE may deactivate Shared backend.")
+}
+
+fn rule_r020(file: &ParsedFile) -> Vec<Finding> {
+    let Some(n) = find_shared_backend(file) else { return vec![]; };
+    match get_field(n, "PromptIfMissing") {
+        Some(v) if v.eq_ignore_ascii_case("true") => vec![bg_finding(file, n, "R020",
+            Severity::Critical, "PromptIfMissing", v, "false",
+            "PromptIfMissing=true breaks unattended starts.",
+            "RenderStream service has no UI; a missing-path dialog hangs boot.",
+            RecommendedAction::Set)],
+        _ => vec![],
+    }
+}
+
+fn rule_r021(file: &ParsedFile) -> Vec<Finding> {
+    let Some(n) = find_shared_backend(file) else { return vec![]; };
+    let path = get_field(n, "Path").unwrap_or("");
+    if !path.starts_with(r"\\") {
+        return vec![bg_finding(file, n, "R021", Severity::Critical, "Path",
+            if path.is_empty() { "(missing)" } else { path },
+            r"\\HOST\Share",
+            "Shared backend Path missing or not UNC.",
+            "Mapped drives are invisible to Windows services and RenderStream.",
+            RecommendedAction::Manual)];
+    }
+    vec![]
+}
+
+fn rule_r022(file: &ParsedFile) -> Vec<Finding> {
+    let Some(n) = find_shared_backend(file) else { return vec![]; };
+    if get_field(n, "EnvPathOverride").is_none() {
+        return vec![bg_finding(file, n, "R022", Severity::Warning, "EnvPathOverride",
+            "(missing)", "UE-SharedDataCachePath",
+            "EnvPathOverride not set; env var fallback disabled.",
+            "Without it UE ignores UE-SharedDataCachePath; per-machine override impossible.",
+            RecommendedAction::Set)];
+    }
+    vec![]
+}
+
+fn rule_r023(file: &ParsedFile) -> Vec<Finding> {
+    let Some(n) = find_shared_backend(file) else { return vec![]; };
+    if get_field(n, "EditorOverrideSetting").is_none() {
+        return vec![bg_finding(file, n, "R023", Severity::Info, "EditorOverrideSetting",
+            "(missing)", "SharedDerivedDataCache",
+            "EditorOverrideSetting not declared.",
+            "Without this, Editor Preferences UI cannot override the INI Path.",
+            RecommendedAction::Set)];
+    }
+    vec![]
+}
+
+fn rule_r025(file: &ParsedFile, env: &EnvVarState) -> Vec<Finding> {
+    if file.category != Category::User { return vec![]; }
+    let prefs = crate::core::editor_preferences::extract(file);
+    let mut out = Vec::new();
+    if let (Some(proj), Some(env_val)) = (prefs.project_shared.as_ref(), env.shared_data_cache_path.as_ref()) {
+        if proj != env_val {
+            out.push(Finding {
+                rule_id: "R025".into(), severity: Severity::Critical, category: file.category,
+                file_path: file.path.clone(),
+                section: Some("/Script/UnrealEd.EditorSettings".into()),
+                key_name: Some("ProjectSharedDDCPath".into()),
+                line_number: None,
+                snippet_before: format!("ProjectSharedDDCPath={}", proj),
+                snippet_after: Some("(leave empty so env var / project Config takes over)".into()),
+                recommended_action: RecommendedAction::Remove,
+                recommended_value: None,
+                symptom: "Project-level Editor Pref masks UE-SharedDataCachePath silently.".into(),
+                rationale: "When ProjectSharedDDCPath is non-empty, UE uses it and ignores EnvPathOverride.".into(),
+            });
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -558,5 +778,79 @@ mod tests {
         assert!(!findings
             .iter()
             .any(|f| matches!(f.rule_id.as_str(), "R008" | "R009" | "R010")));
+    }
+
+    // ── BackendGraph rule helpers ─────────────────────────────────────────────
+
+    fn ddb_project(node_raw: &str) -> ParsedFile {
+        use crate::core::ini_backend_graph::parse_node;
+        ParsedFile {
+            path: r"C:\Project\Config\DefaultEngine.ini".into(),
+            category: Category::Project,
+            sections: vec![ParsedSection {
+                name: "DerivedDataBackendGraph".into(),
+                keys: vec![],
+                backend_nodes: vec![parse_node(node_raw, 0).unwrap()],
+            }],
+        }
+    }
+
+    fn assert_fires(rule: &str, file: &ParsedFile) {
+        let env = EnvVarState::default();
+        let findings = run_rules(file, &env);
+        assert!(findings.iter().any(|f| f.rule_id == rule),
+            "expected {} to fire; got: {:?}", rule,
+            findings.iter().map(|f| f.rule_id.clone()).collect::<Vec<_>>());
+    }
+    fn assert_silent(rule: &str, file: &ParsedFile) {
+        let env = EnvVarState::default();
+        let findings = run_rules(file, &env);
+        assert!(!findings.iter().any(|f| f.rule_id == rule), "expected {} silent", rule);
+    }
+
+    // ── R011–R025 paired fire/silent tests ───────────────────────────────────
+
+    #[test] fn r011_fires_on_wrong_type() { assert_fires("R011", &ddb_project(r"Shared=(Path=\\NAS)")); }
+    #[test] fn r011_silent_on_correct_type() { assert_silent("R011", &ddb_project(r"Shared=(Type=FileSystem, Path=\\NAS)")); }
+    #[test] fn r012_fires_on_readonly_true() { assert_fires("R012", &ddb_project(r"Shared=(Type=FileSystem, ReadOnly=true)")); }
+    #[test] fn r012_silent_on_readonly_false() { assert_silent("R012", &ddb_project(r"Shared=(Type=FileSystem, ReadOnly=false)")); }
+    #[test] fn r013_fires_on_clean_true() { assert_fires("R013", &ddb_project(r"Shared=(Type=FileSystem, Clean=true)")); }
+    #[test] fn r013_silent_on_clean_false() { assert_silent("R013", &ddb_project(r"Shared=(Type=FileSystem, Clean=false)")); }
+    #[test] fn r014_fires_on_flush_true() { assert_fires("R014", &ddb_project(r"Shared=(Type=FileSystem, Flush=true)")); }
+    #[test] fn r014_silent_on_flush_false() { assert_silent("R014", &ddb_project(r"Shared=(Type=FileSystem, Flush=false)")); }
+    #[test] fn r015_fires_when_missing() { assert_fires("R015", &ddb_project(r"Shared=(Type=FileSystem)")); }
+    #[test] fn r015_silent_when_present() { assert_silent("R015", &ddb_project(r"Shared=(Type=FileSystem, DeleteUnused=true)")); }
+    #[test] fn r016_fires_for_out_of_range_zero() { assert_fires("R016", &ddb_project(r"Shared=(Type=FileSystem, UnusedFileAge=0)")); }
+    #[test] fn r016_fires_for_out_of_range_huge() { assert_fires("R016", &ddb_project(r"Shared=(Type=FileSystem, UnusedFileAge=9999)")); }
+    #[test] fn r016_silent_for_normal() { assert_silent("R016", &ddb_project(r"Shared=(Type=FileSystem, UnusedFileAge=10)")); }
+    #[test] fn r017_fires_oor() { assert_fires("R017", &ddb_project(r"Shared=(Type=FileSystem, FoldersToClean=0)")); }
+    #[test] fn r017_silent_ok() { assert_silent("R017", &ddb_project(r"Shared=(Type=FileSystem, FoldersToClean=10)")); }
+    #[test] fn r018_fires_oor() { assert_fires("R018", &ddb_project(r"Shared=(Type=FileSystem, MaxFileChecksPerSec=9999)")); }
+    #[test] fn r018_silent_ok() { assert_silent("R018", &ddb_project(r"Shared=(Type=FileSystem, MaxFileChecksPerSec=1)")); }
+    #[test] fn r019_fires_oor() { assert_fires("R019", &ddb_project(r"Shared=(Type=FileSystem, ConsiderSlowAt=0)")); }
+    #[test] fn r019_silent_ok() { assert_silent("R019", &ddb_project(r"Shared=(Type=FileSystem, ConsiderSlowAt=70)")); }
+    #[test] fn r020_fires_on_prompt_true() { assert_fires("R020", &ddb_project(r"Shared=(Type=FileSystem, PromptIfMissing=true)")); }
+    #[test] fn r020_silent_on_prompt_false() { assert_silent("R020", &ddb_project(r"Shared=(Type=FileSystem, PromptIfMissing=false)")); }
+    #[test] fn r021_fires_on_drive_letter() { assert_fires("R021", &ddb_project(r"Shared=(Type=FileSystem, Path=Z:\DDC)")); }
+    #[test] fn r021_fires_on_missing_path() { assert_fires("R021", &ddb_project(r"Shared=(Type=FileSystem)")); }
+    #[test] fn r021_silent_on_unc() { assert_silent("R021", &ddb_project(r"Shared=(Type=FileSystem, Path=\\NAS\DDC)")); }
+    #[test] fn r022_fires_when_missing() { assert_fires("R022", &ddb_project(r"Shared=(Type=FileSystem, Path=\\NAS)")); }
+    #[test] fn r022_silent_when_present() { assert_silent("R022", &ddb_project(r"Shared=(Type=FileSystem, Path=\\NAS, EnvPathOverride=UE-SharedDataCachePath)")); }
+    #[test] fn r023_fires_when_missing() { assert_fires("R023", &ddb_project(r"Shared=(Type=FileSystem, Path=\\NAS)")); }
+
+    #[test]
+    fn r025_fires_when_project_shared_pref_masks_env() {
+        let f = ParsedFile {
+            path: r"C:\Users\op\AppData\Local\UnrealEngine\5.5\Saved\Config\WindowsEditor\EditorPerProjectUserSettings.ini".into(),
+            category: Category::User,
+            sections: vec![ParsedSection {
+                name: "/Script/UnrealEd.EditorSettings".into(),
+                keys: vec![ParsedKey { name: "ProjectSharedDDCPath".into(), value: r"\\WRONG\DDC".into(), line_number: 4 }],
+                backend_nodes: vec![],
+            }],
+        };
+        let env = EnvVarState { shared_data_cache_path: Some(r"\\RIGHT\DDC".into()), local_data_cache_path: None };
+        let findings = run_rules(&f, &env);
+        assert!(findings.iter().any(|x| x.rule_id == "R025" && x.severity == Severity::Critical));
     }
 }

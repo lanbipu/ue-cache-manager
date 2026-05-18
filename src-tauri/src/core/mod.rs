@@ -3,6 +3,7 @@ pub mod bootstrap;
 pub mod credentials;
 pub mod ddc_pak;
 pub mod discovery;
+pub mod editor_preferences;
 pub mod env_vars;
 pub mod gpu_consistency;
 pub mod health_check;
