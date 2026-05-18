@@ -90,6 +90,14 @@ pub fn run() {
             commands::health_check::run_health_check,
             commands::health_check::list_recent_health_runs,
             commands::health_check::list_health_results_for_run,
+            commands::zen::zen_status,
+            commands::zen::zen_probe,
+            commands::zen::zen_cache_stats,
+            commands::zen::zen_detect_binary,
+            commands::zen::zen_list_endpoints,
+            commands::zen::zen_baseline_list,
+            commands::zen::zen_baseline_lock,
+            commands::zen::zen_baseline_unlock,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
