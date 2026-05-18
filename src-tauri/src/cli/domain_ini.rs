@@ -230,7 +230,7 @@ pub fn handle(ctx: &mut Ctx<'_>, action: IniAction) -> UecmResult<()> {
             let (u, p) = cred.resolve(db)?
                 .ok_or_else(|| crate::error::UecmError::InvalidInput("credentials required".into()))?;
             for host in &hosts {
-                let machine = data_machines::find_by_hostname(db, host)?
+                let machine = data_machines::find_by_ip(db, host)?
                     .ok_or_else(|| crate::error::UecmError::InvalidInput(
                         format!("machine {} not in inventory", host)))?;
                 let location = crate::data::project_locations::get_for_project_machine(
@@ -264,7 +264,7 @@ pub fn handle(ctx: &mut Ctx<'_>, action: IniAction) -> UecmResult<()> {
                 .ok_or_else(|| crate::error::UecmError::InvalidInput("credentials required".into()))?;
             let age_str = unused_file_age.to_string();
             for host in &hosts {
-                let machine = data_machines::find_by_hostname(db, host)?
+                let machine = data_machines::find_by_ip(db, host)?
                     .ok_or_else(|| crate::error::UecmError::InvalidInput(
                         format!("machine {} not in inventory", host)))?;
                 let location = crate::data::project_locations::get_for_project_machine(
