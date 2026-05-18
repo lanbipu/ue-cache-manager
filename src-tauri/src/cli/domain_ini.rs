@@ -214,6 +214,76 @@ pub fn handle(ctx: &mut Ctx<'_>, action: IniAction) -> UecmResult<()> {
         }
         IniAction::Skip { finding_id } => skip_finding(ctx, finding_id),
         IniAction::VerifyPsoPrecaching { project_id } => verify_pso_precaching(ctx, project_id),
+        IniAction::GcPause { target, project_id, yes, dry_run, cred } => {
+            let hosts: Vec<String> = match target.require_one()? {
+                HostTarget::Single(h) => vec![h],
+                HostTarget::Batch(hs) => hs,
+            };
+            let outcome = destructive::check(yes, dry_run, "ini.gc-pause")?;
+            let db = ctx.require_db()?;
+            cred.preflight(db)?;
+            if outcome == Outcome::DryRun {
+                destructive::emit_plan(ctx.emitter.as_mut(), "ini.gc-pause",
+                    serde_json::json!({"hosts": hosts, "project_id": project_id}));
+                return Ok(());
+            }
+            let (u, p) = cred.resolve(db)?
+                .ok_or_else(|| crate::error::UecmError::InvalidInput("credentials required".into()))?;
+            for host in &hosts {
+                let machine = data_machines::find_by_hostname(db, host)?
+                    .ok_or_else(|| crate::error::UecmError::InvalidInput(
+                        format!("machine {} not in inventory", host)))?;
+                let location = crate::data::project_locations::get_for_project_machine(
+                    db, project_id, machine.id.unwrap())?
+                    .ok_or_else(|| crate::error::UecmError::InvalidInput(
+                        format!("project {} not located on {}", project_id, host)))?;
+                let ini = format!("{}\\Config\\DefaultEngine.ini",
+                    location.abs_path.trim_end_matches('\\'));
+                ini_editor::set_backend_field_with_credential(
+                    host, &ini, "DerivedDataBackendGraph", "Shared",
+                    "DeleteUnused", "false", &u, &p,
+                )?;
+            }
+            Ok(())
+        }
+        IniAction::GcResume { target, project_id, unused_file_age, yes, dry_run, cred } => {
+            let hosts: Vec<String> = match target.require_one()? {
+                HostTarget::Single(h) => vec![h],
+                HostTarget::Batch(hs) => hs,
+            };
+            let outcome = destructive::check(yes, dry_run, "ini.gc-resume")?;
+            let db = ctx.require_db()?;
+            cred.preflight(db)?;
+            if outcome == Outcome::DryRun {
+                destructive::emit_plan(ctx.emitter.as_mut(), "ini.gc-resume",
+                    serde_json::json!({"hosts": hosts, "project_id": project_id,
+                        "unused_file_age": unused_file_age}));
+                return Ok(());
+            }
+            let (u, p) = cred.resolve(db)?
+                .ok_or_else(|| crate::error::UecmError::InvalidInput("credentials required".into()))?;
+            let age_str = unused_file_age.to_string();
+            for host in &hosts {
+                let machine = data_machines::find_by_hostname(db, host)?
+                    .ok_or_else(|| crate::error::UecmError::InvalidInput(
+                        format!("machine {} not in inventory", host)))?;
+                let location = crate::data::project_locations::get_for_project_machine(
+                    db, project_id, machine.id.unwrap())?
+                    .ok_or_else(|| crate::error::UecmError::InvalidInput(
+                        format!("project {} not located on {}", project_id, host)))?;
+                let ini = format!("{}\\Config\\DefaultEngine.ini",
+                    location.abs_path.trim_end_matches('\\'));
+                ini_editor::set_backend_field_with_credential(
+                    host, &ini, "DerivedDataBackendGraph", "Shared",
+                    "DeleteUnused", "true", &u, &p,
+                )?;
+                ini_editor::set_backend_field_with_credential(
+                    host, &ini, "DerivedDataBackendGraph", "Shared",
+                    "UnusedFileAge", &age_str, &u, &p,
+                )?;
+            }
+            Ok(())
+        }
         IniAction::BackendGraph { action } => match action {
             BackendGraphAction::Get { host, file_path, node, field, cred } => {
                 let db = ctx.require_db()?;

@@ -364,6 +364,34 @@ pub enum IniAction {
         #[command(subcommand)]
         action: BackendGraphAction,
     },
+    /// Pause Shared DDC GC (DeleteUnused=false). Reversible with `gc-resume`.
+    GcPause {
+        #[command(flatten)]
+        target: crate::cli::host_args::HostArgs,
+        #[arg(long)]
+        project_id: i64,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Resume Shared DDC GC (DeleteUnused=true, UnusedFileAge configurable).
+    GcResume {
+        #[command(flatten)]
+        target: crate::cli::host_args::HostArgs,
+        #[arg(long)]
+        project_id: i64,
+        #[arg(long, default_value_t = 10)]
+        unused_file_age: u32,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -873,6 +901,40 @@ mod tests {
                 assert_eq!(plan.to_string_lossy(), "/tmp/plan.json");
                 assert!(stop_on_failure);
                 assert!(yes);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_ini_gc_pause() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "ini", "gc-pause",
+            "--hosts", "R01,R02",
+            "--project-id", "1",
+            "--cred-alias", "admin", "--yes",
+        ]).unwrap();
+        match cli.command {
+            Domain::Ini { action: IniAction::GcPause { project_id, yes, .. } } => {
+                assert_eq!(project_id, 1);
+                assert!(yes);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_ini_gc_resume_with_age() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "ini", "gc-resume",
+            "--hosts", "R01",
+            "--project-id", "1",
+            "--unused-file-age", "30",
+            "--cred-alias", "admin", "--yes",
+        ]).unwrap();
+        match cli.command {
+            Domain::Ini { action: IniAction::GcResume { unused_file_age, .. } } => {
+                assert_eq!(unused_file_age, 30);
             }
             _ => panic!("wrong variant"),
         }
