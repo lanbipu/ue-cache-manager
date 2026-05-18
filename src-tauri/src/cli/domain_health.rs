@@ -470,6 +470,14 @@ pub(crate) async fn inject_l1_ports(
 ) {
     let l1 = crate::core::health_check::probe_tcp_ports(ip, timeout_ms).await;
     for (k, v) in l1 {
+        // Debug-only safety net: probe_tcp_ports should only return keys whose
+        // registry entry is L1Port. If a probe ever drifts and emits e.g. a
+        // bootstrap-layer key, catch it under cargo test before it ships.
+        debug_assert_eq!(
+            crate::core::probe_keys::layer_for(&k),
+            Some(crate::core::probe_keys::Layer::L1Port),
+            "probe_tcp_ports emitted non-L1 key '{}'", k
+        );
         row.entry(k).or_insert(v);
     }
 }

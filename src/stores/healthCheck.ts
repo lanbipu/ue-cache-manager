@@ -1,11 +1,13 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
-import { tauriApi, PROBE_LAYER_MAP, type CheckOutcome, type HealthCheckRun, type ProbeLayer, type RunHealthCheckRequest, type UecmError } from "@/services/tauri";
+import { tauriApi, PROBE_LAYER_MAP, type CheckOutcome, type HealthCheckRun, type ProbeKey, type ProbeLayer, type RunHealthCheckRequest, type UecmError } from "@/services/tauri";
 import { useDiagnosticsStore } from "./diagnostics";
 import { useGpuConsistencyStore } from "./gpuConsistency";
 
 export interface LayeredOutcome {
-  key: string;
+  /// Known probe key from PROBE_REGISTRY — guarantees the key has a layer + locale label.
+  /// (Unknown keys are filtered + logged via console.warn, never reach this struct.)
+  key: ProbeKey;
   outcome: CheckOutcome;
 }
 
@@ -62,7 +64,8 @@ export const useHealthCheckStore = defineStore("healthCheck", () => {
           );
           continue;
         }
-        grouped[layer].push({ key, outcome });
+        // `layer` truthy means `key` is in PROBE_LAYER_MAP — narrow it to ProbeKey.
+        grouped[layer].push({ key: key as ProbeKey, outcome });
       }
       for (const layer of ["l1_port", "l2_bootstrap", "l3_business"] as const) {
         grouped[layer].sort((a, b) => a.key.localeCompare(b.key));
@@ -120,7 +123,7 @@ export const useHealthCheckStore = defineStore("healthCheck", () => {
           ? `${cell.signature.model} / driver ${cell.signature.driver}`
           : "GPU signature differs from baseline.",
         sample: gpuConsistency.baselineLabel,
-        remediation: "Align GPU model and driver version before distributing PSO cache files.",
+        remediation: "Match GPU model and driver version cluster-wide before distributing PSO cache files.",
       };
     }
     return unknown("No GPU inventory row for this machine.");

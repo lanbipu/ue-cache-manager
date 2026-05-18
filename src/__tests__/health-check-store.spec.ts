@@ -23,11 +23,11 @@ describe("health check store", () => {
   });
 
   it("indexes results by machine", async () => {
-    runHealthCheck.mockResolvedValue({ scan_run_id: 7, results: [{ id: 1, scan_run_id: 7, machine_id: 2, machine_results: { smb: { status: "healthy", message: "ok", sample: "", remediation: "" } } }] });
+    runHealthCheck.mockResolvedValue({ scan_run_id: 7, results: [{ id: 1, scan_run_id: 7, machine_id: 2, machine_results: { lanman_server: { status: "healthy", message: "Running", sample: "", remediation: "" } } }] });
     const store = useHealthCheckStore();
     await store.run({ machine_ids: [2], credential_alias: "cred", project_paths: [] });
     expect(store.scanRunId).toBe(7);
-    expect(store.rowsByMachine[2].smb.status).toBe("healthy");
+    expect(store.rowsByMachine[2].lanman_server.status).toBe("healthy");
     expect(store.summary.healthy).toBe(1);
   });
 });
