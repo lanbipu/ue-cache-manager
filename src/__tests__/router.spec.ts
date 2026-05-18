@@ -12,11 +12,15 @@ describe("router", () => {
     });
   });
 
-  it("exposes the machines route as the single app surface", () => {
+  it("exposes the machines and deploy routes as named surfaces", () => {
     const named = routes.filter((r) => r.name !== undefined);
-    expect(named).toHaveLength(1);
-    expect(named[0].name).toBe("machines");
-    expect(named[0].path).toBe("/machines");
+    expect(named).toHaveLength(2);
+    const machinesRoute = named.find((r) => r.name === "machines");
+    expect(machinesRoute).toBeDefined();
+    expect(machinesRoute!.path).toBe("/machines");
+    const deployRoute = named.find((r) => r.name === "deploy");
+    expect(deployRoute).toBeDefined();
+    expect(deployRoute!.path).toBe("/deploy");
   });
 
   it("redirects / to /machines", async () => {
