@@ -720,6 +720,45 @@ fn collect_pso_sync(
     Ok(files.len())
 }
 
+pub fn run_plan(
+    db: &Db,
+    plan: &mut DeployPlan,
+    creds: Option<(&str, &str)>,
+    opts: RunOptions,
+    emit: &mut dyn FnMut(DeployEvent),
+) {
+    let steps = plan_steps(plan);
+    let mut overall_ok = true;
+    for step in steps {
+        let mut step_ok = 0u32;
+        let mut step_fail = 0u32;
+        run_step(db, plan, step, creds, &mut |evt| {
+            match &evt {
+                DeployEvent::StepHostOk { .. } => step_ok += 1,
+                DeployEvent::StepHostError { .. } => step_fail += 1,
+                _ => {}
+            }
+            emit(evt);
+        });
+        if step_fail > 0 {
+            overall_ok = false;
+            if opts.stop_on_step_failure {
+                emit(DeployEvent::PlanCompleted {
+                    ok: false,
+                    summary: format!("aborted after {:?} ({} failures)", step, step_fail),
+                });
+                return;
+            }
+        }
+        // Suppress unused warning when stop_on_step_failure is false and there are no failures
+        let _ = step_ok;
+    }
+    emit(DeployEvent::PlanCompleted {
+        ok: overall_ok,
+        summary: if overall_ok { "all steps ok".into() } else { "completed with failures".into() },
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -797,5 +836,26 @@ mod tests {
         assert_eq!(parse_resolution("1920x1080").unwrap(), (1920, 1080));
         assert_eq!(parse_resolution("640X480").unwrap(), (640, 480));
         assert!(parse_resolution("bad").is_err());
+    }
+
+    #[test]
+    fn run_plan_emits_plan_completed_on_empty_target_set() {
+        // With empty target_machine_ids, every step runs over zero hosts and
+        // therefore completes successfully. We use an in-memory DB.
+        let db = crate::data::open_in_memory().expect("in-memory db");
+        let mut plan = baseline_plan();
+        plan.target_machine_ids.clear();
+        plan.ddc_pak.enabled = false;
+        plan.pso.enabled = false;
+        plan.verify.run_log_verify = false;
+
+        let mut events: Vec<DeployEvent> = Vec::new();
+        run_plan(&db, &mut plan, None, RunOptions { stop_on_step_failure: false }, &mut |e| events.push(e));
+
+        let last = events.last().expect("at least one event");
+        match last {
+            DeployEvent::PlanCompleted { .. } => {} // any PlanCompleted is success here
+            other => panic!("expected PlanCompleted, got {:?}", other),
+        }
     }
 }
