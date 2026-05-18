@@ -162,7 +162,29 @@ fn run_with_rt(
     for (idx, &mid) in machine_ids.iter().enumerate() {
         let machine = match data_machines::find_by_id(&db, mid)? {
             Some(m) => m,
-            None => continue,
+            None => {
+                // Don't silently no-op — operator passed an id that doesn't exist.
+                // Emit ItemStarted+ItemCompleted so progress + summary match input length.
+                ctx.emitter
+                    .emit_event(&Event::ItemStarted {
+                        item_id: format!("machine:{}", mid),
+                        index: idx as i64,
+                        total,
+                    })
+                    .ok();
+                ctx.emitter
+                    .emit_event(&Event::ItemCompleted {
+                        item_id: format!("machine:{}", mid),
+                        index: idx as i64,
+                        ok: false,
+                        message: Some(format!(
+                            "machine id {} not found in inventory (run `uecm-cli machine list` to see valid ids)",
+                            mid
+                        )),
+                    })
+                    .ok();
+                continue;
+            }
         };
 
         ctx.emitter
@@ -437,7 +459,10 @@ pub(crate) fn should_skip_winrm(resolved_cred: &Option<(String, String)>) -> boo
 
 /// Inject L1 (port-layer) outcomes into a probe row. Runs the 3 TCP probes
 /// against the host and merges their outcomes into the given map. Existing
-/// keys are NOT overwritten — only the 3 `tcp_*` keys are added.
+/// keys are NOT overwritten — uses `entry().or_insert()` so a row that
+/// somehow already carries a `tcp_*` key (e.g. an upstream caller pre-seeded
+/// it) wins over the probe result. In normal flow the keys never collide
+/// since PS / derived sources don't emit `tcp_*`.
 pub(crate) async fn inject_l1_ports(
     row: &mut std::collections::HashMap<String, crate::core::health_check::CheckOutcome>,
     ip: &str,
@@ -445,7 +470,7 @@ pub(crate) async fn inject_l1_ports(
 ) {
     let l1 = crate::core::health_check::probe_tcp_ports(ip, timeout_ms).await;
     for (k, v) in l1 {
-        row.insert(k, v);
+        row.entry(k).or_insert(v);
     }
 }
 
@@ -609,5 +634,27 @@ mod tests {
         assert!(row.contains_key("tcp_445"));
         assert!(row.contains_key("tcp_135"));
         assert!(row.contains_key("lanman_server")); // existing key preserved
+    }
+
+    #[tokio::test]
+    async fn inject_l1_ports_does_not_overwrite_preseeded_tcp_key() {
+        use std::collections::HashMap;
+        let mut row: HashMap<String, crate::core::health_check::CheckOutcome> = HashMap::new();
+        // Pre-seed tcp_5985 with a sentinel that the real probe could not produce
+        // (status='warning' + a distinct message). After inject_l1_ports runs,
+        // this entry MUST survive — that's the invariant the doc comment promises.
+        let sentinel = crate::core::health_check::CheckOutcome {
+            status: "warning".into(),
+            message: "pre-seeded sentinel".into(),
+            sample: "".into(),
+            remediation: "".into(),
+        };
+        row.insert("tcp_5985".into(), sentinel.clone());
+        super::inject_l1_ports(&mut row, "203.0.113.4", 50).await;
+        assert_eq!(row.get("tcp_5985"), Some(&sentinel),
+            "inject_l1_ports must not overwrite pre-seeded tcp_5985 entry");
+        // Other two keys still added.
+        assert!(row.contains_key("tcp_445"));
+        assert!(row.contains_key("tcp_135"));
     }
 }
