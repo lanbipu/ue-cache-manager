@@ -40,10 +40,36 @@ impl Counters {
 
 pub fn handle(ctx: &mut Ctx<'_>, action: HealthAction) -> UecmResult<()> {
     match action {
-        HealthAction::Run { machine_ids, cred } => run(ctx, &machine_ids, &cred),
+        HealthAction::Run { machine_ids, cidr, all, cred } => {
+            run_dispatch(ctx, machine_ids, cidr, all, &cred)
+        }
         HealthAction::Runs { limit } => list_runs(ctx, limit),
         HealthAction::Results { scan_run_id } => list_results(ctx, scan_run_id),
     }
+}
+
+fn run_dispatch(
+    ctx: &mut Ctx<'_>,
+    machine_ids: Vec<i64>,
+    cidr: Option<String>,
+    all: bool,
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
+    // clap conflicts_with_all enforces "no two at once" but not "exactly one of three".
+    // Reject the all-empty case explicitly so the user gets a helpful error instead of
+    // a silent zero-machine run.
+    if machine_ids.is_empty() && cidr.is_none() && !all {
+        return Err(crate::error::UecmError::InvalidInput(
+            "health run requires exactly one of: --machine-ids, --cidr, or --all".into(),
+        ));
+    }
+    if let Some(_) = cidr {
+        return Err(crate::error::UecmError::InvalidInput("--cidr not yet implemented".into()));
+    }
+    if all {
+        return Err(crate::error::UecmError::InvalidInput("--all not yet implemented".into()));
+    }
+    run(ctx, &machine_ids, cred)
 }
 
 fn run(ctx: &mut Ctx<'_>, machine_ids: &[i64], cred: &CredentialArgs) -> UecmResult<()> {
