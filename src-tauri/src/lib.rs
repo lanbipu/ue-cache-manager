@@ -93,6 +93,7 @@ pub fn run() {
             commands::log_verify::run_log_verify,
             commands::deploy::deploy_ddc_run,
             commands::deploy::deploy_ddc_plan_preview,
+            commands::consistency::run_consistency_check,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

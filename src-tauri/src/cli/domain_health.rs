@@ -17,6 +17,23 @@ pub fn handle(ctx: &mut Ctx<'_>, action: HealthAction) -> UecmResult<()> {
         HealthAction::Run { machine_ids, cred } => run(ctx, &machine_ids, &cred),
         HealthAction::Runs { limit } => list_runs(ctx, limit),
         HealthAction::Results { scan_run_id } => list_results(ctx, scan_run_id),
+        HealthAction::ConsistencyCheck { hosts, cred } => {
+            let db = ctx.require_db()?;
+            let creds = cred.resolve(db)?;
+            let mut snaps = Vec::new();
+            for h in &hosts {
+                snaps.push(crate::core::consistency_check::snapshot(
+                    h,
+                    creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
+                )?);
+            }
+            let findings = crate::core::consistency_check::compare(&snaps);
+            ctx.emitter.emit_result(&serde_json::json!({
+                "snapshots": snaps,
+                "inconsistencies": findings
+            })).ok();
+            Ok(())
+        }
     }
 }
 
@@ -106,6 +123,7 @@ fn run(ctx: &mut Ctx<'_>, machine_ids: &[i64], cred: &CredentialArgs) -> UecmRes
             &cluster_share_unc,
             &cluster_svc_username,
             &cluster_share_unc,
+            "",
             cred_opt,
         ) {
             Ok(map) => map,

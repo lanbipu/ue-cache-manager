@@ -532,6 +532,13 @@ pub enum HealthAction {
     },
     /// List per-row health results for a scan run.
     Results { scan_run_id: i64 },
+    /// Snapshot N hosts and report cross-machine inconsistencies.
+    ConsistencyCheck {
+        #[arg(long, value_name = "H1,H2,...", value_delimiter = ',')]
+        hosts: Vec<String>,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
 }
 
 // ---------- gpu ----------

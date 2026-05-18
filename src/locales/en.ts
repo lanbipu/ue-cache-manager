@@ -459,6 +459,17 @@ const messages = {
       verify_startup_logs: "Startup log verify",
     },
   },
+  consistency: {
+    allMatch: "All machines are consistent.",
+    kind: {
+      ue_version_mismatch: "UE version mismatch",
+      renderstream_version_mismatch: "RenderStream version mismatch",
+      rhi_mismatch: "RHI mismatch",
+      gpu_model_mismatch: "GPU model mismatch",
+      gpu_driver_mismatch: "GPU driver version mismatch",
+      missing_ue: "Missing UE install",
+    },
+  },
   logVerify: {
     title: "{host} startup log report",
     localPath: "Local DDC actual path",

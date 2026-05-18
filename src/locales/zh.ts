@@ -461,6 +461,17 @@ const messages: MessageSchema = {
       verify_startup_logs: "启动日志验证",
     },
   },
+  consistency: {
+    allMatch: "所有机器配置一致。",
+    kind: {
+      ue_version_mismatch: "UE 版本不一致",
+      renderstream_version_mismatch: "RenderStream 版本不一致",
+      rhi_mismatch: "RHI 不一致",
+      gpu_model_mismatch: "GPU 型号不一致",
+      gpu_driver_mismatch: "GPU 驱动版本不一致",
+      missing_ue: "缺失 UE 安装",
+    },
+  },
   logVerify: {
     title: "{host} 启动日志报告",
     localPath: "Local DDC 实际路径",
