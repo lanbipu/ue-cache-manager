@@ -15,7 +15,7 @@ const { t } = useI18n();
 
 function entriesOf(inc: Inconsistency): Array<[string, string[]]> {
   if (inc.found) return Object.entries(inc.found);
-  if (inc.hosts) return [["(missing UE install)", inc.hosts]];
+  if (inc.hosts) return [[t("consistency.missingUeValue"), inc.hosts]];
   return [];
 }
 </script>

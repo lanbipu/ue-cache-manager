@@ -441,11 +441,12 @@ const messages = {
     openWizard: "Open deploy wizard",
     s1: { title: "1. Project & Machines", project: "Project", sourceHost: "Dev / warmup machine", targets: "Target Render Nodes" },
     s2: { title: "2. Local DDC config", localPath: "Local cache directory" },
-    s3: { title: "3. Shared SMB share", serverHost: "Share server host", shareName: "Share name", sharePath: "Server local path", mode: "Mode" },
+    s3: { title: "3. Shared SMB share", serverHost: "Share server host", shareName: "Share name", sharePath: "Server local path", mode: "Mode", modeOpen: "A — Open (Guest + Everyone:Full)", modeManaged: "B — Managed (ddc-svc)" },
     s4: { title: "4. Pak / PSO / Verify", pak: "Generate and distribute DDC Pak", pso: "Collect and distribute PSO", psoRes: "PSO resolution", psoMinutes: "PSO max duration (minutes)", verify: "Run startup log verify", editorExe: "UnrealEditor.exe path", cred: "Operator credential", stopOnFailure: "Stop on first step failure", preview: "Preview plan" },
     s5: { title: "5. Execute", run: "Start execution", running: "Running..." },
     step: {
       header: "Step",
+      okFail: "{ok} ok · {fail} fail",
       provision_local_dir: "Provision local dir",
       set_local_env: "Set UE-LocalDataCachePath",
       create_smb_share: "Create SMB share",
@@ -461,6 +462,7 @@ const messages = {
   },
   consistency: {
     allMatch: "All machines are consistent.",
+    missingUeValue: "(missing UE install)",
     kind: {
       ue_version_mismatch: "UE version mismatch",
       renderstream_version_mismatch: "RenderStream version mismatch",

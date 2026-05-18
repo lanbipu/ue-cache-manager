@@ -44,7 +44,7 @@ function classFor(tone: string): string {
       <div class="flex-1">
         <div>{{ t(`deploy.step.${s}`) }}</div>
         <div v-if="status[s] && Object.keys(status[s].hosts).length" class="text-xs text-muted-foreground">
-          {{ status[s].ok_count }} ok · {{ status[s].fail_count }} fail
+          {{ t("deploy.step.okFail", { ok: status[s].ok_count, fail: status[s].fail_count }) }}
         </div>
       </div>
     </li>

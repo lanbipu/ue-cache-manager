@@ -123,8 +123,8 @@ async function onRun() { await deploy.run(buildPlan(), credAlias.value, stopOnFa
         <input v-model="sharePath" class="mb-3 w-full rounded border border-input bg-transparent px-2 py-1 text-sm" />
         <label class="block text-sm mb-1">{{ t("deploy.s3.mode") }}</label>
         <select v-model="shareMode" class="mb-3 w-full rounded border border-input bg-transparent px-2 py-1 text-sm">
-          <option value="a">A — Open (Guest + Everyone:Full)</option>
-          <option value="b">B — Managed (ddc-svc)</option>
+          <option value="a">{{ t("deploy.s3.modeOpen") }}</option>
+          <option value="b">{{ t("deploy.s3.modeManaged") }}</option>
         </select>
         <div class="flex gap-2">
           <button class="px-3 py-1 rounded border border-border text-sm" @click="step = 2">{{ t("common.back") }}</button>
