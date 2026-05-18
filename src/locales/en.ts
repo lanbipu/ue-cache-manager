@@ -429,6 +429,19 @@ const messages = {
       runOn: "Run on {count} machine(s)",
     },
   },
+  logVerify: {
+    title: "{host} startup log report",
+    localPath: "Local DDC actual path",
+    sharedPath: "Shared DDC actual path",
+    readOnly: "(read-only)",
+    deactivated: "Shared was deactivated",
+    moveCollisions: "Move collision count",
+    maintenance: "Maintenance stats",
+    layer: "Layer",
+    files: "Files",
+    size: "Size",
+    truncated: "Log truncated; showing tail only.",
+  },
 };
 
 export type MessageSchema = typeof messages;

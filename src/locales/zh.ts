@@ -431,6 +431,19 @@ const messages: MessageSchema = {
       runOn: "在 {count} 台机器上运行",
     },
   },
+  logVerify: {
+    title: "{host} 启动日志报告",
+    localPath: "Local DDC 实际路径",
+    sharedPath: "Shared DDC 实际路径",
+    readOnly: "(只读)",
+    deactivated: "Shared 已被禁用",
+    moveCollisions: "Move collision 数",
+    maintenance: "维护统计",
+    layer: "层级",
+    files: "文件数",
+    size: "大小",
+    truncated: "日志已截断，仅显示末段。",
+  },
 };
 
 export default messages;

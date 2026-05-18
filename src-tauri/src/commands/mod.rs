@@ -8,6 +8,7 @@ pub mod gpu_consistency;
 pub mod health_check;
 pub mod ini_editor;
 pub mod ini_scanner;
+pub mod log_verify;
 pub mod machines;
 pub mod projects;
 pub mod pso;
