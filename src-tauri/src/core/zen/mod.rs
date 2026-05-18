@@ -8,6 +8,7 @@
 pub mod binary;
 pub mod cache_stats;
 pub mod cb_parser;
+pub mod enable;
 pub mod endpoint;
 pub mod lockfile;
 pub mod lua_config;
