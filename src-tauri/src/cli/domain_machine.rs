@@ -261,14 +261,26 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64, cred: &crate::cli::credential_args::Crede
         .map(|(i, _)| i);
     {
         let db = ctx.require_db()?;
+        // Mirror commands/discovery.rs: snapshot existing rows so intree_*
+        // metadata written by Plan 7 T1.6 survives a `uecm-cli machine refresh`.
+        let existing = machine_ue_installs::list_for_machine(db, id)?;
         machine_ue_installs::delete_for_machine(db, id)?;
         for (idx, detected) in detected_ue.iter().enumerate() {
+            let prior = existing
+                .iter()
+                .find(|u| u.version == detected.version && u.install_path == detected.install_path);
             let install = machine_ue_installs::UeInstall {
                 id: None,
                 machine_id: id,
                 version: detected.version.clone(),
                 install_path: detected.install_path.clone(),
                 is_primary: Some(idx) == primary_idx,
+                zen_cli_intree_path: prior.and_then(|p| p.zen_cli_intree_path.clone()),
+                zen_cli_intree_version: prior.and_then(|p| p.zen_cli_intree_version.clone()),
+                zen_cli_intree_sha256: prior.and_then(|p| p.zen_cli_intree_sha256.clone()),
+                zenserver_intree_path: prior.and_then(|p| p.zenserver_intree_path.clone()),
+                zenserver_intree_version: prior.and_then(|p| p.zenserver_intree_version.clone()),
+                zenserver_intree_sha256: prior.and_then(|p| p.zenserver_intree_sha256.clone()),
             };
             machine_ue_installs::upsert(db, &install)?;
         }

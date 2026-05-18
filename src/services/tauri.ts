@@ -388,15 +388,58 @@ export interface HealthRunSummary {
   warning: number;
   critical: number;
   offline: number;
+  skipped: number;
   total: number;
 }
 
 export type HealthCheckRun = HealthCheckRow;
 
+export type ProbeLayer = "l1_port" | "l2_bootstrap" | "l3_business";
+
+/**
+ * Maps each probe key emitted by the Rust health runner to its diagnostic
+ * layer. MUST stay in sync with src-tauri/src/core/probe_keys.rs PROBE_REGISTRY
+ * — the drift test in probe-layer-map.spec.ts encodes the expected keys.
+ *
+ * L3 covers both "business" (WinRM probes) and "derived" (Rust-computed)
+ * because they render in the same UI section.
+ */
+export const PROBE_LAYER_MAP = {
+  // L1 — port reachability (operator-console TCP probes)
+  tcp_5985: "l1_port",
+  tcp_445: "l1_port",
+  tcp_135: "l1_port",
+  // L2 — bootstrap configuration (PowerShell via WinRM)
+  firewall_445: "l2_bootstrap",
+  local_account_token_filter: "l2_bootstrap",
+  long_paths_enabled: "l2_bootstrap",
+  lanman_server: "l2_bootstrap",
+  // L3 — business workflow (PowerShell + derived)
+  share_reachable: "l3_business",
+  ntfs_perm: "l3_business",
+  cred_user: "l3_business",
+  cred_system: "l3_business",
+  env_vars: "l3_business",
+  env_local: "l3_business",
+  env_shared: "l3_business",
+  system_write: "l3_business",
+  winmgmt: "l3_business",
+  rs_service: "l3_business",
+  ini_consistency: "l3_business",
+  pso_precaching: "l3_business",
+  gpu_consistency: "l3_business",
+} as const satisfies Record<string, ProbeLayer>;
+
+export type ProbeKey = keyof typeof PROBE_LAYER_MAP;
+
 export interface RunHealthCheckRequest {
   machine_ids: number[];
   credential_alias: string;
   project_paths: string[];
+  /** Expected UE-LocalDataCachePath; empty/undefined => presence-only env_local probe. */
+  expected_local_path?: string;
+  /** Expected UE-SharedDataCachePath; empty/undefined => falls back to cluster share UNC. */
+  expected_shared_path?: string;
 }
 
 export interface RunHealthCheckResponse {

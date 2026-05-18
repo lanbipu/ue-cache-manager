@@ -121,6 +121,10 @@ mod tests {
                 display_name: None,
                 first_seen_at: None,
                 last_seen_at: None,
+                ue_version_major: None,
+                ue_version_minor: None,
+                engine_association_raw: None,
+                engine_association_kind: None,
             },
         )
         .unwrap();

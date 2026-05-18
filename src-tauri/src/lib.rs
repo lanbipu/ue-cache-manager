@@ -94,6 +94,14 @@ pub fn run() {
             commands::deploy::deploy_ddc_run,
             commands::deploy::deploy_ddc_plan_preview,
             commands::consistency::run_consistency_check,
+            commands::zen::zen_status,
+            commands::zen::zen_probe,
+            commands::zen::zen_cache_stats,
+            commands::zen::zen_detect_binary,
+            commands::zen::zen_list_endpoints,
+            commands::zen::zen_baseline_list,
+            commands::zen::zen_baseline_lock,
+            commands::zen::zen_baseline_unlock,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

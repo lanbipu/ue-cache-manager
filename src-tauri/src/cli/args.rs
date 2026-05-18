@@ -98,6 +98,11 @@ pub enum Domain {
         #[command(subcommand)]
         action: DeployAction,
     },
+    /// Zen daemon inventory + probes + baselines (Plan 7 M1).
+    Zen {
+        #[command(subcommand)]
+        action: ZenAction,
+    },
 }
 
 // ---------- system ----------
@@ -546,14 +551,27 @@ pub enum ProjectAction {
 // ---------- health ----------
 #[derive(Subcommand, Debug)]
 pub enum HealthAction {
-    /// Run health probes across one or more machines.
+    /// Run health probes — L1 port + L2 bootstrap + L3 business checkup with remediation hints.
+    ///
+    /// Target selection (exactly one of three modes):
+    ///   --machine-ids 1,2,3     diagnose specific inventoried machines (persists results)
+    ///   --cidr 192.168.10.0/24  L1 port-layer scan, stdout-only, no DB persistence
+    ///   --all                   diagnose every machine in inventory (persists results)
+    ///
+    /// Credentials are optional. Without --cred-alias/--user, L2 + L3 probes are
+    /// reported as `status=na` and counted in a separate `skipped` summary counter
+    /// (not `healthy`/`critical`). L1 ports always run.
     Run {
-        #[arg(long, value_name = "M1,M2,...", value_delimiter = ',')]
+        #[arg(long, value_name = "M1,M2,...", value_delimiter = ',',
+              conflicts_with_all = ["cidr", "all"])]
         machine_ids: Vec<i64>,
+        #[arg(long, conflicts_with_all = ["machine_ids", "all"])]
+        cidr: Option<String>,
+        #[arg(long, conflicts_with_all = ["machine_ids", "cidr"])]
+        all: bool,
         /// Expected value for UE-LocalDataCachePath env var on each machine.
         /// When supplied, the env_local probe does an exact-match comparison
-        /// instead of a presence-only check.  Leave unset to keep the old
-        /// behaviour (presence only).
+        /// instead of a presence-only check. Leave unset to keep presence-only.
         #[arg(long, default_value = "")]
         expected_local_path: String,
         /// Expected value for UE-SharedDataCachePath env var on each machine.
@@ -758,6 +776,99 @@ pub enum DeployAction {
         dry_run: bool,
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
+    },
+}
+
+// ---------- zen (Plan 7 M1) ----------
+#[derive(Subcommand, Debug)]
+pub enum ZenAction {
+    /// Read-only view of latest probe per endpoint.
+    Status {
+        /// Limit to one machine's endpoints (mutually exclusive with --all).
+        #[arg(long, conflicts_with = "all")]
+        machine: Option<i64>,
+        /// Show endpoints across every machine (default).
+        #[arg(long)]
+        all: bool,
+    },
+    /// Probe one or more endpoints right now and persist a row each.
+    Probe {
+        #[arg(long, conflicts_with = "all")]
+        machine: Option<i64>,
+        #[arg(long)]
+        all: bool,
+        /// Per-endpoint timeout in seconds (HTTP connect + read).
+        #[arg(long, default_value_t = 5)]
+        timeout: u64,
+        /// Reserved for future WinRM-tunneled probe — accepted but currently ignored.
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Fetch /stats + /stats/z$ now and persist a row.
+    CacheStats {
+        /// Limit to one endpoint by id (mutually exclusive with --all).
+        #[arg(long, conflicts_with = "all")]
+        endpoint_id: Option<i64>,
+        #[arg(long)]
+        all: bool,
+        #[arg(long, default_value_t = 5)]
+        timeout: u64,
+    },
+    /// Run the zen-detect-binary.ps1 sidecar against a machine and persist.
+    DetectBinary {
+        #[arg(long, conflicts_with = "all")]
+        machine: Option<i64>,
+        #[arg(long)]
+        all: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Read-only list of registered zen endpoints.
+    ListEndpoints {
+        /// Limit to one machine's endpoints.
+        #[arg(long)]
+        machine: Option<i64>,
+    },
+    /// Baseline (zen_binary_expected) inspection and lock/unlock.
+    Baseline {
+        #[command(subcommand)]
+        action: ZenBaselineAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ZenBaselineAction {
+    /// List baseline rows, optionally filtered.
+    List {
+        #[arg(long)]
+        zen_build_version: Option<String>,
+        /// Filter by binary kind (zen_cli | zenserver).
+        #[arg(long, value_name = "KIND")]
+        kind: Option<String>,
+    },
+    /// Set the `locked_by` marker on an existing baseline row.
+    Lock {
+        #[arg(long)]
+        zen_build_version: String,
+        #[arg(long, value_name = "KIND")]
+        kind: String,
+        #[arg(long)]
+        locked_by: String,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Clear the `locked_by` marker on an existing baseline row.
+    Unlock {
+        #[arg(long)]
+        zen_build_version: String,
+        #[arg(long, value_name = "KIND")]
+        kind: String,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -1073,5 +1184,63 @@ mod tests {
             }
             _ => panic!("wrong variant"),
         }
+    }
+
+    #[test]
+    fn parses_health_run_with_machine_ids() {
+        let cli = Cli::try_parse_from(["uecm-cli", "health", "run", "--machine-ids", "1,2,3"]).unwrap();
+        match cli.command {
+            Domain::Health { action: HealthAction::Run { machine_ids, cidr, all, .. } } => {
+                assert_eq!(machine_ids, vec![1, 2, 3]);
+                assert_eq!(cidr, None);
+                assert_eq!(all, false);
+            }
+            _ => panic!("expected Health::Run"),
+        }
+    }
+
+    #[test]
+    fn parses_health_run_with_cidr() {
+        let cli = Cli::try_parse_from(["uecm-cli", "health", "run", "--cidr", "192.168.10.0/24"]).unwrap();
+        match cli.command {
+            Domain::Health { action: HealthAction::Run { cidr, .. } } => {
+                assert_eq!(cidr.as_deref(), Some("192.168.10.0/24"));
+            }
+            _ => panic!("expected Health::Run"),
+        }
+    }
+
+    #[test]
+    fn parses_health_run_with_all_flag() {
+        let cli = Cli::try_parse_from(["uecm-cli", "health", "run", "--all"]).unwrap();
+        match cli.command {
+            Domain::Health { action: HealthAction::Run { all, .. } } => assert!(all),
+            _ => panic!("expected Health::Run"),
+        }
+    }
+
+    #[test]
+    fn parses_health_run_with_no_target_mode() {
+        let cli = Cli::try_parse_from(["uecm-cli", "health", "run"]).unwrap();
+        match cli.command {
+            Domain::Health { action: HealthAction::Run { machine_ids, cidr, all, .. } } => {
+                assert!(machine_ids.is_empty());
+                assert_eq!(cidr, None);
+                assert_eq!(all, false);
+            }
+            _ => panic!("expected Health::Run"),
+        }
+    }
+
+    #[test]
+    fn rejects_cidr_and_machine_ids_together() {
+        let r = Cli::try_parse_from(["uecm-cli", "health", "run", "--cidr", "10.0.0.0/24", "--machine-ids", "1"]);
+        assert!(r.is_err(), "should reject --cidr + --machine-ids");
+    }
+
+    #[test]
+    fn rejects_all_and_cidr_together() {
+        let r = Cli::try_parse_from(["uecm-cli", "health", "run", "--all", "--cidr", "10.0.0.0/24"]);
+        assert!(r.is_err(), "should reject --all + --cidr");
     }
 }

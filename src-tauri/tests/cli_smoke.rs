@@ -202,3 +202,93 @@ fn machine_refresh_accepts_cred_alias_flag_without_clap_error() {
     assert_eq!(v["kind"], "error");
     assert_eq!(v["code"], "invalid_input");
 }
+
+// -------------------------------------------------------------------------
+// Plan 7 T1.9: zen domain smoke tests
+// -------------------------------------------------------------------------
+
+#[test]
+fn zen_status_on_empty_db_returns_empty_endpoints_doc() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let path = tmp.path().to_string_lossy().to_string();
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args(["--json", "zen", "status"])
+        .output()
+        .expect("spawn");
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    assert_eq!(v["endpoints"], serde_json::Value::Array(vec![]));
+}
+
+#[test]
+fn zen_list_endpoints_on_empty_db_returns_empty_array() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let path = tmp.path().to_string_lossy().to_string();
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args(["--json", "zen", "list-endpoints"])
+        .output()
+        .expect("spawn");
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    assert_eq!(v, serde_json::Value::Array(vec![]));
+}
+
+#[test]
+fn zen_baseline_list_on_empty_db_returns_empty_array() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let path = tmp.path().to_string_lossy().to_string();
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args(["--json", "zen", "baseline", "list"])
+        .output()
+        .expect("spawn");
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    assert_eq!(v, serde_json::Value::Array(vec![]));
+}
+
+#[test]
+fn zen_baseline_lock_without_yes_returns_invalid_input() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let path = tmp.path().to_string_lossy().to_string();
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args([
+            "--json", "zen", "baseline", "lock",
+            "--zen-build-version", "5.8.10-aaa",
+            "--kind", "zen_cli",
+            "--locked-by", "operator-1",
+        ])
+        .output()
+        .expect("spawn");
+    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(stderr.trim_end()).expect("stderr JSON envelope");
+    assert_eq!(v["code"], "invalid_input");
+}
+
+#[test]
+fn zen_baseline_lock_rejects_bad_kind() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let path = tmp.path().to_string_lossy().to_string();
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args([
+            "--json", "zen", "baseline", "lock",
+            "--zen-build-version", "5.8.10-aaa",
+            "--kind", "bogus",
+            "--locked-by", "operator-1",
+            "--yes",
+        ])
+        .output()
+        .expect("spawn");
+    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(2));
+}

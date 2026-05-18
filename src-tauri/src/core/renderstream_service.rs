@@ -99,6 +99,7 @@ pub fn into_check_outcome(report: &RsServiceReport) -> crate::core::health_check
         status: status.into(),
         message,
         sample: names.join(", "),
+        remediation: String::new(),
     }
 }
 

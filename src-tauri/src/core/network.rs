@@ -95,6 +95,24 @@ async fn probe_host(ip: IpAddr, timeout_ms: u64) -> ProbedHost {
     }
 }
 
+/// Single-host port probe. Unlike `scan_cidr`, returns the result regardless of
+/// which ports are open — callers (health-run) need to see "all closed" as a
+/// distinct outcome from "host not in CIDR".
+pub async fn probe_host_one(ip_str: &str, timeout_ms: u64) -> ProbedHost {
+    let ip: IpAddr = match IpAddr::from_str(ip_str) {
+        Ok(addr) => addr,
+        Err(_) => {
+            return ProbedHost {
+                ip: ip_str.to_string(),
+                winrm_open: false,
+                smb_open: false,
+                rpc_open: false,
+            };
+        }
+    };
+    probe_host(ip, timeout_ms).await
+}
+
 async fn probe_port(ip: IpAddr, port: u16, timeout_ms: u64) -> bool {
     let addr = SocketAddr::new(ip, port);
     matches!(
@@ -142,5 +160,17 @@ mod tests {
         // /32 expands to 0 hosts, so use /31 with two addresses
         // Just confirm probe_port returns bool without panicking
         let _ = probe_port(IpAddr::from_str("127.0.0.1").unwrap(), 1, 50).await;
+    }
+
+    #[tokio::test]
+    async fn probe_host_one_returns_all_ports_for_unreachable_host() {
+        // TEST-NET-3 (RFC 5737): documentation range, unroutable in real LANs.
+        let probed = probe_host_one("203.0.113.1", 100).await;
+        assert_eq!(probed.ip, "203.0.113.1");
+        // We do not assert false for each port — middleboxes may intercept.
+        // We assert the shape: function returns a ProbedHost no matter what.
+        let _ = probed.winrm_open;
+        let _ = probed.smb_open;
+        let _ = probed.rpc_open;
     }
 }

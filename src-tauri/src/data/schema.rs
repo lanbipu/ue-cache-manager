@@ -227,6 +227,143 @@ const MIGRATIONS: &[(&str, &str)] = &[
         CREATE INDEX IF NOT EXISTS idx_pso_distributions_file ON pso_distributions(pso_cache_file_id);
         "#,
     ),
+    (
+        "013_projects_zen_engine_association",
+        r#"
+        ALTER TABLE projects ADD COLUMN ue_version_major INTEGER;
+        ALTER TABLE projects ADD COLUMN ue_version_minor INTEGER;
+        ALTER TABLE projects ADD COLUMN engine_association_raw TEXT;
+        ALTER TABLE projects ADD COLUMN engine_association_kind TEXT;
+        "#,
+    ),
+    (
+        "014_zen_endpoints_table",
+        r#"
+        CREATE TABLE IF NOT EXISTS zen_endpoints (
+            id INTEGER PRIMARY KEY,
+            machine_id INTEGER NOT NULL REFERENCES machines(id) ON DELETE CASCADE,
+            declared_port INTEGER NOT NULL DEFAULT 8558,
+            scheme TEXT NOT NULL DEFAULT 'http',
+            role TEXT NOT NULL,
+            upstream_endpoint_id INTEGER REFERENCES zen_endpoints(id) ON DELETE SET NULL,
+            data_dir TEXT NOT NULL,
+            httpserverclass TEXT NOT NULL DEFAULT 'asio',
+            lifecycle_mode TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(machine_id, declared_port)
+        );
+        CREATE INDEX IF NOT EXISTS idx_zen_endpoints_machine ON zen_endpoints(machine_id);
+        "#,
+    ),
+    (
+        "015_zen_probes_table",
+        r#"
+        CREATE TABLE IF NOT EXISTS zen_probes (
+            id INTEGER PRIMARY KEY,
+            endpoint_id INTEGER NOT NULL REFERENCES zen_endpoints(id) ON DELETE CASCADE,
+            probed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            reachable INTEGER NOT NULL,
+            schema_version INTEGER NOT NULL DEFAULT 1,
+            effective_port INTEGER,
+            pid INTEGER,
+            uptime_seconds INTEGER,
+            data_root TEXT,
+            is_dedicated INTEGER,
+            build_version TEXT,
+            health_info_cb BLOB,
+            health_version_text TEXT,
+            stats_providers_cb BLOB,
+            error_message TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_zen_probes_endpoint_time ON zen_probes(endpoint_id, probed_at);
+        "#,
+    ),
+    (
+        "016_zen_cache_stats_table",
+        r#"
+        CREATE TABLE IF NOT EXISTS zen_cache_stats (
+            id INTEGER PRIMARY KEY,
+            endpoint_id INTEGER NOT NULL REFERENCES zen_endpoints(id) ON DELETE CASCADE,
+            sampled_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            cache_hit_ratio REAL,
+            cache_disk_size_bytes INTEGER,
+            cache_memory_size_bytes INTEGER,
+            provider_path TEXT NOT NULL DEFAULT '/stats/z$',
+            raw_cb BLOB NOT NULL,
+            schema_version INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE INDEX IF NOT EXISTS idx_zen_cache_stats_endpoint_time ON zen_cache_stats(endpoint_id, sampled_at);
+        "#,
+    ),
+    (
+        "017_project_cache_backend_table",
+        r#"
+        CREATE TABLE IF NOT EXISTS project_cache_backend (
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            machine_id INTEGER NOT NULL REFERENCES machines(id) ON DELETE CASCADE,
+            backend TEXT NOT NULL,
+            zen_endpoint_id INTEGER REFERENCES zen_endpoints(id) ON DELETE SET NULL,
+            notes TEXT,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (project_id, machine_id)
+        );
+        "#,
+    ),
+    (
+        "018_zen_binary_expected_table",
+        r#"
+        CREATE TABLE IF NOT EXISTS zen_binary_expected (
+            zen_build_version TEXT NOT NULL,
+            binary_kind TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            locked_by TEXT,
+            first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (zen_build_version, binary_kind)
+        );
+        "#,
+    ),
+    (
+        "019_zen_binary_intree_table",
+        r#"
+        CREATE TABLE IF NOT EXISTS zen_binary_intree (
+            ue_version_major INTEGER NOT NULL,
+            ue_version_minor INTEGER NOT NULL,
+            binary_kind TEXT NOT NULL,
+            build_version TEXT,
+            sha256 TEXT,
+            last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (ue_version_major, ue_version_minor, binary_kind)
+        );
+        "#,
+    ),
+    (
+        "020_machine_zen_install_table",
+        r#"
+        CREATE TABLE IF NOT EXISTS machine_zen_install (
+            machine_id INTEGER PRIMARY KEY REFERENCES machines(id) ON DELETE CASCADE,
+            install_dir TEXT,
+            zen_cli_path TEXT,
+            zen_cli_build_version TEXT,
+            zen_cli_sha256 TEXT,
+            zenserver_path TEXT,
+            zenserver_build_version TEXT,
+            zenserver_sha256 TEXT,
+            last_detected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        "#,
+    ),
+    (
+        "021_machine_ue_installs_zen_intree_columns",
+        r#"
+        ALTER TABLE machine_ue_installs ADD COLUMN zen_cli_intree_path TEXT;
+        ALTER TABLE machine_ue_installs ADD COLUMN zen_cli_intree_version TEXT;
+        ALTER TABLE machine_ue_installs ADD COLUMN zen_cli_intree_sha256 TEXT;
+        ALTER TABLE machine_ue_installs ADD COLUMN zenserver_intree_path TEXT;
+        ALTER TABLE machine_ue_installs ADD COLUMN zenserver_intree_version TEXT;
+        ALTER TABLE machine_ue_installs ADD COLUMN zenserver_intree_sha256 TEXT;
+        "#,
+    ),
 ];
 
 pub fn migrate(conn: &mut Connection) -> UecmResult<()> {
@@ -414,5 +551,385 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    // ---- Plan 7 zen integration schema (migrations 014-021) ----
+
+    fn table_columns(conn: &Connection, table: &str) -> Vec<(String, String, bool)> {
+        // Returns (name, type, notnull) for each column. Uses PRAGMA table_info.
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info({})", table))
+            .unwrap();
+        let rows = stmt
+            .query_map([], |r| {
+                let name: String = r.get(1)?;
+                let ty: String = r.get(2)?;
+                let notnull: i64 = r.get(3)?;
+                Ok((name, ty, notnull != 0))
+            })
+            .unwrap();
+        rows.collect::<Result<Vec<_>, _>>().unwrap()
+    }
+
+    fn table_exists(conn: &Connection, table: &str) -> bool {
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",
+                [table],
+                |r| r.get(0),
+            )
+            .unwrap();
+        count == 1
+    }
+
+    fn assert_has_columns(
+        conn: &Connection,
+        table: &str,
+        expected: &[(&str, &str, bool)],
+    ) {
+        let cols = table_columns(conn, table);
+        for (name, ty, notnull) in expected {
+            let found = cols
+                .iter()
+                .find(|(n, _, _)| n == name)
+                .unwrap_or_else(|| panic!("table {} missing column {}", table, name));
+            assert_eq!(
+                &found.1, ty,
+                "table {} column {} expected type {} got {}",
+                table, name, ty, found.1
+            );
+            assert_eq!(
+                found.2, *notnull,
+                "table {} column {} expected notnull={} got {}",
+                table, name, notnull, found.2
+            );
+        }
+    }
+
+    #[test]
+    fn migrate_creates_zen_endpoints_table_with_expected_columns() {
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        assert!(table_exists(&conn, "zen_endpoints"));
+        assert_has_columns(
+            &conn,
+            "zen_endpoints",
+            &[
+                ("id", "INTEGER", false),
+                ("machine_id", "INTEGER", true),
+                ("declared_port", "INTEGER", true),
+                ("scheme", "TEXT", true),
+                ("role", "TEXT", true),
+                ("upstream_endpoint_id", "INTEGER", false),
+                ("data_dir", "TEXT", true),
+                ("httpserverclass", "TEXT", true),
+                ("lifecycle_mode", "TEXT", true),
+                ("created_at", "TEXT", true),
+                ("updated_at", "TEXT", true),
+            ],
+        );
+    }
+
+    #[test]
+    fn migrate_creates_zen_probes_table_with_expected_columns() {
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        assert!(table_exists(&conn, "zen_probes"));
+        assert_has_columns(
+            &conn,
+            "zen_probes",
+            &[
+                ("id", "INTEGER", false),
+                ("endpoint_id", "INTEGER", true),
+                ("probed_at", "TEXT", true),
+                ("reachable", "INTEGER", true),
+                ("schema_version", "INTEGER", true),
+                ("effective_port", "INTEGER", false),
+                ("pid", "INTEGER", false),
+                ("uptime_seconds", "INTEGER", false),
+                ("data_root", "TEXT", false),
+                ("is_dedicated", "INTEGER", false),
+                ("build_version", "TEXT", false),
+                ("health_info_cb", "BLOB", false),
+                ("health_version_text", "TEXT", false),
+                ("stats_providers_cb", "BLOB", false),
+                ("error_message", "TEXT", false),
+            ],
+        );
+    }
+
+    #[test]
+    fn migrate_creates_zen_cache_stats_table_with_expected_columns() {
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        assert!(table_exists(&conn, "zen_cache_stats"));
+        assert_has_columns(
+            &conn,
+            "zen_cache_stats",
+            &[
+                ("id", "INTEGER", false),
+                ("endpoint_id", "INTEGER", true),
+                ("sampled_at", "TEXT", true),
+                ("cache_hit_ratio", "REAL", false),
+                ("cache_disk_size_bytes", "INTEGER", false),
+                ("cache_memory_size_bytes", "INTEGER", false),
+                ("provider_path", "TEXT", true),
+                ("raw_cb", "BLOB", true),
+                ("schema_version", "INTEGER", true),
+            ],
+        );
+    }
+
+    #[test]
+    fn migrate_creates_project_cache_backend_table_with_expected_columns() {
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        assert!(table_exists(&conn, "project_cache_backend"));
+        // Composite PRIMARY KEY columns are NOT NULL implicitly via the constraint;
+        // PRAGMA table_info reports notnull=1 for them in SQLite.
+        assert_has_columns(
+            &conn,
+            "project_cache_backend",
+            &[
+                ("project_id", "INTEGER", true),
+                ("machine_id", "INTEGER", true),
+                ("backend", "TEXT", true),
+                ("zen_endpoint_id", "INTEGER", false),
+                ("notes", "TEXT", false),
+                ("updated_at", "TEXT", true),
+            ],
+        );
+    }
+
+    #[test]
+    fn migrate_creates_zen_binary_expected_table_with_expected_columns() {
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        assert!(table_exists(&conn, "zen_binary_expected"));
+        assert_has_columns(
+            &conn,
+            "zen_binary_expected",
+            &[
+                ("zen_build_version", "TEXT", true),
+                ("binary_kind", "TEXT", true),
+                ("sha256", "TEXT", true),
+                ("locked_by", "TEXT", false),
+                ("first_seen_at", "TEXT", true),
+            ],
+        );
+    }
+
+    #[test]
+    fn migrate_creates_zen_binary_intree_table_with_expected_columns() {
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        assert!(table_exists(&conn, "zen_binary_intree"));
+        assert_has_columns(
+            &conn,
+            "zen_binary_intree",
+            &[
+                ("ue_version_major", "INTEGER", true),
+                ("ue_version_minor", "INTEGER", true),
+                ("binary_kind", "TEXT", true),
+                ("build_version", "TEXT", false),
+                ("sha256", "TEXT", false),
+                ("last_seen_at", "TEXT", true),
+            ],
+        );
+    }
+
+    #[test]
+    fn migrate_creates_machine_zen_install_table_with_expected_columns() {
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        assert!(table_exists(&conn, "machine_zen_install"));
+        assert_has_columns(
+            &conn,
+            "machine_zen_install",
+            &[
+                ("machine_id", "INTEGER", false),
+                ("install_dir", "TEXT", false),
+                ("zen_cli_path", "TEXT", false),
+                ("zen_cli_build_version", "TEXT", false),
+                ("zen_cli_sha256", "TEXT", false),
+                ("zenserver_path", "TEXT", false),
+                ("zenserver_build_version", "TEXT", false),
+                ("zenserver_sha256", "TEXT", false),
+                ("last_detected_at", "TEXT", true),
+            ],
+        );
+    }
+
+    #[test]
+    fn migrate_adds_zen_intree_columns_to_machine_ue_installs() {
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        assert_has_columns(
+            &conn,
+            "machine_ue_installs",
+            &[
+                ("zen_cli_intree_path", "TEXT", false),
+                ("zen_cli_intree_version", "TEXT", false),
+                ("zen_cli_intree_sha256", "TEXT", false),
+                ("zenserver_intree_path", "TEXT", false),
+                ("zenserver_intree_version", "TEXT", false),
+                ("zenserver_intree_sha256", "TEXT", false),
+            ],
+        );
+    }
+
+    #[test]
+    fn migrate_creates_zen_endpoints_unique_machine_port_index() {
+        // Verifies the UNIQUE(machine_id, declared_port) constraint by attempting
+        // to insert two rows for the same (machine_id, declared_port) and asserting
+        // the second insert fails.
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        conn.execute(
+            "INSERT INTO machines (hostname, ip, role, status) VALUES ('h1', '10.0.0.1', 'unknown', 'unknown')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO zen_endpoints (machine_id, declared_port, role, data_dir, lifecycle_mode) \
+             VALUES (1, 8558, 'local', '/tmp/zen', 'editor_owned')",
+            [],
+        )
+        .unwrap();
+        let dup = conn.execute(
+            "INSERT INTO zen_endpoints (machine_id, declared_port, role, data_dir, lifecycle_mode) \
+             VALUES (1, 8558, 'local', '/tmp/zen2', 'editor_owned')",
+            [],
+        );
+        assert!(dup.is_err(), "expected UNIQUE constraint to reject duplicate");
+    }
+
+    #[test]
+    fn zen_child_tables_cascade_on_machine_delete() {
+        // Plan §1.1: deleting a `machines` row must cascade through every Zen
+        // child table that hangs off it (zen_endpoints, zen_probes,
+        // zen_cache_stats, project_cache_backend, machine_zen_install) so
+        // existing data::machines::delete keeps working after Plan 7 lands.
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+
+        conn.execute(
+            "INSERT INTO machines (hostname, ip, role, status) VALUES ('h1', '10.0.0.1', 'unknown', 'unknown')",
+            [],
+        )
+        .unwrap();
+        let machine_id: i64 = conn
+            .query_row("SELECT id FROM machines WHERE hostname = 'h1'", [], |r| r.get(0))
+            .unwrap();
+
+        conn.execute(
+            "INSERT INTO zen_endpoints (machine_id, declared_port, role, data_dir, lifecycle_mode) \
+             VALUES (?1, 8558, 'local', '/tmp/zen', 'editor_owned')",
+            [machine_id],
+        )
+        .unwrap();
+        let endpoint_id: i64 = conn
+            .query_row(
+                "SELECT id FROM zen_endpoints WHERE machine_id = ?1",
+                [machine_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        conn.execute(
+            "INSERT INTO zen_probes (endpoint_id, reachable) VALUES (?1, 1)",
+            [endpoint_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO zen_cache_stats (endpoint_id, raw_cb) VALUES (?1, X'00')",
+            [endpoint_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO machine_zen_install (machine_id) VALUES (?1)",
+            [machine_id],
+        )
+        .unwrap();
+
+        conn.execute("DELETE FROM machines WHERE id = ?1", [machine_id])
+            .unwrap();
+
+        for (table, where_clause) in [
+            ("zen_endpoints", "machine_id = ?1"),
+            ("zen_probes", "endpoint_id = ?1"),
+            ("zen_cache_stats", "endpoint_id = ?1"),
+            ("machine_zen_install", "machine_id = ?1"),
+        ] {
+            let bind: i64 = if table == "zen_probes" || table == "zen_cache_stats" {
+                endpoint_id
+            } else {
+                machine_id
+            };
+            let remaining: i64 = conn
+                .query_row(
+                    &format!("SELECT count(*) FROM {} WHERE {}", table, where_clause),
+                    [bind],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(remaining, 0, "{} should have been cascaded", table);
+        }
+    }
+
+    #[test]
+    fn project_cache_backend_clears_zen_endpoint_on_endpoint_delete() {
+        // zen_endpoint_id is a soft reference — deleting the endpoint should
+        // SET NULL on project_cache_backend so the backend choice remains
+        // recorded and operator can re-point at another endpoint later.
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+
+        conn.execute(
+            "INSERT INTO machines (hostname, ip, role, status) VALUES ('h1', '10.0.0.1', 'unknown', 'unknown')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO projects (uproject_name, uproject_stem_lower) VALUES ('p.uproject', 'p')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO zen_endpoints (machine_id, declared_port, role, data_dir, lifecycle_mode) \
+             VALUES (1, 8558, 'local', '/tmp/zen', 'editor_owned')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO project_cache_backend (project_id, machine_id, backend, zen_endpoint_id) \
+             VALUES (1, 1, 'zen', 1)",
+            [],
+        )
+        .unwrap();
+
+        conn.execute("DELETE FROM zen_endpoints WHERE id = 1", []).unwrap();
+
+        let endpoint_ref: Option<i64> = conn
+            .query_row(
+                "SELECT zen_endpoint_id FROM project_cache_backend WHERE project_id = 1 AND machine_id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(endpoint_ref.is_none(), "zen_endpoint_id should be NULL after endpoint deletion");
     }
 }

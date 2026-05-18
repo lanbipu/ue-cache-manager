@@ -1,9 +1,10 @@
 //! Tauri commands for the cluster health check.
 
 use crate::core::credentials as core_credentials;
-use crate::core::health_check::{aggregate_gpu_consistency, CheckOutcome};
+use crate::core::health_check::{aggregate_gpu_consistency, probe_tcp_ports, CheckOutcome};
 use crate::core::health_probes;
 use crate::core::ini_scanner;
+use crate::core::probe_keys;
 use crate::data::{
     credentials as data_credentials, ini_findings, machine_gpus,
     machines as data_machines, scan_runs, share_configs,
@@ -30,6 +31,9 @@ pub struct HealthRunSummary {
     pub warning: i64,
     pub critical: i64,
     pub offline: i64,
+    /// `na` outcomes — probe could not run (no creds, no share configured, etc).
+    /// Separated from `healthy`/`warning`/`critical` so the UI does not inflate green.
+    pub skipped: i64,
     pub total: i64,
 }
 
@@ -38,12 +42,12 @@ pub struct RunHealthCheckRequest {
     pub machine_ids: Vec<i64>,
     pub credential_alias: String,
     pub project_paths: Vec<String>,
-    /// Expected value for UE-LocalDataCachePath.  When `None` or empty string,
+    /// Expected value for UE-LocalDataCachePath. When `None` or empty string,
     /// the env_local probe only checks that the variable is set (presence-only).
     #[serde(default)]
     pub expected_local_path: Option<String>,
-    /// Expected value for UE-SharedDataCachePath.  Same semantics as
-    /// `expected_local_path`.
+    /// Expected value for UE-SharedDataCachePath. Same semantics as
+    /// `expected_local_path`. When unset, falls back to the cluster share UNC.
     #[serde(default)]
     pub expected_shared_path: Option<String>,
 }
@@ -100,9 +104,13 @@ pub fn run_health_check(
 
     let mut summary = HealthRunSummary {
         scan_run_id: scan_id,
-        healthy: 0, warning: 0, critical: 0, offline: 0,
+        healthy: 0, warning: 0, critical: 0, offline: 0, skipped: 0,
         total: 0,
     };
+
+    // Single Tokio runtime for L1 TCP probes — the Tauri command is sync.
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| UecmError::OperationFailed(e.to_string()))?;
 
     for &mid in &machine_ids {
         let machine = match data_machines::find_by_id(&db, mid)? {
@@ -136,15 +144,20 @@ pub fn run_health_check(
                     scan_run_id: scan_id, machine_id: mid, done: true,
                     error: Some(e.to_string()),
                 });
-                summary.offline += 1; summary.total += 11;
+                // Offline branch: fill registry keys with `offline`, then inject L1
+                // (operator may have lost WinRM but kept TCP visibility).
                 let mut row = HashMap::<String, CheckOutcome>::new();
-                for k in [
-                    "smb","firewall_445","share_reachable","ntfs_perm",
-                    "cred_user","cred_system","env_vars","env_local","env_shared",
-                    "rs_service","system_write",
-                ] {
-                    row.insert(k.into(), CheckOutcome { status: "offline".into(), message: e.to_string(), sample: "".into() });
+                for k in probe_keys::offline_probe_keys() {
+                    row.insert(k.into(), CheckOutcome {
+                        status: "offline".into(),
+                        message: e.to_string(),
+                        sample: "".into(),
+                        remediation: "Bring the host online (verify network + WinRM) before retrying.".into(),
+                    });
                 }
+                let l1 = rt.block_on(probe_tcp_ports(&machine.ip, 1000));
+                for (k, v) in l1 { row.insert(k, v); }
+                tally_summary(&mut summary, &row);
                 health_check_runs::upsert(&db, scan_id, mid, &serde_json::to_value(&row).unwrap())?;
                 continue;
             }
@@ -158,17 +171,18 @@ pub fn run_health_check(
         );
 
         let gpu_outcome = gpu_report.outcomes.get(&mid).cloned()
-            .unwrap_or(CheckOutcome { status: "unknown".into(), message: "no GPU data".into(), sample: "".into() });
+            .unwrap_or(CheckOutcome { status: "unknown".into(), message: "no GPU data".into(), sample: "".into(), remediation: String::new() });
 
         let mut row: HashMap<String, CheckOutcome> = probes;
         row.insert("ini_consistency".into(), ini_outcome);
         row.insert("pso_precaching".into(), pso_outcome);
         row.insert("gpu_consistency".into(), gpu_outcome);
 
-        // Replace the round-trip's inline rs_service slot with the detailed
-        // classification from `core::renderstream_service` (catches local
-        // interactive users in addition to LocalSystem). Probe failure leaves
-        // any previous slot untouched — the failure mode is not propagated.
+        // Augment the round-trip with rs_service from core::renderstream_service.
+        // The probe is L3Business but not PS-emitted (ps_emitted=false in
+        // PROBE_REGISTRY); it is computed here so we can detect both LocalSystem
+        // service installs AND local interactive users. Probe failure leaves
+        // any previous slot untouched.
         if let Ok(rs_report) = crate::core::renderstream_service::report(
             &machine.ip,
             Some((cred_row.username.as_str(), password.as_str())),
@@ -179,16 +193,11 @@ pub fn run_health_check(
             );
         }
 
-        for v in row.values() {
-            summary.total += 1;
-            match v.status.as_str() {
-                "healthy" => summary.healthy += 1,
-                "warning" => summary.warning += 1,
-                "critical" => summary.critical += 1,
-                "offline" => summary.offline += 1,
-                _ => {}
-            }
-        }
+        // L1 ports — creds-independent, always run.
+        let l1 = rt.block_on(probe_tcp_ports(&machine.ip, 1000));
+        for (k, v) in l1 { row.insert(k, v); }
+
+        tally_summary(&mut summary, &row);
         health_check_runs::upsert(&db, scan_id, mid, &serde_json::to_value(&row).unwrap())?;
         let _ = app.emit("health-progress", HealthProgressEvent {
             scan_run_id: scan_id, machine_id: mid, done: true, error: None,
@@ -198,16 +207,32 @@ pub fn run_health_check(
     let summary_json = json!({
         "healthy": summary.healthy, "warning": summary.warning,
         "critical": summary.critical, "offline": summary.offline,
-        "total": summary.total,
+        "skipped": summary.skipped, "total": summary.total,
     });
     scan_runs::finish(&db, scan_id, &summary_json)?;
     Ok(summary)
 }
 
+/// Tally one machine's per-key outcomes into the run summary.
+/// `na` is segregated into `skipped` (does NOT count toward healthy/warning/critical).
+/// Mirrors the `Counters::tally` logic in `cli/domain_health.rs` so UI and CLI agree.
+fn tally_summary(summary: &mut HealthRunSummary, row: &HashMap<String, CheckOutcome>) {
+    for v in row.values() {
+        match v.status.as_str() {
+            "healthy"  => { summary.healthy  += 1; summary.total += 1; }
+            "warning"  => { summary.warning  += 1; summary.total += 1; }
+            "critical" => { summary.critical += 1; summary.total += 1; }
+            "offline"  => { summary.offline  += 1; summary.total += 1; }
+            "na"       => { summary.skipped  += 1; }
+            _          => {}
+        }
+    }
+}
+
 fn derive_ini_outcome(db: &Db, machine_id: i64) -> UecmResult<CheckOutcome> {
     let recent = scan_runs::list_recent(db, "ini", 1)?;
     let Some(latest) = recent.first() else {
-        return Ok(CheckOutcome { status: "unknown".into(), message: "no INI scan run yet".into(), sample: "".into() });
+        return Ok(CheckOutcome { status: "unknown".into(), message: "no INI scan run yet".into(), sample: "".into(), remediation: String::new() });
     };
     let counts = ini_findings::count_by_severity_for_machine(db, latest.id.unwrap(), machine_id)?;
     let status = if counts.critical > 0 { "critical" }
@@ -217,6 +242,7 @@ fn derive_ini_outcome(db: &Db, machine_id: i64) -> UecmResult<CheckOutcome> {
         status: status.into(),
         message: format!("{} critical / {} warning open", counts.critical, counts.warning),
         sample: format!("scan_run #{}", latest.id.unwrap()),
+        remediation: String::new(),
     })
 }
 
@@ -231,6 +257,7 @@ fn derive_pso_cvar_outcome(
             status: "na".into(),
             message: "no project paths supplied".into(),
             sample: "".into(),
+            remediation: String::new(),
         };
     }
     let target = ini_scanner::TargetFile {
@@ -239,17 +266,17 @@ fn derive_pso_cvar_outcome(
     };
     let parsed = match ini_scanner::read_file(host, &target, Some((username, password))) {
         Ok(Some(pf)) => pf,
-        Ok(None) => return CheckOutcome { status: "warning".into(), message: "ConsoleVariables.ini missing".into(), sample: target.path },
-        Err(e) => return CheckOutcome { status: "offline".into(), message: e.to_string(), sample: target.path },
+        Ok(None) => return CheckOutcome { status: "warning".into(), message: "ConsoleVariables.ini missing".into(), sample: target.path, remediation: String::new() },
+        Err(e) => return CheckOutcome { status: "offline".into(), message: e.to_string(), sample: target.path, remediation: String::new() },
     };
     let cvar_value = parsed.sections.iter()
         .flat_map(|s| s.keys.iter())
         .find(|k| k.name.eq_ignore_ascii_case("r.PSOPrecaching"))
         .map(|k| k.value.clone());
     match cvar_value.as_deref() {
-        Some("1") => CheckOutcome { status: "healthy".into(), message: "r.PSOPrecaching=1".into(), sample: parsed.path },
-        Some(other) => CheckOutcome { status: "warning".into(), message: format!("r.PSOPrecaching={}", other), sample: parsed.path },
-        None => CheckOutcome { status: "warning".into(), message: "r.PSOPrecaching not set".into(), sample: parsed.path },
+        Some("1") => CheckOutcome { status: "healthy".into(), message: "r.PSOPrecaching=1".into(), sample: parsed.path, remediation: String::new() },
+        Some(other) => CheckOutcome { status: "warning".into(), message: format!("r.PSOPrecaching={}", other), sample: parsed.path, remediation: String::new() },
+        None => CheckOutcome { status: "warning".into(), message: "r.PSOPrecaching not set".into(), sample: parsed.path, remediation: String::new() },
     }
 }
 
