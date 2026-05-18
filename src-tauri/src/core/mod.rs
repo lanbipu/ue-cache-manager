@@ -13,6 +13,7 @@ pub mod ini_backend_graph;
 pub mod ini_diagnostics;
 pub mod ini_editor;
 pub mod ini_scanner;
+pub mod local_cache;
 pub mod loopback;
 pub mod network;
 pub mod pak_distribute;
