@@ -3,7 +3,7 @@
 
 use crate::cli::args::{Cli, Domain};
 use crate::cli::output::{Emitter, HumanEmitter, NdjsonEmitter, exit_code_for};
-use crate::cli::{domain_cred, domain_ddc, domain_env, domain_gpu, domain_health, domain_ini, domain_machine, domain_project, domain_pso, domain_share, domain_system, domain_winrm};
+use crate::cli::{domain_cred, domain_ddc, domain_env, domain_gpu, domain_health, domain_ini, domain_local_cache, domain_machine, domain_project, domain_pso, domain_share, domain_system, domain_winrm};
 use crate::data::Db;
 use crate::error::UecmError;
 use crate::startup;
@@ -63,6 +63,7 @@ fn needs_db(cmd: &Domain) -> bool {
         Domain::Ddc { .. } => true,
         Domain::Pso { .. } => true,
         Domain::Log { .. } => true,
+        Domain::LocalCache { .. } => true,
     }
 }
 
@@ -122,6 +123,7 @@ pub fn run(cli: Cli) -> i32 {
         Domain::Ddc { action } => domain_ddc::handle(&mut ctx, action),
         Domain::Pso { action } => domain_pso::handle(&mut ctx, action),
         Domain::Log { action } => crate::cli::domain_log::handle(&mut ctx, action),
+        Domain::LocalCache { action } => domain_local_cache::handle(&mut ctx, action),
     };
 
     match result {

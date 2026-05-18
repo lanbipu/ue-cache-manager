@@ -88,6 +88,11 @@ pub enum Domain {
         #[command(subcommand)]
         action: LogAction,
     },
+    /// Local DDC directory provisioning.
+    LocalCache {
+        #[command(subcommand)]
+        action: LocalCacheAction,
+    },
 }
 
 // ---------- system ----------
@@ -632,6 +637,26 @@ pub enum LogAction {
     },
 }
 
+// ---------- local-cache ----------
+#[derive(Subcommand, Debug)]
+pub enum LocalCacheAction {
+    /// Create the local DDC directory on one or more hosts.
+    Create {
+        #[command(flatten)]
+        target: crate::cli::host_args::HostArgs,
+        #[arg(long, default_value = r"D:\UE-DDC-Local")]
+        path: String,
+        #[arg(long)]
+        service_account: Option<String>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -760,6 +785,24 @@ mod tests {
                 assert_eq!(node, "Shared");
                 assert_eq!(field, "ReadOnly");
                 assert_eq!(value, "false");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_local_cache_create_batch() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "local-cache", "create",
+            "--hosts", "RENDER-01,RENDER-02",
+            "--path", r"D:\UE-DDC-Local",
+            "--cred-alias", "admin",
+            "--yes",
+        ]).unwrap();
+        match cli.command {
+            Domain::LocalCache { action: LocalCacheAction::Create { path, yes, .. } } => {
+                assert_eq!(path, r"D:\UE-DDC-Local");
+                assert!(yes);
             }
             _ => panic!("wrong variant"),
         }
