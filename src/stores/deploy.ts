@@ -41,7 +41,17 @@ export const useDeployStore = defineStore("deploy", () => {
   }
 
   async function run(plan: DeployPlan, credentialAlias: string | null, stopOnFailure: boolean) {
-    await preview(plan);
+    if (steps.value.length === 0) {
+      await preview(plan);
+    } else {
+      // Reset per-host progress to pending without wiping the step list
+      for (const stepKey of steps.value) {
+        progress.value[stepKey] = { step: stepKey, hosts: {}, ok_count: 0, fail_count: 0 };
+      }
+      completed.value = false;
+      finalOk.value = null;
+      summary.value = "";
+    }
     running.value = true;
     unlisten = await subscribe(onEvent);
     try {
@@ -52,6 +62,19 @@ export const useDeployStore = defineStore("deploy", () => {
         unlisten();
         unlisten = null;
       }
+    }
+  }
+
+  function reset() {
+    steps.value = [];
+    progress.value = {};
+    running.value = false;
+    completed.value = false;
+    finalOk.value = null;
+    summary.value = "";
+    if (unlisten) {
+      unlisten();
+      unlisten = null;
     }
   }
 
@@ -82,5 +105,5 @@ export const useDeployStore = defineStore("deploy", () => {
     }
   }
 
-  return { steps, progress, running, completed, finalOk, summary, preview, run };
+  return { steps, progress, running, completed, finalOk, summary, preview, run, reset };
 });
