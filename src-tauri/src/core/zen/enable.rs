@@ -318,7 +318,10 @@ pub fn disable_project(
 
     let current = read_section_with_credential(host, ini_path, section, username, password)?;
 
-    let existing = current.iter().find(|k| k.name == *key);
+    // Case-insensitive INI key match per codex P2 — UE / write-ini-key.ps1
+    // both treat key names case-insensitively. Using `==` would let a
+    // `zenshared` row escape the disable.
+    let existing = current.iter().find(|k| k.name.eq_ignore_ascii_case(key));
     let Some(existing) = existing else {
         return Ok(DisableOutcome {
             changed: false,
@@ -420,7 +423,14 @@ fn compute_enable_diff(
     pak_keys: &[String],
     pak_section: &str,
 ) -> EnableDiff {
-    let existing_zen = zen_section_keys.iter().find(|k| k.name == zen_key);
+    // INI key names match case-insensitively (codex P2): UE itself reads
+    // `ZenShared` / `zenshared` / `ZENSHARED` as the same key, and our
+    // sister modules `core::ini_diagnostics` and `write-ini-key.ps1` do
+    // the same. Using `==` here would let a differently-cased existing
+    // key bypass the diff.
+    let existing_zen = zen_section_keys
+        .iter()
+        .find(|k| k.name.eq_ignore_ascii_case(zen_key));
     let set_zen_shared = match existing_zen {
         Some(k) if k.value == desired_zen_value => None,
         Some(k) => Some(KeyApplyRecord {
@@ -442,7 +452,11 @@ fn compute_enable_diff(
     let mut remove_legacy = Vec::new();
 
     // SMB-shared single key — looked up in SMB rule's own section.
-    if let Some(k) = smb_section_keys.iter().find(|k| k.name == smb_key) {
+    // Case-insensitive match per the same reasoning as the zen lookup above.
+    if let Some(k) = smb_section_keys
+        .iter()
+        .find(|k| k.name.eq_ignore_ascii_case(smb_key))
+    {
         remove_legacy.push(KeyApplyRecord {
             section: smb_section.to_string(),
             key: smb_key.to_string(),
@@ -453,8 +467,12 @@ fn compute_enable_diff(
     }
 
     // Pak / CompressedPak / etc. — looked up in pak rule's own section.
+    // Case-insensitive match per the same reasoning.
     for legacy_key in pak_keys {
-        if let Some(k) = pak_section_keys.iter().find(|k| k.name == *legacy_key) {
+        if let Some(k) = pak_section_keys
+            .iter()
+            .find(|k| k.name.eq_ignore_ascii_case(legacy_key))
+        {
             remove_legacy.push(KeyApplyRecord {
                 section: pak_section.to_string(),
                 key: legacy_key.clone(),
@@ -729,6 +747,42 @@ mod tests {
         assert!(removed.contains(&("LegacyPakBackend", "Pak")));
         assert!(removed.contains(&("LegacyPakBackend", "CompressedPak")));
         assert_eq!(removed.len(), 3);
+    }
+
+    #[test]
+    fn compute_diff_matches_keys_case_insensitively() {
+        // Codex P2: UE / write-ini-key.ps1 treat key names case-insensitively.
+        // A project INI with `zenshared=`, `SHARED=`, or `pAk=` MUST be
+        // picked up by the diff, otherwise enable/disable would leave the
+        // legacy backends active or fail to remove a differently-cased
+        // ZenShared row.
+        let lowered_zen = rendered_zen_value();
+        let zen_keys = vec![IniKey {
+            name: "zenshared".to_string(), // existing key, wrong case
+            value: "(Type=Zen, Host=\"old\", Port=1, Namespace=\"x\")".to_string(),
+        }];
+        let smb_keys = vec![IniKey {
+            name: "SHARED".to_string(),
+            value: "(Type=Filesystem)".to_string(),
+        }];
+        let pak_keys_keys = vec![IniKey {
+            name: "pAk".to_string(),
+            value: "(Type=Pak)".to_string(),
+        }];
+        let diff = diff_for_split(&zen_keys, &smb_keys, &pak_keys_keys);
+        // Zen value differs → plan a set.
+        let set = diff.set_zen_shared.expect("zen set planned");
+        assert_eq!(set.action, "set");
+        assert!(set.previous_value.is_some());
+        assert_eq!(set.new_value.as_deref(), Some(lowered_zen.as_str()));
+        // Both legacy keys found despite case mismatch.
+        let removed_keys: Vec<&str> = diff
+            .remove_legacy
+            .iter()
+            .map(|r| r.key.as_str())
+            .collect();
+        assert!(removed_keys.contains(&"Shared"));
+        assert!(removed_keys.contains(&"Pak"));
     }
 
     #[test]
