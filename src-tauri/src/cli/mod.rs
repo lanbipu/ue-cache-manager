@@ -20,6 +20,7 @@ pub mod domain_ddc;
 pub mod domain_pso;
 pub mod domain_log;
 pub mod domain_local_cache;
+pub mod domain_deploy;
 
 // Re-export the emitter trait + the generic extension trait so domain handlers
 // can `use crate::cli::{Emitter, EmitSerialize}` in one line.

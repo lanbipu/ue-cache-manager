@@ -93,6 +93,11 @@ pub enum Domain {
         #[command(subcommand)]
         action: LocalCacheAction,
     },
+    /// One-click DDC deployment workflow.
+    Deploy {
+        #[command(subcommand)]
+        action: DeployAction,
+    },
 }
 
 // ---------- system ----------
@@ -657,6 +662,25 @@ pub enum LocalCacheAction {
     },
 }
 
+// ---------- deploy ----------
+#[derive(Subcommand, Debug)]
+pub enum DeployAction {
+    /// Run the full DDC deployment plan from a JSON file.
+    Ddc {
+        /// Path to a deploy-plan JSON file.
+        #[arg(long)]
+        plan: std::path::PathBuf,
+        #[arg(long)]
+        stop_on_failure: bool,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -823,6 +847,25 @@ mod tests {
                 assert!(editor_exe.ends_with("UnrealEditor.exe"));
                 assert!(project.ends_with(".uproject"));
                 assert_eq!(timeout, 180);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_deploy_ddc() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "deploy", "ddc",
+            "--plan", "/tmp/plan.json",
+            "--stop-on-failure",
+            "--cred-alias", "admin",
+            "--yes",
+        ]).unwrap();
+        match cli.command {
+            Domain::Deploy { action: DeployAction::Ddc { plan, stop_on_failure, yes, .. } } => {
+                assert_eq!(plan.to_string_lossy(), "/tmp/plan.json");
+                assert!(stop_on_failure);
+                assert!(yes);
             }
             _ => panic!("wrong variant"),
         }
