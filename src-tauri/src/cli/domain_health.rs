@@ -94,7 +94,7 @@ fn resolve_all_machine_ids(db: &crate::data::Db) -> UecmResult<Vec<i64>> {
 
 fn run_with_rt(
     ctx: &mut Ctx<'_>,
-    _rt: &tokio::runtime::Runtime,
+    rt: &tokio::runtime::Runtime,
     machine_ids: &[i64],
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
@@ -173,53 +173,56 @@ fn run_with_rt(
             })
             .ok();
 
-        let cred_opt = if resolved_cred.is_some() {
-            Some((op_user.as_str(), op_pass.as_str()))
-        } else {
-            None
-        };
-
-        let probes = match health_probes::run(
-            &machine.ip,
-            &cluster_share_unc,
-            &cluster_svc_username,
-            &cluster_share_unc,
-            cred_opt,
-        ) {
-            Ok(map) => map,
-            Err(e) => {
-                // offline — fill all probe keys with "offline" status, same as UI command
-                let mut row: HashMap<String, crate::core::health_check::CheckOutcome> = HashMap::new();
-                for k in crate::core::probe_keys::offline_probe_keys() {
-                    row.insert(
-                        k.into(),
-                        crate::core::health_check::CheckOutcome {
-                            status: "offline".into(),
-                            message: e.to_string(),
-                            sample: "".into(),
-                            remediation: "Bring the host online (verify network + WinRM) before retrying.".into(),
-                        },
-                    );
+        let probes: HashMap<String, crate::core::health_check::CheckOutcome> =
+            if should_skip_winrm(&resolved_cred) {
+                build_no_creds_row()
+            } else {
+                let cred_opt = Some((op_user.as_str(), op_pass.as_str()));
+                match health_probes::run(
+                    &machine.ip,
+                    &cluster_share_unc,
+                    &cluster_svc_username,
+                    &cluster_share_unc,
+                    cred_opt,
+                ) {
+                    Ok(map) => map,
+                    Err(e) => {
+                        // Offline branch: fill registry-derived keys with `offline`,
+                        // then still inject L1 ports so the row width matches.
+                        let mut row: HashMap<String, crate::core::health_check::CheckOutcome> = HashMap::new();
+                        for k in crate::core::probe_keys::offline_probe_keys() {
+                            row.insert(
+                                k.into(),
+                                crate::core::health_check::CheckOutcome {
+                                    status: "offline".into(),
+                                    message: e.to_string(),
+                                    sample: "".into(),
+                                    remediation: "Bring the host online (verify network + WinRM) before retrying.".into(),
+                                },
+                            );
+                        }
+                        // L1 ports still probed — operator may have lost WinRM but kept TCP visibility.
+                        let l1 = rt.block_on(crate::core::health_check::probe_tcp_ports(&machine.ip, 1000));
+                        for (k, v) in l1 { row.insert(k, v); }
+                        health_check_runs::upsert(&db, scan_id, mid, &serde_json::to_value(&row).unwrap())?;
+                        let mut rc = Counters::default();
+                        for v in row.values() { rc.tally(v); }
+                        healthy += rc.healthy;
+                        warning += rc.warning;
+                        critical += rc.critical;
+                        offline += rc.offline;
+                        skipped += rc.skipped;
+                        total_checks += rc.total_ran;
+                        ctx.emitter.emit_event(&Event::ItemCompleted {
+                            item_id: format!("machine:{}", mid),
+                            index: idx as i64,
+                            ok: false,
+                            message: Some(e.to_string()),
+                        }).ok();
+                        continue;
+                    }
                 }
-                health_check_runs::upsert(
-                    &db,
-                    scan_id,
-                    mid,
-                    &serde_json::to_value(&row).unwrap(),
-                )?;
-                offline += 1;
-                total_checks += crate::core::probe_keys::offline_probe_keys().len() as i64;
-                ctx.emitter
-                    .emit_event(&Event::ItemCompleted {
-                        item_id: format!("machine:{}", mid),
-                        index: idx as i64,
-                        ok: false,
-                        message: Some(e.to_string()),
-                    })
-                    .ok();
-                continue;
-            }
-        };
+            };
 
         // Derived checks (mirrors UI command — ini_consistency, pso_precaching, gpu_consistency).
         // pso_precaching requires project paths which CLI doesn't expose; emit "na" like the
@@ -421,11 +424,14 @@ fn derive_ini_outcome(
     })
 }
 
+pub(crate) fn should_skip_winrm(resolved_cred: &Option<(String, String)>) -> bool {
+    resolved_cred.is_none()
+}
+
 /// Build a row of `na` outcomes for every probe that requires creds. Used when
 /// the operator runs `health run` without `--cred-alias` / `--user` — L1 ports
 /// still run (in run_with_rt), but L2/L3 probes are skipped and reported as
 /// `na` so the `skipped` counter (introduced in T6) increments correctly.
-#[allow(dead_code)] // wired into run_with_rt in T10b
 fn build_no_creds_row() -> std::collections::HashMap<String, crate::core::health_check::CheckOutcome> {
     use std::collections::HashMap;
     let mut row = HashMap::new();
@@ -548,6 +554,12 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let r = rt.block_on(super::scan_and_probe_l1("10.0.0.0/16", 50));
         assert!(matches!(r, Err(crate::error::UecmError::InvalidInput(_))));
+    }
+
+    #[test]
+    fn should_skip_winrm_when_creds_absent() {
+        assert!(super::should_skip_winrm(&None));
+        assert!(!super::should_skip_winrm(&Some(("u".into(), "p".into()))));
     }
 
     #[test]
