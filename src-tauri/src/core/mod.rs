@@ -1,5 +1,6 @@
 pub mod batch;
 pub mod bootstrap;
+pub mod consistency_check;
 pub mod credentials;
 pub mod ddc_pak;
 pub mod deploy_workflow;
