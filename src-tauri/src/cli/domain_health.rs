@@ -224,6 +224,13 @@ fn run_with_rt(
                 }
             };
 
+        // Inject L1 port outcomes onto every machine row — operator console
+        // probes are creds-independent, so they always contribute to the picture.
+        // (Offline branch already injects L1 inline; this top-level injection only
+        // fires on success + no-creds paths, no double-injection.)
+        let mut probes = probes; // make mutable
+        rt.block_on(inject_l1_ports(&mut probes, &machine.ip, 1000));
+
         // Derived checks (mirrors UI command — ini_consistency, pso_precaching, gpu_consistency).
         // pso_precaching requires project paths which CLI doesn't expose; emit "na" like the
         // UI command does when project_paths is empty.
@@ -428,6 +435,20 @@ pub(crate) fn should_skip_winrm(resolved_cred: &Option<(String, String)>) -> boo
     resolved_cred.is_none()
 }
 
+/// Inject L1 (port-layer) outcomes into a probe row. Runs the 3 TCP probes
+/// against the host and merges their outcomes into the given map. Existing
+/// keys are NOT overwritten — only the 3 `tcp_*` keys are added.
+pub(crate) async fn inject_l1_ports(
+    row: &mut std::collections::HashMap<String, crate::core::health_check::CheckOutcome>,
+    ip: &str,
+    timeout_ms: u64,
+) {
+    let l1 = crate::core::health_check::probe_tcp_ports(ip, timeout_ms).await;
+    for (k, v) in l1 {
+        row.insert(k, v);
+    }
+}
+
 /// Build a row of `na` outcomes for every probe that requires creds. Used when
 /// the operator runs `health run` without `--cred-alias` / `--user` — L1 ports
 /// still run (in run_with_rt), but L2/L3 probes are skipped and reported as
@@ -575,5 +596,18 @@ mod tests {
                 "{} remediation should mention credentials, got: {}", key, o.remediation
             );
         }
+    }
+
+    #[tokio::test]
+    async fn inject_l1_ports_adds_three_keys_to_row() {
+        use std::collections::HashMap;
+        let mut row: HashMap<String, crate::core::health_check::CheckOutcome> = HashMap::new();
+        row.insert("lanman_server".into(), outcome("healthy"));
+        // Use TEST-NET-3 — closed ports, fast timeout.
+        super::inject_l1_ports(&mut row, "203.0.113.3", 50).await;
+        assert!(row.contains_key("tcp_5985"));
+        assert!(row.contains_key("tcp_445"));
+        assert!(row.contains_key("tcp_135"));
+        assert!(row.contains_key("lanman_server")); // existing key preserved
     }
 }
