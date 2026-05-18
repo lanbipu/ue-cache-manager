@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { useRoute, useRouter } from "vue-router";
 import UecmPageHeader from "@/components/primitives/UecmPageHeader.vue";
 import UecmIcon from "@/components/primitives/UecmIcon.vue";
 import UecmKpiTile from "@/components/primitives/UecmKpiTile.vue";
@@ -9,9 +8,7 @@ import UecmGpuMatrix from "@/components/primitives/UecmGpuMatrix.vue";
 import UecmScoreTile from "@/components/primitives/UecmScoreTile.vue";
 import UecmStatusBadge from "@/components/primitives/UecmStatusBadge.vue";
 import Button from "@/components/ui/Button.vue";
-import HealthMatrix from "@/components/diagnostics/HealthMatrix.vue";
 import HealthCheckWizard from "@/components/modals/HealthCheckWizard.vue";
-import { HEALTH_CHECKS, type HealthCheckDefinition } from "@/lib/healthChecks";
 import { useGpuConsistencyStore } from "@/stores/gpuConsistency";
 import { useHealthCheckStore } from "@/stores/healthCheck";
 import { useMachinesStore } from "@/stores/machines";
@@ -21,17 +18,8 @@ const { t } = useI18n();
 const machines = useMachinesStore();
 const health = useHealthCheckStore();
 const gpuStore = useGpuConsistencyStore();
-const route = useRoute();
-const router = useRouter();
 
-function gotoTab(tab: string, extra: Record<string, string> = {}) {
-  router.push({
-    path: "/machines",
-    query: { ...route.query, ...extra, tab },
-  });
-}
 const showWizard = ref(false);
-const selected = ref<{ machineId: number; checkId: string } | null>(null);
 
 const bridgeResult = ref<EchoResult | null>(null);
 const bridgeError = ref<UecmError | null>(null);
@@ -65,16 +53,6 @@ const verdict = computed(() => {
   if (tone.value === "healthy") return t("healthCheck.verdictHealthy");
   return t("healthCheck.verdictIdle");
 });
-const selectedDetail = computed(() => {
-  if (!selected.value) return null;
-  const def = HEALTH_CHECKS.find((check) => check.id === selected.value?.checkId) as
-    | HealthCheckDefinition
-    | undefined;
-  const outcome = health.rowsByMachine[selected.value.machineId]?.[selected.value.checkId];
-  const machine = machines.machines.find((m) => m.id === selected.value?.machineId);
-  return { def, outcome, machine };
-});
-
 const LAYER_ORDER = ["l1_port", "l2_bootstrap", "l3_business"] as const;
 const LAYER_FALLBACK: Record<(typeof LAYER_ORDER)[number], string> = {
   l1_port: "L1 - Port reachability",
@@ -208,53 +186,6 @@ function toneFor(status: string): "healthy" | "warning" | "critical" | "offline"
             </section>
           </template>
         </div>
-      </div>
-      <div class="grid min-h-0 grid-cols-1 lg:grid-cols-[3fr_2fr]">
-      <HealthMatrix class="border-r" :machines="machines.machines" :rows-by-machine="health.rowsByMachine" :selected-machine-id="selected?.machineId ?? null" :selected-check-id="selected?.checkId ?? null" @select="selected = $event" />
-      <aside data-health-detail class="overflow-y-auto p-6">
-        <p v-if="!selectedDetail" class="text-sm text-muted-foreground">{{ t("healthCheck.selectCellHint") }}</p>
-        <div v-else class="space-y-4">
-          <header class="flex items-center gap-3">
-            <UecmStatusBadge :tone="selectedDetail.outcome?.status ?? 'unknown'" :label="selectedDetail.outcome?.status ?? t('healthCheck.unknownLabel')" />
-            <div>
-              <h2 class="font-display text-lg font-extrabold">{{ selectedDetail.def?.label }}</h2>
-              <p v-if="selectedDetail.def?.subtitle" class="text-xs text-muted-foreground">{{ selectedDetail.def.subtitle }}</p>
-              <p class="font-mono text-xs text-muted-foreground">{{ selectedDetail.machine?.hostname }} · {{ selectedDetail.machine?.ip }}</p>
-            </div>
-          </header>
-          <div v-if="selectedDetail.def?.id === 'pso_precaching'" class="rounded-md border bg-card p-3">
-            <button
-              type="button"
-              class="text-sm font-bold text-primary hover:underline"
-              @click="gotoTab('ini', { finding: 'R008' })"
-            >
-              {{ t("healthCheck.openIniScannerLink") }}
-            </button>
-          </div>
-          <div v-else-if="selectedDetail.def?.id === 'gpu_consistency'" class="rounded-md border bg-card p-3">
-            <button
-              type="button"
-              class="text-sm font-bold text-primary hover:underline"
-              @click="gotoTab('health', { gpu: 'true' })"
-            >
-              {{ t("healthCheck.openGpuMatrixLink") }}
-            </button>
-          </div>
-          <div class="rounded-md border bg-card p-3">
-            <div class="font-mono text-[11px] font-bold uppercase text-muted-foreground">{{ t("healthCheck.detailWhatChecks") }}</div>
-            <p class="mt-1 text-sm">{{ selectedDetail.def?.description }}</p>
-          </div>
-          <div class="rounded-md border bg-card p-3">
-            <div class="font-mono text-[11px] font-bold uppercase text-muted-foreground">{{ t("healthCheck.detailSymptom") }}</div>
-            <p class="mt-1 text-sm">{{ selectedDetail.def?.symptom }}</p>
-          </div>
-          <div class="rounded-md border bg-card p-3">
-            <div class="font-mono text-[11px] font-bold uppercase text-muted-foreground">{{ t("healthCheck.detailHowToFix") }}</div>
-            <p class="mt-1 text-sm">{{ selectedDetail.outcome?.remediation ?? selectedDetail.def?.remediation }}</p>
-          </div>
-          <pre class="rounded-md border bg-card p-3 font-mono text-xs text-muted-foreground whitespace-pre-wrap">{{ selectedDetail.outcome?.message ?? t("healthCheck.noProbeOutput") }}</pre>
-        </div>
-      </aside>
       </div>
     </section>
 
