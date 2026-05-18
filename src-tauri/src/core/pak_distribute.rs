@@ -51,7 +51,7 @@ impl DistributeProfile {
     pub fn pso_cache() -> Self {
         Self {
             source_subdir: "Saved\\CollectedPSOs".into(),
-            file_glob: "*.upipelinecache".into(),
+            file_glob: "*.upipelinecache *.stablepc.csv".into(),
             ps_script: "distribute-pso-cache.ps1",
         }
     }
