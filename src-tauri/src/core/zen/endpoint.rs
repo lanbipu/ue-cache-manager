@@ -280,13 +280,131 @@ fn validate_role_lifecycle(role: &str, lifecycle_mode: &str) -> UecmResult<()> {
     Ok(())
 }
 
+/// Validate the endpoint's `data_dir` field.
+///
+/// Plan §8 T2.8: reject unsafe paths at `register` time, BEFORE the row
+/// hits the DB. The cli / Tauri / PS-sidecar layers all already do their
+/// own checks (defense in depth), but having `core::zen::endpoint` reject
+/// up-front means an unsafe path never gets persisted — operators get
+/// the error at register time instead of at apply time, and stale rows
+/// can't reference paths under `C:\Windows` etc.
+///
+/// What's rejected:
+/// - Empty / whitespace-only.
+/// - Win32 device namespace prefixes (`\\?\` / `\\.\` and their forward-
+///   slash variants). These bypass Windows path canonicalization and
+///   would let `\\?\C:\Windows\Zen` slip past the system-root check
+///   below — refuse outright.
+/// - Paths under `C:\Windows` / `C:\Program Files` /
+///   `C:\Program Files (x86)`, including the exact roots themselves
+///   (without trailing slash). Comparison is case-insensitive and runs
+///   AFTER `..`-segment collapse so `C:\Foo\..\Windows\Zen` is also
+///   rejected.
+///
+/// What's NOT rejected:
+/// - Drive-relative (`D:ZenCache`) or root-relative (`\ZenCache`) paths.
+///   `core::zen::endpoint` accepts these because they're the operator's
+///   intent at registration time; the resolution into a fully-qualified
+///   path happens in the PS sidecar against the remote host's CWD.
+///   The sidecar (`zen-service-install.ps1`) refuses them at apply time
+///   so the operator gets a clear error there, not silent misdirection.
 fn validate_data_dir(data_dir: &str) -> UecmResult<()> {
-    if data_dir.trim().is_empty() {
+    let trimmed = data_dir.trim();
+    if trimmed.is_empty() {
         return Err(UecmError::InvalidInput(
             "data_dir must not be empty or whitespace".to_string(),
         ));
     }
+    // Normalize separators FIRST so mixed-separator device prefixes like
+    // `\\?/C:/Windows/Zen` or `//?\C:\Windows\Zen` get caught by the
+    // device-prefix check below. Without unifying first, the prefix check
+    // would miss those variants and the system-root check would
+    // misinterpret them as UNC `\\?\` with the host `?` (codex P2).
+    let normalized = trimmed.replace('/', r"\");
+    if normalized.starts_with(r"\\?\") || normalized.starts_with(r"\\.\") {
+        return Err(UecmError::InvalidInput(format!(
+            "data_dir {data_dir:?} uses a Win32 device namespace prefix \
+             (\\\\?\\ or \\\\.\\); these bypass path canonicalization and \
+             would defeat the system-root safety check. Register without \
+             the prefix."
+        )));
+    }
+    let canonical = collapse_path_segments(&normalized);
+    let canonical_lower = canonical.trim_end_matches('\\').to_lowercase();
+    const FORBIDDEN: &[&str] = &[
+        r"c:\windows",
+        r"c:\program files",
+        r"c:\program files (x86)",
+    ];
+    for root in FORBIDDEN {
+        if canonical_lower == *root || canonical_lower.starts_with(&format!("{root}\\")) {
+            return Err(UecmError::InvalidInput(format!(
+                "data_dir {data_dir:?} resolves under a forbidden system location ({root}); \
+                 pick a writable path on a non-system drive (e.g. D:\\ZenCache)"
+            )));
+        }
+    }
     Ok(())
+}
+
+/// Collapse `..` / `.` segments in a backslash-delimited Windows path so
+/// the system-root check in [`validate_data_dir`] sees the effective path.
+/// `C:\Foo\..\Windows` → `C:\Windows`. Conservative: leading `..` segments
+/// stay (we don't try to resolve against a CWD here — that's the sidecar's
+/// job on the remote host). UNC roots (`\\host\share\...`) are preserved.
+pub(crate) fn collapse_path_segments(p: &str) -> String {
+    if p.starts_with(r"\\") {
+        // UNC: preserve the leading `\\<host>\<share>` then collapse the rest.
+        let after = &p[2..];
+        let split: Vec<&str> = after.splitn(3, '\\').collect();
+        if split.len() < 2 {
+            return p.to_string();
+        }
+        let head = format!(r"\\{}\{}", split[0], split[1]);
+        if split.len() < 3 {
+            return head;
+        }
+        let tail_collapsed = collapse_segments_inner(split[2]);
+        if tail_collapsed.is_empty() {
+            head
+        } else {
+            format!(r"{head}\{tail_collapsed}")
+        }
+    } else if p.len() >= 3
+        && p.as_bytes()[0].is_ascii_alphabetic()
+        && p.as_bytes()[1] == b':'
+        && p.as_bytes()[2] == b'\\'
+    {
+        // Drive-absolute: `C:\foo\..\bar` → `C:\bar`.
+        let head = &p[..3];
+        let tail_collapsed = collapse_segments_inner(&p[3..]);
+        if tail_collapsed.is_empty() {
+            head.to_string()
+        } else {
+            format!("{head}{tail_collapsed}")
+        }
+    } else {
+        // Relative / unrecognized — collapse what we can and leave the rest.
+        collapse_segments_inner(p)
+    }
+}
+
+fn collapse_segments_inner(rest: &str) -> String {
+    let mut stack: Vec<&str> = Vec::new();
+    for seg in rest.split('\\') {
+        if seg.is_empty() || seg == "." {
+            continue;
+        }
+        if seg == ".." {
+            if !stack.is_empty() {
+                stack.pop();
+            }
+            // Else: leading `..` survives; we don't have a parent to pop.
+            continue;
+        }
+        stack.push(seg);
+    }
+    stack.join("\\")
 }
 
 /// Enforce upstream-pointer rules:
@@ -538,6 +656,93 @@ mod tests {
         let err = register(&db, &input).unwrap_err();
         assert_invalid_input(&err, "data_dir");
     }
+
+    // -------- T2.8 datadir safety --------
+
+    #[test]
+    fn register_rejects_data_dir_under_windows() {
+        let (db, m) = setup();
+        for path in &[
+            r"C:\Windows\Zen",
+            r"C:\WINDOWS\Zen",
+            r"c:\windows\system32\Zen",
+            r"C:\Windows",
+            r"C:\Windows\",
+        ] {
+            let mut input = valid_local(m, 8558);
+            input.data_dir = (*path).into();
+            register(&db, &input).expect_err(&format!("expected reject for {path}"));
+        }
+    }
+
+    #[test]
+    fn register_rejects_data_dir_under_program_files() {
+        let (db, m) = setup();
+        for path in &[
+            r"C:\Program Files\Zen",
+            r"C:\Program Files (x86)\Zen",
+            r"C:\Program Files",
+            r"c:\PROGRAM FILES\Zen",
+        ] {
+            let mut input = valid_local(m, 8558);
+            input.data_dir = (*path).into();
+            register(&db, &input).expect_err(&format!("expected reject for {path}"));
+        }
+    }
+
+    #[test]
+    fn register_rejects_traversal_into_system_root() {
+        // After collapsing `..` segments, this resolves to `C:\Windows\Zen`.
+        let (db, m) = setup();
+        let mut input = valid_local(m, 8558);
+        input.data_dir = r"C:\Foo\..\Windows\Zen".into();
+        let err = register(&db, &input).unwrap_err();
+        assert_invalid_input(&err, "forbidden system location");
+    }
+
+    #[test]
+    fn register_rejects_win32_device_namespace_prefix() {
+        let (db, m) = setup();
+        for prefix in &[
+            r"\\?\C:\Windows\Zen",
+            r"\\.\C:\Zen",
+            r"//?/C:/Zen",
+            // Mixed-separator variants (codex P2): normalize first so
+            // both forms are caught.
+            r"\\?/C:/Windows/Zen",
+            r"//?\C:\Windows\Zen",
+            r"\\.\C:/Zen",
+            r"//./C:\Zen",
+        ] {
+            let mut input = valid_local(m, 8558);
+            input.data_dir = (*prefix).into();
+            let err = register(&db, &input).unwrap_err();
+            assert_invalid_input(&err, "Win32 device namespace");
+        }
+    }
+
+    #[test]
+    fn register_accepts_safe_data_dirs() {
+        let (db, m) = setup();
+        for path in &[
+            r"D:\ZenData",
+            r"D:\ZenData\sub",
+            r"E:\App Data\Zen",
+            r"\\fileserver\zen\cache",
+            r"C:\Tools\UECM\Zen",
+            // forward slashes accepted (normalized internally).
+            r"D:/ZenData",
+        ] {
+            let mut input = valid_local(m, 8558);
+            input.data_dir = (*path).into();
+            // Use a distinct port per path so each registers cleanly.
+            input.declared_port = 8558 + (path.len() as i64);
+            register(&db, &input).unwrap_or_else(|e| {
+                panic!("expected {path} to be accepted, got {e:?}")
+            });
+        }
+    }
+
 
     #[test]
     fn register_rejects_upstream_pointing_at_nonexistent() {
