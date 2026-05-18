@@ -7,3 +7,4 @@
 
 pub mod cb_parser;
 pub mod lockfile;
+pub mod probe;
