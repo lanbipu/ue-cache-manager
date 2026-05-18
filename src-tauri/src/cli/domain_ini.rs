@@ -1,6 +1,6 @@
 //! `uecm-cli ini <action>` handlers.
 
-use crate::cli::args::IniAction;
+use crate::cli::args::{BackendGraphAction, IniAction};
 use crate::cli::credential_args::CredentialArgs;
 use crate::cli::destructive::{self, Outcome};
 use crate::cli::host_args::HostTarget;
@@ -214,6 +214,63 @@ pub fn handle(ctx: &mut Ctx<'_>, action: IniAction) -> UecmResult<()> {
         }
         IniAction::Skip { finding_id } => skip_finding(ctx, finding_id),
         IniAction::VerifyPsoPrecaching { project_id } => verify_pso_precaching(ctx, project_id),
+        IniAction::BackendGraph { action } => match action {
+            BackendGraphAction::Get { host, file_path, node, field, cred } => {
+                let db = ctx.require_db()?;
+                let creds = cred.resolve(db)?;
+                let target = ini_scanner::TargetFile {
+                    path: file_path.clone(),
+                    category: crate::core::ini_diagnostics::Category::Project,
+                };
+                let parsed = ini_scanner::read_file(
+                    &host, &target, creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str())))?;
+                let value = parsed.as_ref()
+                    .and_then(|pf| pf.sections.iter()
+                        .flat_map(|s| s.backend_nodes.iter())
+                        .filter(|n| n.name.eq_ignore_ascii_case(&node))
+                        .find_map(|n| crate::core::ini_backend_graph::get_field(n, &field).map(String::from)));
+                ctx.emitter.emit_result(&serde_json::json!({
+                    "host": host, "file": file_path, "node": node, "field": field, "value": value
+                })).ok();
+                Ok(())
+            }
+            BackendGraphAction::Set { target, file_path, node, field, value, yes, dry_run, cred } => {
+                let hosts: Vec<String> = match target.require_one()? {
+                    crate::cli::host_args::HostTarget::Single(h) => vec![h],
+                    crate::cli::host_args::HostTarget::Batch(hs) => hs,
+                };
+                let outcome = destructive::check(yes, dry_run, "ini.backend-graph.set")?;
+                let db = ctx.require_db()?;
+                cred.preflight(db)?;
+                if outcome == Outcome::DryRun {
+                    destructive::emit_plan(ctx.emitter.as_mut(), "ini.backend-graph.set",
+                        serde_json::json!({ "hosts": hosts, "file": file_path, "node": node, "field": field, "value": value }));
+                    return Ok(());
+                }
+                let (u, p) = cred.resolve(db)?
+                    .ok_or_else(|| crate::error::UecmError::InvalidInput("credentials required".into()))?;
+                for host in &hosts {
+                    ini_editor::set_backend_field_with_credential(
+                        host, &file_path, "DerivedDataBackendGraph", &node, &field, &value, &u, &p)?;
+                }
+                Ok(())
+            }
+            BackendGraphAction::Scan { host, file_path, cred } => {
+                let db = ctx.require_db()?;
+                let creds = cred.resolve(db)?;
+                let target = ini_scanner::TargetFile {
+                    path: file_path.clone(),
+                    category: crate::core::ini_diagnostics::Category::Project,
+                };
+                let parsed = ini_scanner::read_file(
+                    &host, &target, creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str())))?;
+                let nodes: Vec<_> = parsed.map(|pf| pf.sections.into_iter()
+                    .flat_map(|s| s.backend_nodes.into_iter()).collect())
+                    .unwrap_or_default();
+                ctx.emitter.emit_result(&nodes).ok();
+                Ok(())
+            }
+        },
     }
 }
 

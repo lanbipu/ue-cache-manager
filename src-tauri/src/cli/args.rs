@@ -344,6 +344,56 @@ pub enum IniAction {
         #[arg(long)]
         project_id: i64,
     },
+    /// Read or write [DerivedDataBackendGraph] tuple nodes.
+    BackendGraph {
+        #[command(subcommand)]
+        action: BackendGraphAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum BackendGraphAction {
+    /// Get a single field value from a Shared/Boot/Local backend node.
+    Get {
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        file_path: String,
+        #[arg(long, default_value = "Shared")]
+        node: String,
+        #[arg(long)]
+        field: String,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Set a single field value.
+    Set {
+        #[command(flatten)]
+        target: crate::cli::host_args::HostArgs,
+        #[arg(long)]
+        file_path: String,
+        #[arg(long, default_value = "Shared")]
+        node: String,
+        #[arg(long)]
+        field: String,
+        #[arg(long)]
+        value: String,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Scan an INI file and emit all BackendGraph nodes as JSON.
+    Scan {
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        file_path: String,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
 }
 
 // ---------- share ----------
@@ -669,6 +719,24 @@ mod tests {
                 assert_eq!(target.hosts, Some(vec!["a".into(), "b".into(), "c".into()]));
                 assert_eq!(name, "X");
                 assert_eq!(value, "Y");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_ini_backend_graph_set() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "ini", "backend-graph", "set",
+            "--hosts", "R01,R02", "--file-path", r"D:\Proj\Config\DefaultEngine.ini",
+            "--node", "Shared", "--field", "ReadOnly", "--value", "false",
+            "--cred-alias", "admin", "--yes",
+        ]).unwrap();
+        match cli.command {
+            Domain::Ini { action: IniAction::BackendGraph { action: BackendGraphAction::Set { node, field, value, .. } } } => {
+                assert_eq!(node, "Shared");
+                assert_eq!(field, "ReadOnly");
+                assert_eq!(value, "false");
             }
             _ => panic!("wrong variant"),
         }
