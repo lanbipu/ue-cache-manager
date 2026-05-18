@@ -421,6 +421,28 @@ fn derive_ini_outcome(
     })
 }
 
+/// Build a row of `na` outcomes for every probe that requires creds. Used when
+/// the operator runs `health run` without `--cred-alias` / `--user` — L1 ports
+/// still run (in run_with_rt), but L2/L3 probes are skipped and reported as
+/// `na` so the `skipped` counter (introduced in T6) increments correctly.
+#[allow(dead_code)] // wired into run_with_rt in T10b
+fn build_no_creds_row() -> std::collections::HashMap<String, crate::core::health_check::CheckOutcome> {
+    use std::collections::HashMap;
+    let mut row = HashMap::new();
+    for k in crate::core::probe_keys::offline_probe_keys() {
+        row.insert(
+            k.into(),
+            crate::core::health_check::CheckOutcome {
+                status: "na".into(),
+                message: "credentials not provided; authenticated probes skipped".into(),
+                sample: "".into(),
+                remediation: "Provide --cred-alias <alias> (or --user/--pass-stdin) to enable L2 and L3 probes.".into(),
+            },
+        );
+    }
+    row
+}
+
 fn list_runs(ctx: &mut Ctx<'_>, limit: i64) -> UecmResult<()> {
     let db = ctx.require_db()?;
     let rows = scan_runs::list_recent(db, "health", limit)?;
@@ -526,5 +548,20 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let r = rt.block_on(super::scan_and_probe_l1("10.0.0.0/16", 50));
         assert!(matches!(r, Err(crate::error::UecmError::InvalidInput(_))));
+    }
+
+    #[test]
+    fn build_no_creds_row_marks_all_authenticated_probes_as_na() {
+        let row = super::build_no_creds_row();
+        let expected = crate::core::probe_keys::offline_probe_keys();
+        assert_eq!(row.len(), expected.len());
+        for key in &expected {
+            let o = row.get(*key).expect(&format!("missing key: {}", key));
+            assert_eq!(o.status, "na", "{} should be na", key);
+            assert!(
+                o.remediation.contains("--cred-alias") || o.remediation.contains("credential"),
+                "{} remediation should mention credentials, got: {}", key, o.remediation
+            );
+        }
     }
 }
