@@ -780,6 +780,37 @@ mod tests {
             .any(|f| matches!(f.rule_id.as_str(), "R008" | "R009" | "R010")));
     }
 
+    // ── R024: ShaderPipelineCache.Enabled ────────────────────────────────────
+
+    #[test]
+    fn r024_fires_when_shader_pipeline_cache_missing() {
+        let f = console_variables(&[]);
+        assert_fires("R024", &f);
+    }
+
+    #[test]
+    fn r024_fires_when_shader_pipeline_cache_disabled() {
+        let f = console_variables(&[("r.ShaderPipelineCache.Enabled", "0")]);
+        assert_fires("R024", &f);
+    }
+
+    #[test]
+    fn r024_silent_when_shader_pipeline_cache_enabled() {
+        let f = console_variables(&[("r.ShaderPipelineCache.Enabled", "1")]);
+        assert_silent("R024", &f);
+    }
+
+    #[test]
+    fn r024_silent_for_non_consolevariables_file() {
+        // R024's pso_cvar_rule wraps an early-return for non-CV files.
+        let f = ParsedFile {
+            path: r"C:\Project\Config\DefaultEngine.ini".into(),
+            category: Category::Project,
+            sections: vec![],
+        };
+        assert_silent("R024", &f);
+    }
+
     // ── BackendGraph rule helpers ─────────────────────────────────────────────
 
     fn ddb_project(node_raw: &str) -> ParsedFile {
