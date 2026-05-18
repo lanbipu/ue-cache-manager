@@ -43,19 +43,26 @@
 //! - 3 environment / DB / IO failure
 //! - 4 credential / PowerShell failure (e.g. detect-binary can't reach host)
 
-use crate::cli::args::{ZenAction, ZenBaselineAction};
+use crate::cli::args::{ZenAction, ZenBaselineAction, ZenServiceAction, ZenUrlaclAction};
 use crate::cli::credential_args::CredentialArgs;
 use crate::cli::destructive::{self, Outcome};
 use crate::cli::output::Event;
 use crate::cli::run::Ctx;
 use crate::cli::EmitSerialize;
+use crate::core::zen::endpoint as zen_endpoint;
+use crate::core::zen::lua_config::{self, UpstreamInfo};
+use crate::core::zen::redaction::redact;
 use crate::core::zen::{binary as zen_binary, cache_stats as zen_cache, probe as zen_probe};
 use crate::data::{
-    machines, zen_binary_expected, zen_endpoints, zen_probes, Db, ZenEndpoint,
+    machine_zen_install, machines, operations, zen_binary_expected, zen_endpoints, zen_probes,
+    Db, Machine, ZenEndpoint,
 };
 use crate::error::{UecmError, UecmResult};
 use serde::Serialize;
 use std::time::Duration;
+
+/// Default Windows service name for zenserver. T2.4 ps-scripts use the same.
+const DEFAULT_SERVICE_NAME: &str = "ZenServer";
 
 const KIND_ZEN_CLI: &str = "zen_cli";
 const KIND_ZENSERVER: &str = "zenserver";
@@ -78,6 +85,65 @@ pub fn handle(ctx: &mut Ctx<'_>, action: ZenAction) -> UecmResult<()> {
             }
             ZenBaselineAction::Unlock { zen_build_version, kind, yes, dry_run } => {
                 baseline_unlock(ctx, &zen_build_version, &kind, yes, dry_run)
+            }
+        },
+        ZenAction::Register {
+            machine,
+            declared_port,
+            scheme,
+            role,
+            upstream_endpoint_id,
+            data_dir,
+            httpserverclass,
+            lifecycle,
+        } => register(
+            ctx,
+            machine,
+            declared_port,
+            &scheme,
+            &role,
+            upstream_endpoint_id,
+            &data_dir,
+            &httpserverclass,
+            lifecycle.as_deref(),
+        ),
+        ZenAction::Unregister { endpoint_id, yes, dry_run } => {
+            unregister(ctx, endpoint_id, yes, dry_run)
+        }
+        ZenAction::ApplyConfig {
+            endpoint_id,
+            dest_path,
+            yes,
+            dry_run,
+            cred,
+        } => apply_config(ctx, endpoint_id, &dest_path, yes, dry_run, &cred),
+        ZenAction::LuaPreview { endpoint_id } => lua_preview(ctx, endpoint_id),
+        ZenAction::Service { action } => match action {
+            ZenServiceAction::Install { endpoint_id, yes, dry_run, cred } => {
+                service_install(ctx, endpoint_id, yes, dry_run, &cred)
+            }
+            ZenServiceAction::Uninstall { endpoint_id, yes, dry_run, cred } => {
+                service_uninstall(ctx, endpoint_id, yes, dry_run, &cred)
+            }
+            ZenServiceAction::Start { endpoint_id, cred } => {
+                service_simple(ctx, endpoint_id, ServiceVerb::Start, false, false, &cred)
+            }
+            ZenServiceAction::Stop { endpoint_id, yes, dry_run, cred } => {
+                service_simple(ctx, endpoint_id, ServiceVerb::Stop, yes, dry_run, &cred)
+            }
+            ZenServiceAction::Status { endpoint_id, cred } => {
+                service_status(ctx, endpoint_id, &cred)
+            }
+        },
+        ZenAction::Urlacl { action } => match action {
+            ZenUrlaclAction::Add { endpoint_id, principal, yes, dry_run, cred } => {
+                urlacl_add(ctx, endpoint_id, &principal, yes, dry_run, &cred)
+            }
+            ZenUrlaclAction::List { machine, port_filter, cred } => {
+                urlacl_list(ctx, machine, port_filter.as_deref(), &cred)
+            }
+            ZenUrlaclAction::Remove { endpoint_id, yes, dry_run, cred } => {
+                urlacl_remove(ctx, endpoint_id, yes, dry_run, &cred)
             }
         },
     }
@@ -644,6 +710,1198 @@ fn validate_kind(kind: &str) -> UecmResult<()> {
 }
 
 // -----------------------------------------------------------------------------
+// register / unregister (T2.5)
+// -----------------------------------------------------------------------------
+
+/// Apply Plan §1.1 defaults when the operator didn't pin lifecycle:
+/// `shared_upstream` requires `installed_service` (T2.1 enforces),
+/// `local` defaults to `editor_owned`. Pass-through for anything else so the
+/// validator in `core::zen::endpoint::register` produces the canonical error.
+fn default_lifecycle_for(role: &str) -> &'static str {
+    match role {
+        crate::core::zen::endpoint::ROLE_SHARED_UPSTREAM => "installed_service",
+        _ => "editor_owned",
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn register(
+    ctx: &mut Ctx<'_>,
+    machine: i64,
+    declared_port: i64,
+    scheme: &str,
+    role: &str,
+    upstream_endpoint_id: Option<i64>,
+    data_dir: &str,
+    httpserverclass: &str,
+    lifecycle: Option<&str>,
+) -> UecmResult<()> {
+    let db = ctx.require_db()?.clone();
+    // Sanity check that the machine row exists before we hit the endpoint
+    // validator — gives a clearer error than the FK violation would.
+    if machines::find_by_id(&db, machine)?.is_none() {
+        return Err(UecmError::InvalidInput(format!(
+            "machine id={} not found",
+            machine
+        )));
+    }
+
+    let lifecycle_mode = lifecycle
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| default_lifecycle_for(role).to_string());
+
+    let input = zen_endpoint::EndpointInput {
+        machine_id: machine,
+        declared_port,
+        scheme: scheme.to_string(),
+        role: role.to_string(),
+        upstream_endpoint_id,
+        data_dir: data_dir.to_string(),
+        httpserverclass: httpserverclass.to_string(),
+        lifecycle_mode: lifecycle_mode.clone(),
+    };
+    let outcome = zen_endpoint::register(&db, &input)?;
+    // Idempotent contract (plan §7.2): when `inserted=false`, the existing
+    // row's fields are kept. The caller passed *desired* values but DB state
+    // didn't change, so we must return the *persisted* row — not the request
+    // payload. Otherwise automation that re-runs register with new role /
+    // lifecycle / data_dir would see JSON claiming success while subsequent
+    // `lua-preview` / `apply-config` still observe the old row.
+    let persisted = zen_endpoint::get(&db, outcome.id)?.ok_or_else(|| {
+        UecmError::OperationFailed(format!(
+            "register: row id={} disappeared between insert and readback",
+            outcome.id
+        ))
+    })?;
+    let doc = serde_json::json!({
+        "ok": true,
+        "endpoint_id": outcome.id,
+        "inserted": outcome.inserted,
+        "machine_id": persisted.machine_id,
+        "declared_port": persisted.declared_port,
+        "scheme": persisted.scheme,
+        "role": persisted.role,
+        "upstream_endpoint_id": persisted.upstream_endpoint_id,
+        "lifecycle_mode": persisted.lifecycle_mode,
+        "httpserverclass": persisted.httpserverclass,
+        "data_dir": persisted.data_dir,
+    });
+    ctx.emitter.emit_result(&doc).ok();
+    Ok(())
+}
+
+fn unregister(ctx: &mut Ctx<'_>, endpoint_id: i64, yes: bool, dry_run: bool) -> UecmResult<()> {
+    let outcome = destructive::check(yes, dry_run, "zen.unregister")?;
+    let db = ctx.require_db()?.clone();
+    let ep = zen_endpoint::get(&db, endpoint_id)?.ok_or_else(|| {
+        UecmError::InvalidInput(format!("endpoint id={} not found", endpoint_id))
+    })?;
+
+    // Surface "still referenced as upstream" in dry-run too. A dry-run plan
+    // that succeeds while the real apply would be rejected misleads
+    // automation — codex P2 fix. Scan the live row set for any endpoint
+    // pointing here. zen_endpoints::list returns Db-mutex-guarded data so
+    // the check matches whatever core::zen::endpoint::unregister would see
+    // on the real path (modulo race conditions a millisecond later).
+    let dependents: Vec<i64> = zen_endpoints::list(&db)?
+        .into_iter()
+        .filter(|other| other.upstream_endpoint_id == Some(endpoint_id))
+        .filter_map(|other| other.id)
+        .collect();
+    if !dependents.is_empty() {
+        let list = dependents
+            .iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(UecmError::InvalidInput(format!(
+            "cannot unregister endpoint {endpoint_id}: still referenced as upstream by [{list}]; un-point them first"
+        )));
+    }
+
+    if outcome == Outcome::DryRun {
+        destructive::emit_plan(
+            ctx.emitter.as_mut(),
+            "zen.unregister",
+            serde_json::json!({
+                "endpoint_id": endpoint_id,
+                "machine_id": ep.machine_id,
+                "declared_port": ep.declared_port,
+                "role": ep.role,
+            }),
+        );
+        return Ok(());
+    }
+
+    // Core layer also checks dependents under a transaction — this is
+    // belt-and-braces in case a sibling registered between our pre-check and
+    // the commit. Real apply path remains authoritative.
+    zen_endpoint::unregister(&db, endpoint_id)?;
+    let summary = serde_json::json!({
+        "ok": true,
+        "endpoint_id": endpoint_id,
+        "machine_id": ep.machine_id,
+        "action": "unregister",
+    });
+    ctx.emitter.emit_event(&Event::Completed { summary }).ok();
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// apply-config / lua-preview (T2.5)
+// -----------------------------------------------------------------------------
+
+/// Resolve the upstream UpstreamInfo for an endpoint that has
+/// `upstream_endpoint_id = Some(_)`. Returns `Ok(None)` when the row has no
+/// upstream pointer (consumer should pass `None` to `lua_config::render`).
+fn resolve_upstream_info(db: &Db, ep: &ZenEndpoint) -> UecmResult<Option<UpstreamInfo>> {
+    let Some(upstream_id) = ep.upstream_endpoint_id else {
+        return Ok(None);
+    };
+    let upstream = zen_endpoint::get(db, upstream_id)?.ok_or_else(|| {
+        UecmError::InvalidInput(format!(
+            "endpoint id={} references upstream id={} which no longer exists",
+            ep.id.unwrap_or(-1),
+            upstream_id,
+        ))
+    })?;
+    let upstream_machine = machines::find_by_id(db, upstream.machine_id)?.ok_or_else(|| {
+        UecmError::InvalidInput(format!(
+            "upstream endpoint id={} points at machine id={} which is missing",
+            upstream_id, upstream.machine_id,
+        ))
+    })?;
+    Ok(Some(UpstreamInfo {
+        scheme: upstream.scheme,
+        host: upstream_machine.ip,
+        declared_port: upstream.declared_port,
+    }))
+}
+
+fn render_lua_for(db: &Db, endpoint_id: i64) -> UecmResult<(ZenEndpoint, String)> {
+    let ep = zen_endpoint::get(db, endpoint_id)?.ok_or_else(|| {
+        UecmError::InvalidInput(format!("endpoint id={} not found", endpoint_id))
+    })?;
+    let upstream = resolve_upstream_info(db, &ep)?;
+    let lua = lua_config::render(&ep, upstream.as_ref())?;
+    Ok((ep, lua))
+}
+
+fn lua_preview(ctx: &mut Ctx<'_>, endpoint_id: i64) -> UecmResult<()> {
+    let db = ctx.require_db()?.clone();
+    let (ep, lua) = render_lua_for(&db, endpoint_id)?;
+    // Codex P2: run the same data_dir safety guard as `apply-config` so
+    // `lua-preview` doesn't render a config the subsequent `apply-config`
+    // (even `--dry-run`) is guaranteed to refuse. The CLI doc string
+    // promises the two use the "same engine"; without this check, an
+    // endpoint with `data_dir = C:\Windows\Zen` would print a happy Lua
+    // file from `lua-preview` then crash out of `apply-config`.
+    validate_data_dir_safe(&ep.data_dir)?;
+    let doc = serde_json::json!({
+        "ok": true,
+        "endpoint_id": endpoint_id,
+        "machine_id": ep.machine_id,
+        "lua": lua,
+    });
+    ctx.emitter.emit_result(&doc).ok();
+    Ok(())
+}
+
+fn apply_config(
+    ctx: &mut Ctx<'_>,
+    endpoint_id: i64,
+    dest_path: &str,
+    yes: bool,
+    dry_run: bool,
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
+    let db = ctx.require_db()?.clone();
+    cred.preflight(&db)?;
+    let (ep, lua) = render_lua_for(&db, endpoint_id)?;
+    let machine = require_machine(&db, ep.machine_id)?;
+
+    // Codex P2 fix: mirror `zen-write-lua-config.ps1`'s destination-path
+    // checks here so `--dry-run` doesn't approve a path the `--yes` apply
+    // would deterministically reject. Catches relative paths, Win32 device
+    // namespace, and forbidden system roots before any work happens.
+    validate_dest_path(dest_path)?;
+    // Same guard on the endpoint's recorded `data_dir`. Plan §8 T2.2 writes
+    // `server.datadir` straight from this field — if it points at C:\Windows
+    // the rendered zen.lua would steer zen into a system root the moment
+    // the service starts. T2.8's full datadir-safety guard isn't shipped yet,
+    // but the system-root subset of that check is already a hard fail in
+    // every sidecar we drive, so refuse here too (codex P2).
+    validate_data_dir_safe(&ep.data_dir)?;
+
+    if dry_run {
+        // Print the rendered lua + the destination plan. No PS invocation.
+        destructive::emit_plan(
+            ctx.emitter.as_mut(),
+            "zen.apply-config",
+            serde_json::json!({
+                "endpoint_id": endpoint_id,
+                "machine_id": ep.machine_id,
+                "host": machine.ip,
+                // PLACEHOLDER: T2.9 will lock down the real path. Until then
+                // operator supplies / accepts the C:\Tools\UECM\zen.lua default.
+                "dest_path": dest_path,
+                "lua": lua,
+            }),
+        );
+        return Ok(());
+    }
+
+    if !yes {
+        return Err(UecmError::InvalidInput(
+            "zen.apply-config is destructive; pass --yes to confirm or --dry-run to preview".into(),
+        ));
+    }
+
+    // Reaching the PS sidecar requires Windows (lanPC). On the dev mac the
+    // call below errors with `PowerShell("WinRM is Windows-only")` which
+    // maps to exit 4 — same contract as M1 detect-binary.
+    let creds = cred.resolve(&db)?;
+
+    // operations log row — log the *redacted* invocation so secrets never
+    // make it to disk.
+    let invocation = redact(&format!(
+        "zen-write-lua-config.ps1 -DestPath {dest_path} (lua {} bytes)",
+        lua.len()
+    ));
+    let op_id = operations::start(&db, "zen.apply_config", &[ep.machine_id])?;
+
+    let expected_sha = sha256_hex_of(&lua);
+    let result = invoke_write_lua(&machine.ip, &lua, dest_path, creds.as_ref())
+        .and_then(|response| verify_write_response(&response, &expected_sha, lua.len()));
+    finalize_op(&db, op_id, &result, &invocation);
+
+    let response = result?;
+    let summary = serde_json::json!({
+        "ok": true,
+        "endpoint_id": endpoint_id,
+        "machine_id": ep.machine_id,
+        "host": machine.ip,
+        "dest_path": dest_path,
+        "sha256": expected_sha,
+        "remote": response,
+    });
+    ctx.emitter.emit_event(&Event::Completed { summary }).ok();
+    Ok(())
+}
+
+/// Codex P2 fix: don't trust the sidecar's `ok: true` alone — compare the
+/// returned `sha256` against the local hash of the Lua text we asked it to
+/// write. A stale/buggy/MITM'd sidecar that returns `ok: true` with
+/// truncated or modified bytes would otherwise leave a different `zen.lua`
+/// on disk than what we logged as written.
+///
+/// Also cross-checks `bytes_written` against the source length so a sidecar
+/// that hashes the original bytes but truncates on write can't escape
+/// detection (the read-back size in T2.4 reads `Get-Item Length`, so the
+/// number reflects the *written* file, not the input string).
+fn verify_write_response(
+    response: &serde_json::Value,
+    expected_sha: &str,
+    expected_bytes: usize,
+) -> UecmResult<serde_json::Value> {
+    let remote_sha = response
+        .get("sha256")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            UecmError::PowerShell(
+                "zen-write-lua-config: missing sha256 field in success envelope".into(),
+            )
+        })?;
+    if !remote_sha.eq_ignore_ascii_case(expected_sha) {
+        return Err(UecmError::PowerShell(format!(
+            "zen-write-lua-config: remote sha256 {remote_sha} does not match locally rendered {expected_sha} \
+             — the file on disk does NOT match the requested config",
+        )));
+    }
+    let remote_bytes = response
+        .get("bytes_written")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| {
+            UecmError::PowerShell(
+                "zen-write-lua-config: missing bytes_written field in success envelope".into(),
+            )
+        })?;
+    if remote_bytes != expected_bytes as i64 {
+        return Err(UecmError::PowerShell(format!(
+            "zen-write-lua-config: remote bytes_written={remote_bytes} does not match local len={expected_bytes}"
+        )));
+    }
+    Ok(response.clone())
+}
+
+fn invoke_write_lua(
+    host: &str,
+    lua_text: &str,
+    dest_path: &str,
+    creds: Option<&(String, String)>,
+) -> UecmResult<serde_json::Value> {
+    let body = build_param_script(
+        "zen-write-lua-config.ps1",
+        &[("LuaText", lua_text), ("DestPath", dest_path)],
+    )?;
+    let raw = run_remote(host, &body, creds)?;
+    parse_envelope(&raw, "zen-write-lua-config")
+}
+
+// -----------------------------------------------------------------------------
+// service install / uninstall / start / stop / status (T2.5)
+// -----------------------------------------------------------------------------
+
+#[derive(Copy, Clone)]
+enum ServiceVerb {
+    Start,
+    Stop,
+}
+
+fn service_install(
+    ctx: &mut Ctx<'_>,
+    endpoint_id: i64,
+    yes: bool,
+    dry_run: bool,
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
+    let db = ctx.require_db()?.clone();
+    cred.preflight(&db)?;
+    let ep = require_endpoint(&db, endpoint_id)?;
+    let machine = require_machine(&db, ep.machine_id)?;
+
+    // Resolve the zenserver binary path from the most recent detect-binary
+    // record. Without it we'd have to ask the operator for the full path —
+    // surface the precondition explicitly so they know to run detect-binary.
+    // Service install/uninstall wrap `zen.exe service install|uninstall`, NOT
+    // `zenserver.exe`. `zen.exe` is the CLI in the install dir and is what
+    // `detect-binary` records as `zen_cli_path` (zenserver_path points at the
+    // long-running daemon binary, which is the wrong tool for SCM registration).
+    let install = machine_zen_install::find(&db, ep.machine_id)?;
+    let zen_exe = install
+        .as_ref()
+        .and_then(|m| m.zen_cli_path.clone())
+        .ok_or_else(|| {
+            UecmError::InvalidInput(format!(
+                "machine id={} has no zen.exe (zen_cli) recorded — run \
+                 `uecm-cli zen detect-binary --machine {}` first",
+                ep.machine_id, ep.machine_id,
+            ))
+        })?;
+
+    // Codex P2: lifecycle is the DB source of truth. Refuse to install zen as
+    // an OS service when the endpoint row claims `editor_owned` — otherwise
+    // SCM and DB drift apart (status / lua-preview keep reporting
+    // editor_owned while a real Windows service exists). Operator re-runs
+    // `zen register` (or uses a future `change-lifecycle` command) to flip
+    // the row to `installed_service` first.
+    if ep.lifecycle_mode != "installed_service" {
+        // Codex P2: the only working recovery is to delete the existing row
+        // and re-register — `zen register` is idempotent on (machine, port)
+        // and won't overwrite lifecycle on the conflict path, so a naive
+        // re-register doesn't fix the drift. M3 will add a proper
+        // `zen change-lifecycle` command; until then point the operator at
+        // unregister + register so they don't loop on a "just re-register"
+        // suggestion that doesn't apply.
+        return Err(UecmError::InvalidInput(format!(
+            "endpoint id={endpoint_id} has lifecycle_mode={:?}; service install \
+             requires lifecycle_mode=\"installed_service\". To recover: \
+             `zen unregister --endpoint-id {endpoint_id} --yes` followed by \
+             `zen register --machine {} --declared-port {} --role {} \
+             --lifecycle installed_service ...`",
+            ep.lifecycle_mode, ep.machine_id, ep.declared_port, ep.role,
+        )));
+    }
+
+    // Codex P2: `zen-service-install.ps1` rejects drive-relative, root-relative
+    // and forbidden-system-root data dirs before SCM registration. Mirror
+    // those checks here so `--dry-run` doesn't approve a plan the real apply
+    // path always rejects.
+    validate_service_data_dir(&ep.data_dir)?;
+
+    if dry_run {
+        destructive::emit_plan(
+            ctx.emitter.as_mut(),
+            "zen.service.install",
+            serde_json::json!({
+                "endpoint_id": endpoint_id,
+                "machine_id": ep.machine_id,
+                "host": machine.ip,
+                "service_name": DEFAULT_SERVICE_NAME,
+                "zen_exe_path": zen_exe,
+                "data_dir": ep.data_dir,
+            }),
+        );
+        return Ok(());
+    }
+    if !yes {
+        return Err(UecmError::InvalidInput(
+            "zen.service.install is destructive; pass --yes to confirm or --dry-run to preview".into(),
+        ));
+    }
+
+    let creds = cred.resolve(&db)?;
+    let invocation = redact(&format!(
+        "zen-service-install.ps1 -ZenExePath {zen_exe} -ServiceName {DEFAULT_SERVICE_NAME} -DataDir {}",
+        ep.data_dir
+    ));
+    let op_id = operations::start(&db, "zen.service_install", &[ep.machine_id])?;
+
+    let body = build_param_script(
+        "zen-service-install.ps1",
+        &[
+            ("ZenExePath", zen_exe.as_str()),
+            ("ServiceName", DEFAULT_SERVICE_NAME),
+            ("DataDir", ep.data_dir.as_str()),
+        ],
+    );
+    let result = match body {
+        Ok(body) => run_remote(&machine.ip, &body, creds.as_ref())
+            .and_then(|raw| parse_envelope(&raw, "zen-service-install")),
+        Err(e) => Err(e),
+    };
+    finalize_op(&db, op_id, &result, &invocation);
+    let response = result?;
+
+    let summary = serde_json::json!({
+        "ok": true,
+        "endpoint_id": endpoint_id,
+        "machine_id": ep.machine_id,
+        "host": machine.ip,
+        "service_name": DEFAULT_SERVICE_NAME,
+        "remote": response,
+    });
+    ctx.emitter.emit_event(&Event::Completed { summary }).ok();
+    Ok(())
+}
+
+fn service_uninstall(
+    ctx: &mut Ctx<'_>,
+    endpoint_id: i64,
+    yes: bool,
+    dry_run: bool,
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
+    let outcome = destructive::check(yes, dry_run, "zen.service.uninstall")?;
+    let db = ctx.require_db()?.clone();
+    cred.preflight(&db)?;
+    let ep = require_endpoint(&db, endpoint_id)?;
+    let machine = require_machine(&db, ep.machine_id)?;
+    // Service install/uninstall wrap `zen.exe service install|uninstall`, NOT
+    // `zenserver.exe`. `zen.exe` is the CLI in the install dir and is what
+    // `detect-binary` records as `zen_cli_path` (zenserver_path points at the
+    // long-running daemon binary, which is the wrong tool for SCM registration).
+    //
+    // Codex P2: a missing `zen_cli_path` is a precondition error, NOT a
+    // success no-op. The remote SCM could still have a `ZenServer` service
+    // registered (manual install, stale DB, or detect-binary never run),
+    // and silently returning ok=true would mislead operators into thinking
+    // the host is clean. Fail with InvalidInput → exit 2 so automation
+    // re-runs `detect-binary` (or supplies the path explicitly when T2.9
+    // adds an override flag).
+    let install = machine_zen_install::find(&db, ep.machine_id)?;
+    let zen_exe = install
+        .as_ref()
+        .and_then(|m| m.zen_cli_path.clone())
+        .ok_or_else(|| {
+            UecmError::InvalidInput(format!(
+                "machine id={} has no zen.exe (zen_cli) recorded — run \
+                 `uecm-cli zen detect-binary --machine {}` first so we can \
+                 invoke `zen.exe service uninstall` against the real binary",
+                ep.machine_id, ep.machine_id,
+            ))
+        })?;
+
+    if outcome == Outcome::DryRun {
+        destructive::emit_plan(
+            ctx.emitter.as_mut(),
+            "zen.service.uninstall",
+            serde_json::json!({
+                "endpoint_id": endpoint_id,
+                "machine_id": ep.machine_id,
+                "host": machine.ip,
+                "service_name": DEFAULT_SERVICE_NAME,
+                "zen_exe_path": zen_exe,
+            }),
+        );
+        return Ok(());
+    }
+
+    let creds = cred.resolve(&db)?;
+    let invocation = redact(&format!(
+        "zen-service-uninstall.ps1 -ZenExePath {zen_exe} -ServiceName {DEFAULT_SERVICE_NAME}"
+    ));
+    let op_id = operations::start(&db, "zen.service_uninstall", &[ep.machine_id])?;
+    let body = build_param_script(
+        "zen-service-uninstall.ps1",
+        &[
+            ("ZenExePath", zen_exe.as_str()),
+            ("ServiceName", DEFAULT_SERVICE_NAME),
+        ],
+    );
+    let result = match body {
+        Ok(body) => run_remote(&machine.ip, &body, creds.as_ref())
+            .and_then(|raw| parse_envelope(&raw, "zen-service-uninstall")),
+        Err(e) => Err(e),
+    };
+    finalize_op(&db, op_id, &result, &invocation);
+    let response = result?;
+    let summary = serde_json::json!({
+        "ok": true,
+        "endpoint_id": endpoint_id,
+        "machine_id": ep.machine_id,
+        "host": machine.ip,
+        "service_name": DEFAULT_SERVICE_NAME,
+        "remote": response,
+    });
+    ctx.emitter.emit_event(&Event::Completed { summary }).ok();
+    Ok(())
+}
+
+fn service_simple(
+    ctx: &mut Ctx<'_>,
+    endpoint_id: i64,
+    verb: ServiceVerb,
+    yes: bool,
+    dry_run: bool,
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
+    let (script, op_kind, op_label, destructive_check) = match verb {
+        ServiceVerb::Start => ("zen-up.ps1", "zen.service_start", "zen.service.start", false),
+        // Stop is destructive — codex P2 fix. A stray `zen service stop` on a
+        // `shared_upstream` master severs the whole cluster's cache forwarding.
+        ServiceVerb::Stop => ("zen-down.ps1", "zen.service_stop", "zen.service.stop", true),
+    };
+    let db = ctx.require_db()?.clone();
+    cred.preflight(&db)?;
+    let ep = require_endpoint(&db, endpoint_id)?;
+    let machine = require_machine(&db, ep.machine_id)?;
+
+    // Codex P2: only `installed_service` endpoints have an SCM service we
+    // can drive via `zen-up.ps1` / `zen-down.ps1`. An `editor_owned`
+    // endpoint records "the editor sponsors zen on this machine" — it
+    // doesn't own the host's `ZenServer` service. Driving the service
+    // anyway would touch whatever stale install exists, creating exactly
+    // the DB/SCM drift `service install` already guards against. Refuse.
+    if ep.lifecycle_mode != "installed_service" {
+        return Err(UecmError::InvalidInput(format!(
+            "service {} requires endpoint id={} to have lifecycle_mode=\"installed_service\" \
+             (got {:?}); `editor_owned` endpoints are sponsored by UE editor and have no SCM service",
+            op_label, endpoint_id, ep.lifecycle_mode
+        )));
+    }
+
+    if destructive_check {
+        let outcome = destructive::check(yes, dry_run, op_label)?;
+        if outcome == Outcome::DryRun {
+            destructive::emit_plan(
+                ctx.emitter.as_mut(),
+                op_label,
+                serde_json::json!({
+                    "endpoint_id": endpoint_id,
+                    "machine_id": ep.machine_id,
+                    "host": machine.ip,
+                    "service_name": DEFAULT_SERVICE_NAME,
+                }),
+            );
+            return Ok(());
+        }
+    }
+
+    let creds = cred.resolve(&db)?;
+
+    let invocation = redact(&format!("{script} -ServiceName {DEFAULT_SERVICE_NAME}"));
+    let op_id = operations::start(&db, op_kind, &[ep.machine_id])?;
+    let body = build_param_script(script, &[("ServiceName", DEFAULT_SERVICE_NAME)]);
+    let result = match body {
+        Ok(body) => run_remote(&machine.ip, &body, creds.as_ref())
+            .and_then(|raw| parse_envelope(&raw, script)),
+        Err(e) => Err(e),
+    };
+    finalize_op(&db, op_id, &result, &invocation);
+    let response = result?;
+    let summary = serde_json::json!({
+        "ok": true,
+        "endpoint_id": endpoint_id,
+        "machine_id": ep.machine_id,
+        "host": machine.ip,
+        "service_name": DEFAULT_SERVICE_NAME,
+        "remote": response,
+    });
+    ctx.emitter.emit_event(&Event::Completed { summary }).ok();
+    Ok(())
+}
+
+fn service_status(
+    ctx: &mut Ctx<'_>,
+    endpoint_id: i64,
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
+    let db = ctx.require_db()?.clone();
+    cred.preflight(&db)?;
+    let ep = require_endpoint(&db, endpoint_id)?;
+    let machine = require_machine(&db, ep.machine_id)?;
+    let creds = cred.resolve(&db)?;
+
+    let body =
+        build_param_script("zen-service-status.ps1", &[("ServiceName", DEFAULT_SERVICE_NAME)])?;
+    let raw = run_remote(&machine.ip, &body, creds.as_ref())?;
+    let response = parse_envelope(&raw, "zen-service-status")?;
+    let doc = serde_json::json!({
+        "ok": true,
+        "endpoint_id": endpoint_id,
+        "machine_id": ep.machine_id,
+        "host": machine.ip,
+        "service_name": DEFAULT_SERVICE_NAME,
+        "remote": response,
+    });
+    ctx.emitter.emit_result(&doc).ok();
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// urlacl add / list / remove (T2.5)
+// -----------------------------------------------------------------------------
+
+/// Build the canonical `<scheme>://+:<port>/` reservation URL for an endpoint.
+fn url_prefix_for(ep: &ZenEndpoint) -> String {
+    format!("{}://+:{}/", ep.scheme, ep.declared_port)
+}
+
+fn urlacl_add(
+    ctx: &mut Ctx<'_>,
+    endpoint_id: i64,
+    principal: &str,
+    yes: bool,
+    dry_run: bool,
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
+    let outcome = destructive::check(yes, dry_run, "zen.urlacl.add")?;
+    // Codex P3: empty / whitespace principal would make `zen-urlacl-add.ps1`
+    // throw on its `IsNullOrWhiteSpace` check. Reject before dry-run so the
+    // plan matches what `--yes` would actually accept.
+    if principal.trim().is_empty() {
+        return Err(UecmError::InvalidInput(
+            "--principal must not be empty or whitespace (URL ACL needs a real account)".into(),
+        ));
+    }
+    let db = ctx.require_db()?.clone();
+    cred.preflight(&db)?;
+    let ep = require_endpoint(&db, endpoint_id)?;
+    let machine = require_machine(&db, ep.machine_id)?;
+    let url_prefix = url_prefix_for(&ep);
+
+    if outcome == Outcome::DryRun {
+        destructive::emit_plan(
+            ctx.emitter.as_mut(),
+            "zen.urlacl.add",
+            serde_json::json!({
+                "endpoint_id": endpoint_id,
+                "machine_id": ep.machine_id,
+                "host": machine.ip,
+                "url_prefix": url_prefix,
+                "principal": principal,
+            }),
+        );
+        return Ok(());
+    }
+
+    let creds = cred.resolve(&db)?;
+
+    let invocation = redact(&format!(
+        "zen-urlacl-add.ps1 -UrlPrefix {url_prefix} -UserAccount {principal}"
+    ));
+    let op_id = operations::start(&db, "zen.urlacl_add", &[ep.machine_id])?;
+    let body = build_param_script(
+        "zen-urlacl-add.ps1",
+        &[("UrlPrefix", url_prefix.as_str()), ("UserAccount", principal)],
+    );
+    let result = match body {
+        Ok(body) => run_remote(&machine.ip, &body, creds.as_ref())
+            .and_then(|raw| parse_envelope(&raw, "zen-urlacl-add")),
+        Err(e) => Err(e),
+    };
+    finalize_op(&db, op_id, &result, &invocation);
+    let response = result?;
+    let summary = serde_json::json!({
+        "ok": true,
+        "endpoint_id": endpoint_id,
+        "machine_id": ep.machine_id,
+        "host": machine.ip,
+        "url_prefix": url_prefix,
+        "principal": principal,
+        "remote": response,
+    });
+    ctx.emitter.emit_event(&Event::Completed { summary }).ok();
+    Ok(())
+}
+
+fn urlacl_list(
+    ctx: &mut Ctx<'_>,
+    machine: i64,
+    port_filter: Option<&str>,
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
+    let db = ctx.require_db()?.clone();
+    cred.preflight(&db)?;
+    let m = require_machine(&db, machine)?;
+    let creds = cred.resolve(&db)?;
+
+    let mut args: Vec<(&str, &str)> = Vec::new();
+    if let Some(p) = port_filter {
+        args.push(("PortFilter", p));
+    }
+    let body = build_param_script("zen-urlacl-list.ps1", &args)?;
+    let raw = run_remote(&m.ip, &body, creds.as_ref())?;
+    let response = parse_envelope(&raw, "zen-urlacl-list")?;
+    let doc = serde_json::json!({
+        "ok": true,
+        "machine_id": machine,
+        "host": m.ip,
+        "port_filter": port_filter,
+        "remote": response,
+    });
+    ctx.emitter.emit_result(&doc).ok();
+    Ok(())
+}
+
+fn urlacl_remove(
+    ctx: &mut Ctx<'_>,
+    endpoint_id: i64,
+    yes: bool,
+    dry_run: bool,
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
+    let outcome = destructive::check(yes, dry_run, "zen.urlacl.remove")?;
+    let db = ctx.require_db()?.clone();
+    cred.preflight(&db)?;
+    let ep = require_endpoint(&db, endpoint_id)?;
+    let machine = require_machine(&db, ep.machine_id)?;
+    let url_prefix = url_prefix_for(&ep);
+
+    if outcome == Outcome::DryRun {
+        destructive::emit_plan(
+            ctx.emitter.as_mut(),
+            "zen.urlacl.remove",
+            serde_json::json!({
+                "endpoint_id": endpoint_id,
+                "machine_id": ep.machine_id,
+                "host": machine.ip,
+                "url_prefix": url_prefix,
+            }),
+        );
+        return Ok(());
+    }
+
+    let creds = cred.resolve(&db)?;
+
+    let invocation = redact(&format!("zen-urlacl-remove.ps1 -UrlPrefix {url_prefix}"));
+    let op_id = operations::start(&db, "zen.urlacl_remove", &[ep.machine_id])?;
+    let body = build_param_script(
+        "zen-urlacl-remove.ps1",
+        &[("UrlPrefix", url_prefix.as_str())],
+    );
+    let result = match body {
+        Ok(body) => run_remote(&machine.ip, &body, creds.as_ref())
+            .and_then(|raw| parse_envelope(&raw, "zen-urlacl-remove")),
+        Err(e) => Err(e),
+    };
+    finalize_op(&db, op_id, &result, &invocation);
+    let response = result?;
+    let summary = serde_json::json!({
+        "ok": true,
+        "endpoint_id": endpoint_id,
+        "machine_id": ep.machine_id,
+        "host": machine.ip,
+        "url_prefix": url_prefix,
+        "remote": response,
+    });
+    ctx.emitter.emit_event(&Event::Completed { summary }).ok();
+    Ok(())
+}
+
+// -----------------------------------------------------------------------------
+// PS sidecar plumbing (T2.5)
+// -----------------------------------------------------------------------------
+
+/// Build an inline PowerShell snippet that runs a sidecar from `ps-scripts/`
+/// with named parameters. The sidecar body is read from disk and forwarded via
+/// stdin to `core::winrm::invoke[_with_credential]`, mirroring the M1
+/// detect-binary path.
+///
+/// We can't shell out to `powershell.exe -File <script>` over WinRM, because
+/// the sidecars live on the controller — the remote host has no copy.
+/// PowerShell's `param(...)` block must appear before any executable
+/// statement, so we cannot prepend `$Name = ...` assignments above the
+/// sidecar source.
+///
+/// The trick: assign the args hashtable to `$__uecm_zen_params` FIRST (outside
+/// the scriptblock), then invoke `& { <body> } @__uecm_zen_params`. PowerShell
+/// splatting requires the `@<variable>` form — a bare `@{ ... }` hashtable
+/// literal after the scriptblock is treated as a single positional argument,
+/// not as named-param binding. (Codex P1 fix: previously emitted
+/// `} @{ Name = 'x' }` which silently bound zero params, making every remote
+/// sidecar call fail on Windows.)
+///
+/// The body keeps its `[CmdletBinding()] param(...)` as the first statement
+/// inside the scriptblock, so the splatted hash binds to those params at
+/// invoke time. The sidecar's own `$args` (positional) stays empty so the
+/// `--full` hard-block in `zen-service-install.ps1` doesn't trip on caller
+/// positional drift.
+fn build_param_script(script_name: &str, args: &[(&str, &str)]) -> UecmResult<String> {
+    let body = crate::core::powershell::read_script(script_name)?;
+    // Build a PowerShell hashtable literal of the named args.
+    // Single-quoted PS strings only need `'` doubled to escape; backslashes
+    // and spaces stay literal, which is what we want for Windows paths.
+    let mut hash = String::from("@{ ");
+    for (i, (name, value)) in args.iter().enumerate() {
+        if i > 0 {
+            hash.push_str("; ");
+        }
+        let escaped = value.replace('\'', "''");
+        hash.push_str(&format!("{name} = '{escaped}'"));
+    }
+    hash.push_str(" }");
+    // Variable name is namespaced (`__uecm_zen_params`) so it cannot collide
+    // with anything inside the sidecar body. The trailing newline before the
+    // closing brace defends against a sidecar source that ends in a `#`
+    // line-comment with no newline.
+    Ok(format!(
+        "$__uecm_zen_params = {hash}\n& {{\n{body}\n}} @__uecm_zen_params\n"
+    ))
+}
+
+/// Dispatch a remote script body through WinRM, with or without credentials.
+fn run_remote(
+    host: &str,
+    body: &str,
+    creds: Option<&(String, String)>,
+) -> UecmResult<String> {
+    match creds {
+        Some((u, p)) => crate::core::winrm::invoke_with_credential(host, body, u, p),
+        None => crate::core::winrm::invoke(host, body),
+    }
+}
+
+/// Parse a `{ ok: bool, ... }` envelope from a sidecar. Hardened per codex
+/// review: ONLY treat `ok == true` (exactly the boolean `true`) as success.
+/// Missing `ok`, `ok = null`, `ok = "true"` (string), or `ok = false` are all
+/// failures. Anything else is a stale/overridden sidecar or a corrupted
+/// envelope; surfacing it as "success" would let bad remote state masquerade
+/// as a successful operation.
+fn parse_envelope(raw: &str, sidecar: &str) -> UecmResult<serde_json::Value> {
+    let envelope: serde_json::Value = serde_json::from_str(raw).map_err(|e| {
+        UecmError::PowerShell(format!(
+            "{sidecar} returned non-JSON output: {e}; raw: {}",
+            raw.chars().take(200).collect::<String>()
+        ))
+    })?;
+    match envelope.get("ok").and_then(|v| v.as_bool()) {
+        Some(true) => Ok(envelope),
+        Some(false) => {
+            let msg = envelope
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown sidecar error");
+            Err(UecmError::PowerShell(format!("{sidecar}: {msg}")))
+        }
+        None => {
+            // `ok` missing OR present-but-non-bool (e.g. `ok: null`, `ok: "true"`).
+            // Treat as protocol violation, not success.
+            Err(UecmError::PowerShell(format!(
+                "{sidecar} returned envelope without a boolean `ok` field; raw: {}",
+                raw.chars().take(200).collect::<String>()
+            )))
+        }
+    }
+}
+
+/// Mirror `zen-service-install.ps1`'s `DataDir` validation: fully-qualified
+/// drive-absolute or UNC, no device namespace, no forbidden system roots.
+/// Stricter than `validate_data_dir_safe` because it also requires the path
+/// to be absolute (the sidecar refuses `C:ZenCache` and `\ZenCache` outright).
+fn validate_service_data_dir(p: &str) -> UecmResult<()> {
+    let trimmed = p.trim();
+    if trimmed.is_empty() {
+        return Err(UecmError::InvalidInput(
+            "service data_dir is empty — re-register the endpoint with a valid path".into(),
+        ));
+    }
+    if trimmed.starts_with(r"\\?\")
+        || trimmed.starts_with(r"\\.\")
+        || trimmed.starts_with("//?/")
+        || trimmed.starts_with("//./")
+    {
+        return Err(UecmError::InvalidInput(format!(
+            "service data_dir {p:?} uses a Win32 device namespace prefix; \
+             re-register without the prefix"
+        )));
+    }
+    let bytes = trimmed.as_bytes();
+    let is_drive_abs = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/');
+    let is_unc = trimmed.starts_with(r"\\") || trimmed.starts_with("//");
+    if !(is_drive_abs || is_unc) {
+        return Err(UecmError::InvalidInput(format!(
+            "service data_dir must be a fully-qualified absolute path \
+             (e.g. 'D:\\ZenCache' or '\\\\host\\share\\Zen'); \
+             drive-relative / root-relative paths are rejected by zen.exe. Got: {p}"
+        )));
+    }
+    // Reuse the system-root + traversal guard.
+    validate_data_dir_safe(trimmed)
+}
+
+/// Same forbidden-system-root guard but applied to an endpoint's `data_dir`
+/// (rendered into `server.datadir`). Symmetric with `validate_dest_path`'s
+/// system-root check — once T2.8 lands a richer safety check, this becomes
+/// a delegating wrapper.
+fn validate_data_dir_safe(p: &str) -> UecmResult<()> {
+    let trimmed = p.trim();
+    if trimmed.is_empty() {
+        return Err(UecmError::InvalidInput(
+            "endpoint data_dir is empty — re-register with a valid path".into(),
+        ));
+    }
+    // Codex P2: reject Win32 device namespace BEFORE collapsing — otherwise
+    // `\\?\C:\Windows\Zen` keeps its `\\?\` prefix through normalization and
+    // the case-insensitive `c:\windows\` prefix check would miss it.
+    if trimmed.starts_with(r"\\?\")
+        || trimmed.starts_with(r"\\.\")
+        || trimmed.starts_with("//?/")
+        || trimmed.starts_with("//./")
+    {
+        return Err(UecmError::InvalidInput(format!(
+            "endpoint data_dir {p:?} uses a Win32 device namespace prefix (\\\\?\\ / \\\\.\\); \
+             re-register without the prefix"
+        )));
+    }
+    let normalized = trimmed.replace('/', r"\");
+    let canonical = collapse_path_segments(&normalized);
+    let canonical_lower = canonical.trim_end_matches('\\').to_lowercase();
+    const FORBIDDEN: &[&str] = &[
+        r"c:\windows",
+        r"c:\program files",
+        r"c:\program files (x86)",
+    ];
+    for root in FORBIDDEN {
+        if canonical_lower == *root
+            || canonical_lower.starts_with(&format!("{root}\\"))
+        {
+            return Err(UecmError::InvalidInput(format!(
+                "endpoint data_dir {p:?} resolves under a forbidden system location ({root}); \
+                 re-register the endpoint with a writable path under D:\\ or similar"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Compute SHA-256 of the bytes we *intended* to write, for cross-checking
+/// against the sidecar's `sha256` field after a successful write. Lowercase
+/// hex to match the sidecar's `.ToLowerInvariant()` output.
+fn sha256_hex_of(text: &str) -> String {
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(text.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// Pre-validate the `--dest-path` argument so `--dry-run` matches what the
+/// remote sidecar would actually accept. Mirrors `zen-write-lua-config.ps1`:
+///   - non-empty after trim,
+///   - no Win32 device namespace prefix (`\\?\`, `\\.\`, `//?/`, `//./`),
+///   - fully-qualified drive-absolute (`C:\...` / `C:/...`) or UNC (`\\host\...`),
+///   - not equal to or under `C:\Windows`, `C:\Program Files`,
+///     `C:\Program Files (x86)` (case-insensitive).
+fn validate_dest_path(p: &str) -> UecmResult<()> {
+    let trimmed = p.trim();
+    if trimmed.is_empty() {
+        return Err(UecmError::InvalidInput(
+            "dest-path must be a non-empty absolute Windows path".into(),
+        ));
+    }
+    // Device namespace forms.
+    let device_ns = |s: &str| -> bool {
+        s.starts_with(r"\\?\") || s.starts_with(r"\\.\") || s.starts_with("//?/") || s.starts_with("//./")
+    };
+    if device_ns(trimmed) {
+        return Err(UecmError::InvalidInput(format!(
+            r"dest-path must not use Win32 device namespace prefixes (\\?\ / \\.\): {p}"
+        )));
+    }
+    // Codex P2: paths ending in a separator (`C:\Zen\`) or a relative segment
+    // (`C:\Zen\.`, `C:\Zen\..`) describe a directory, not a file. The remote
+    // sidecar calls `File.WriteAllText` and would fail; reject up front.
+    let trim_for_tail = trimmed.trim_end();
+    let last_char = trim_for_tail.chars().last();
+    if matches!(last_char, Some('\\') | Some('/')) {
+        return Err(UecmError::InvalidInput(format!(
+            "dest-path must point at a file, not a directory (ends in path separator): {p}"
+        )));
+    }
+    let last_seg = trim_for_tail
+        .rsplit(|c| c == '\\' || c == '/')
+        .next()
+        .unwrap_or("");
+    if last_seg == "." || last_seg == ".." {
+        return Err(UecmError::InvalidInput(format!(
+            "dest-path must end in a file name, not '.' or '..': {p}"
+        )));
+    }
+    // Drive-absolute (`X:\...` or `X:/...`) — first byte alphabetic, second
+    // `:`, third `\` or `/`.
+    let bytes = trimmed.as_bytes();
+    let is_drive_abs = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/');
+    let is_unc = trimmed.starts_with(r"\\") || trimmed.starts_with("//");
+    if !(is_drive_abs || is_unc) {
+        return Err(UecmError::InvalidInput(format!(
+            r"dest-path must be a fully-qualified absolute path (e.g. 'C:\Zen\zen.lua' or '\\host\share\zen.lua'); got: {p}"
+        )));
+    }
+    // Codex P2: also require a file component — `D:\` / `\\host\share` would
+    // pass `is_drive_abs` / `is_unc` but `zen-write-lua-config.ps1` would
+    // then trip on `GetDirectoryName` returning empty or write to a root.
+    // Apply this check AFTER collapsing `..` segments so a sneaky path like
+    // `D:\Zen\..` (normalizes to `D:\`) is also rejected.
+    let normalized_sep = trimmed.replace('/', r"\");
+    let canonical_pre = collapse_path_segments(&normalized_sep);
+    if is_drive_abs && canonical_pre.trim_end_matches('\\').len() <= 2 {
+        // `D:` (after trimming trailing `\`) means we collapsed back to the
+        // drive root with no file component.
+        return Err(UecmError::InvalidInput(format!(
+            "dest-path must include a file component, not just a drive root: {p}"
+        )));
+    }
+    if is_unc {
+        // Count non-empty segments after the leading `\\` — both on the
+        // raw input AND on the canonicalized form. A path that collapses
+        // to `\\host\share` after `..` resolution still has no file part.
+        for check in [normalized_sep.as_str(), canonical_pre.as_str()] {
+            let rest = &check[2..];
+            let parts: Vec<&str> = rest.split('\\').filter(|s| !s.is_empty()).collect();
+            if parts.len() < 3 {
+                return Err(UecmError::InvalidInput(format!(
+                    r"dest-path must be a complete UNC file path \\host\share\file...; got: {p}"
+                )));
+            }
+        }
+    }
+    // Normalize separators + collapse `.` / `..` segments before the
+    // system-root comparison. Without this, a path like
+    // `C:\Temp\..\Windows\zen.lua` would slip past the prefix check but
+    // `zen-write-lua-config.ps1`'s `GetFullPath` collapses it to
+    // `C:\Windows\zen.lua` and refuses — so the dry-run would approve a
+    // plan the real apply path always rejects (codex P2 fix).
+    let normalized = trimmed.replace('/', r"\");
+    let canonical = collapse_path_segments(&normalized);
+    let canonical_lower = canonical.trim_end_matches('\\').to_lowercase();
+    const FORBIDDEN: &[&str] = &[
+        r"c:\windows",
+        r"c:\program files",
+        r"c:\program files (x86)",
+    ];
+    for root in FORBIDDEN {
+        if canonical_lower == *root
+            || canonical_lower.starts_with(&format!("{root}\\"))
+        {
+            return Err(UecmError::InvalidInput(format!(
+                "dest-path {p:?} resolves under a forbidden system location ({root}); choose a writable app directory"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Collapse `.` and `..` segments in a backslash-normalized Windows path.
+/// Mirrors `[System.IO.Path]::GetFullPath` for the purpose of the system-root
+/// guard — it doesn't expand to a full canonical path (no CWD resolution), it
+/// just folds relative segments so `C:\Temp\..\Windows` becomes `C:\Windows`.
+///
+/// Tolerates either drive-absolute (`X:\rest`) or UNC (`\\host\share\rest`)
+/// prefixes; for both, the prefix is preserved and only the "rest" portion
+/// is collapsed. A `..` that would pop past the root stays at the root (no
+/// error, matches Win32 behavior).
+fn collapse_path_segments(p: &str) -> String {
+    let (prefix, rest) = if p.len() >= 3
+        && p.as_bytes()[0].is_ascii_alphabetic()
+        && p.as_bytes()[1] == b':'
+        && p.as_bytes()[2] == b'\\'
+    {
+        // X:\rest
+        (&p[..3], &p[3..])
+    } else if p.starts_with(r"\\") {
+        // UNC `\\host\share\...` — keep the `\\host\share\` portion intact.
+        // Locate the third backslash (end of host + share segment).
+        let mut bs_count = 0;
+        let mut split = p.len();
+        for (i, ch) in p.char_indices() {
+            if ch == '\\' {
+                bs_count += 1;
+                if bs_count == 4 {
+                    split = i + 1;
+                    break;
+                }
+            }
+        }
+        (&p[..split], &p[split..])
+    } else {
+        // Should not be called on relative paths (caller already rejected),
+        // but be defensive — treat the whole thing as rest with no prefix.
+        ("", p)
+    };
+
+    let mut stack: Vec<&str> = Vec::new();
+    for seg in rest.split('\\') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                stack.pop();
+            }
+            other => stack.push(other),
+        }
+    }
+    format!("{prefix}{}", stack.join("\\"))
+}
+
+/// Lookup helpers that turn "not found" into `InvalidInput` so the CLI exits
+/// with code 2 (operator input error) instead of 1 (operation failed).
+fn require_endpoint(db: &Db, endpoint_id: i64) -> UecmResult<ZenEndpoint> {
+    zen_endpoint::get(db, endpoint_id)?.ok_or_else(|| {
+        UecmError::InvalidInput(format!("endpoint id={} not found", endpoint_id))
+    })
+}
+
+fn require_machine(db: &Db, machine_id: i64) -> UecmResult<Machine> {
+    machines::find_by_id(db, machine_id)?.ok_or_else(|| {
+        UecmError::InvalidInput(format!("machine id={} not found", machine_id))
+    })
+}
+
+/// Update the `operations` row with the redacted invocation string and the
+/// final status. Best-effort: a failed log write should not mask the real
+/// operation result, so finish errors are dropped on the floor (operator
+/// already sees the success/failure via the NDJSON Completed event).
+fn finalize_op(
+    db: &Db,
+    op_id: i64,
+    result: &UecmResult<serde_json::Value>,
+    invocation: &str,
+) {
+    let status = if result.is_ok() { "ok" } else { "err" };
+    let log_text = match result {
+        Ok(_) => invocation.to_string(),
+        Err(e) => format!("{invocation}\nerror: {}", redact(&e.to_string())),
+    };
+    let _ = operations::finish(db, op_id, status, Some(&log_text));
+}
+
+// -----------------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------------
 
@@ -859,5 +2117,651 @@ mod tests {
         let mut ctx = fresh_ctx();
         let err = cache_stats(&mut ctx, Some(9999), false, 2).unwrap_err();
         assert!(matches!(err, UecmError::InvalidInput(_)));
+    }
+
+    // -------- T2.5 unit tests --------
+
+    /// `build_param_script` must assign the args hashtable to a variable
+    /// FIRST, then invoke the scriptblock with `@variable` splat. PowerShell
+    /// splatting only works with the `@<variable>` form — a trailing
+    /// `@{ ... }` literal would be a single positional argument, not a
+    /// named-param binding. The sidecar's `[CmdletBinding()] param(...)`
+    /// must remain the first statement inside the scriptblock.
+    /// (Codex P1 fix — without this the entire remote sidecar path silently
+    /// bound zero params.)
+    #[test]
+    fn build_param_script_uses_variable_splat_not_hash_literal() {
+        let snippet = build_param_script(
+            "zen-write-lua-config.ps1",
+            &[("LuaText", "x"), ("DestPath", r"C:\Zen\zen.lua")],
+        )
+        .unwrap();
+        // Hashtable lands in a variable BEFORE the scriptblock invocation.
+        assert!(
+            snippet.starts_with("$__uecm_zen_params = @{ "),
+            "snippet head: {:?}",
+            &snippet[..60.min(snippet.len())]
+        );
+        // The scriptblock call uses `@variable` splat, not `@{...}` literal.
+        assert!(
+            snippet.contains("} @__uecm_zen_params"),
+            "expected variable splat at the call site, got tail: {:?}",
+            snippet.lines().last().unwrap_or("")
+        );
+        // Defense-in-depth: ensure the bad form (`} @{` literal-as-splat)
+        // does NOT appear anywhere.
+        assert!(
+            !snippet.contains("} @{"),
+            "hash literal as splat must not be present: {:?}",
+            snippet
+        );
+        // The sidecar's CmdletBinding header must still be the first
+        // statement INSIDE the scriptblock — find it after `& {\n`.
+        let after_brace = snippet.find("& {\n").unwrap() + 4;
+        let inner_start = snippet[after_brace..].trim_start();
+        assert!(
+            inner_start.starts_with("# Plan 7 T2.4 sidecar")
+                || inner_start.starts_with("[CmdletBinding()]"),
+            "scriptblock interior must start with the sidecar source; got: {:?}",
+            &inner_start[..80.min(inner_start.len())]
+        );
+    }
+
+    #[test]
+    fn build_param_script_escapes_single_quotes_via_doubling() {
+        let snippet = build_param_script(
+            "zen-urlacl-add.ps1",
+            &[("UrlPrefix", r"http://+:8558/"), ("UserAccount", "DOMAIN\\zen's-svc")],
+        )
+        .unwrap();
+        // PowerShell single-quote escape: `'` → `''`.
+        assert!(
+            snippet.contains("UserAccount = 'DOMAIN\\zen''s-svc'"),
+            "expected doubled single-quote, got tail: {:?}",
+            snippet.lines().last().unwrap_or("")
+        );
+    }
+
+    #[test]
+    fn register_handler_persists_endpoint_with_defaults() {
+        let mut ctx = fresh_ctx();
+        let db = ctx.db.as_ref().unwrap().clone();
+        let machine_id = machines::insert(&db, &Machine::new("ZEN-01", "10.0.0.10")).unwrap();
+        register(
+            &mut ctx,
+            machine_id,
+            8558,
+            "http",
+            "local",
+            None,
+            r"D:\ZenData",
+            "asio",
+            None, // no lifecycle override → default to editor_owned
+        )
+        .unwrap();
+        let rows = zen_endpoints::list_for_machine(&db, machine_id).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].lifecycle_mode, "editor_owned");
+        assert_eq!(rows[0].declared_port, 8558);
+    }
+
+    #[test]
+    fn register_handler_rejects_unknown_machine() {
+        let mut ctx = fresh_ctx();
+        let err = register(
+            &mut ctx,
+            9999,
+            8558,
+            "http",
+            "local",
+            None,
+            r"D:\ZenData",
+            "asio",
+            None,
+        )
+        .unwrap_err();
+        assert!(matches!(err, UecmError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn register_handler_for_shared_upstream_defaults_to_installed_service() {
+        let mut ctx = fresh_ctx();
+        let db = ctx.db.as_ref().unwrap().clone();
+        let machine_id = machines::insert(&db, &Machine::new("ZEN-01", "10.0.0.10")).unwrap();
+        register(
+            &mut ctx,
+            machine_id,
+            8559,
+            "http",
+            "shared_upstream",
+            None,
+            r"D:\ZenMaster",
+            "asio",
+            None, // shared_upstream → default to installed_service per T2.1
+        )
+        .unwrap();
+        let rows = zen_endpoints::list_for_machine(&db, machine_id).unwrap();
+        assert_eq!(rows[0].lifecycle_mode, "installed_service");
+        assert_eq!(rows[0].role, "shared_upstream");
+    }
+
+    #[test]
+    fn unregister_without_yes_or_dry_run_returns_invalid_input() {
+        let mut ctx = fresh_ctx();
+        let err = unregister(&mut ctx, 1, false, false).unwrap_err();
+        assert!(matches!(err, UecmError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn unregister_unknown_endpoint_with_yes_returns_invalid_input() {
+        let mut ctx = fresh_ctx();
+        let err = unregister(&mut ctx, 9999, true, false).unwrap_err();
+        assert!(matches!(err, UecmError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn validate_dest_path_accepts_normal_drive_absolute() {
+        assert!(validate_dest_path(r"C:\Zen\zen.lua").is_ok());
+        assert!(validate_dest_path("C:/Zen/zen.lua").is_ok());
+        assert!(validate_dest_path(r"D:\App Data\Zen\zen.lua").is_ok());
+    }
+
+    #[test]
+    fn validate_dest_path_accepts_unc() {
+        assert!(validate_dest_path(r"\\host\share\zen.lua").is_ok());
+    }
+
+    #[test]
+    fn validate_dest_path_rejects_empty() {
+        assert!(matches!(
+            validate_dest_path("   ").unwrap_err(),
+            UecmError::InvalidInput(_)
+        ));
+    }
+
+    #[test]
+    fn validate_dest_path_rejects_relative_and_drive_relative() {
+        // No drive letter at all.
+        assert!(validate_dest_path(r"Zen\zen.lua").is_err());
+        // Drive-relative `C:Zen\zen.lua` — has `:` but no separator after.
+        assert!(validate_dest_path(r"C:Zen\zen.lua").is_err());
+        // Root-relative `\Temp\zen.lua` — starts with `\` but not `\\`.
+        assert!(validate_dest_path(r"\Temp\zen.lua").is_err());
+    }
+
+    #[test]
+    fn validate_dest_path_rejects_device_namespace() {
+        assert!(validate_dest_path(r"\\?\C:\Windows\zen.lua").is_err());
+        assert!(validate_dest_path(r"\\.\C:\Windows\zen.lua").is_err());
+        assert!(validate_dest_path(r"//?/C:/Windows/zen.lua").is_err());
+    }
+
+    #[test]
+    fn validate_dest_path_rejects_system_locations() {
+        for bad in [
+            r"C:\Windows\zen.lua",
+            r"c:\windows\system32\zen.lua",
+            r"C:\Program Files\Zen\zen.lua",
+            r"C:\Program Files (x86)\Zen\zen.lua",
+            r"C:\Windows",
+            r"C:\Windows\",
+        ] {
+            let err = validate_dest_path(bad).unwrap_err();
+            assert!(
+                matches!(err, UecmError::InvalidInput(_)),
+                "should reject {bad}"
+            );
+        }
+    }
+
+    /// Codex P2 fix: `..` segments that resolve into a forbidden system
+    /// location must be caught by the dry-run validator. Without
+    /// `collapse_path_segments`, the path slipped through and the `--yes`
+    /// apply path failed at the sidecar instead.
+    #[test]
+    fn validate_dest_path_rejects_traversal_into_system_locations() {
+        for bad in [
+            r"C:\Temp\..\Windows\zen.lua",
+            r"C:\Temp\sub\..\..\Windows\zen.lua",
+            r"C:\Tools\..\Program Files\Zen\zen.lua",
+            r"C:/Temp/../Windows/zen.lua",
+        ] {
+            let err = validate_dest_path(bad).unwrap_err();
+            assert!(
+                matches!(err, UecmError::InvalidInput(_)),
+                "should reject traversal: {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn collapse_path_segments_handles_drive_absolute() {
+        assert_eq!(
+            collapse_path_segments(r"C:\Temp\..\Zen\zen.lua"),
+            r"C:\Zen\zen.lua"
+        );
+        // `..` past the root just stays at the root.
+        assert_eq!(
+            collapse_path_segments(r"C:\..\Zen\zen.lua"),
+            r"C:\Zen\zen.lua"
+        );
+        assert_eq!(
+            collapse_path_segments(r"C:\Zen\.\sub\zen.lua"),
+            r"C:\Zen\sub\zen.lua"
+        );
+    }
+
+    #[test]
+    fn collapse_path_segments_handles_unc() {
+        assert_eq!(
+            collapse_path_segments(r"\\host\share\Temp\..\Zen\zen.lua"),
+            r"\\host\share\Zen\zen.lua"
+        );
+    }
+
+    #[test]
+    fn validate_data_dir_safe_accepts_normal_paths() {
+        assert!(validate_data_dir_safe(r"D:\ZenData").is_ok());
+        assert!(validate_data_dir_safe(r"E:\App Data\Zen").is_ok());
+    }
+
+    #[test]
+    fn validate_data_dir_safe_rejects_system_roots_and_traversal() {
+        for bad in [
+            r"C:\Windows\Zen",
+            r"C:\Program Files\Zen",
+            r"C:\Temp\..\Windows\Zen",
+            r"C:/Temp/../Windows/Zen",
+        ] {
+            assert!(
+                matches!(
+                    validate_data_dir_safe(bad).unwrap_err(),
+                    UecmError::InvalidInput(_)
+                ),
+                "should reject {bad}"
+            );
+        }
+    }
+
+    /// Codex P2: dest paths that are only a drive root or only `\\host\share`
+    /// don't have a file component — `zen-write-lua-config.ps1` would either
+    /// fail in `GetDirectoryName` or write to a directory root. Reject up
+    /// front so dry-run doesn't approve a doomed plan.
+    #[test]
+    fn validate_dest_path_rejects_root_only_paths() {
+        for bad in [
+            r"D:\",
+            "D:/",
+            r"\\host",
+            r"\\host\share",
+            r"//host/share",
+        ] {
+            assert!(
+                matches!(
+                    validate_dest_path(bad).unwrap_err(),
+                    UecmError::InvalidInput(_)
+                ),
+                "should reject root-only path {bad}"
+            );
+        }
+    }
+
+    /// Codex P2: dest paths that look like directories (trailing separator
+    /// or final `.` / `..` segment) are not valid file targets for the
+    /// remote sidecar's `File.WriteAllText`. Reject in the validator so
+    /// `--dry-run` matches the real apply path.
+    #[test]
+    fn validate_dest_path_rejects_directory_like_endings() {
+        for bad in [
+            r"C:\Tools\UECM\",
+            r"C:/Tools/UECM/",
+            r"C:\Tools\UECM\.",
+            r"C:\Tools\UECM\..",
+            r"\\host\share\Zen\sub\..",
+        ] {
+            assert!(
+                matches!(
+                    validate_dest_path(bad).unwrap_err(),
+                    UecmError::InvalidInput(_)
+                ),
+                "should reject dir-like dest {bad}"
+            );
+        }
+    }
+
+    /// `zen service install` must refuse endpoints whose lifecycle_mode is
+    /// not `installed_service` so DB and SCM stay in sync.
+    #[test]
+    fn service_install_handler_refuses_editor_owned_endpoint() {
+        let mut ctx = fresh_ctx();
+        let db = ctx.db.as_ref().unwrap().clone();
+        let machine_id = machines::insert(&db, &Machine::new("ZEN-01", "10.0.0.10")).unwrap();
+        let endpoint_id = crate::core::zen::endpoint::register(
+            &db,
+            &crate::core::zen::endpoint::EndpointInput {
+                machine_id,
+                declared_port: 8558,
+                scheme: "http".into(),
+                role: "local".into(),
+                upstream_endpoint_id: None,
+                data_dir: r"D:\ZenData".into(),
+                httpserverclass: "asio".into(),
+                lifecycle_mode: "editor_owned".into(),
+            },
+        )
+        .unwrap()
+        .id;
+        // Seed a zen.exe path so the binary lookup doesn't short-circuit first.
+        use crate::data::MachineZenInstall;
+        crate::data::machine_zen_install::upsert(
+            &db,
+            &MachineZenInstall {
+                machine_id,
+                install_dir: Some(r"C:\Zen".into()),
+                zen_cli_path: Some(r"C:\Zen\zen.exe".into()),
+                zen_cli_build_version: None,
+                zen_cli_sha256: None,
+                zenserver_path: Some(r"C:\Zen\zenserver.exe".into()),
+                zenserver_build_version: None,
+                zenserver_sha256: None,
+                last_detected_at: None,
+            },
+        )
+        .unwrap();
+
+        let cred = CredentialArgs {
+            cred_alias: None,
+            user: None,
+            pass: None,
+            pass_stdin: false,
+        };
+        // --dry-run with editor_owned must still error out (DB state matters,
+        // not the dry-run flag).
+        let err = service_install(&mut ctx, endpoint_id, false, true, &cred).unwrap_err();
+        match err {
+            UecmError::InvalidInput(msg) => {
+                assert!(msg.contains("lifecycle"), "msg={msg}");
+            }
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+    }
+
+    /// Codex P2: `..` segments that collapse back to a drive/UNC root are
+    /// also invalid — they have no file component once normalized. Catch
+    /// here so `--dry-run` matches the real sidecar's `GetDirectoryName`
+    /// failure path.
+    #[test]
+    fn validate_dest_path_rejects_paths_that_collapse_to_root() {
+        for bad in [
+            r"D:\Zen\..",
+            r"D:\Zen\sub\..\..\",
+            r"\\host\share\Zen\..",
+            r"\\host\share\..\share\..",
+        ] {
+            assert!(
+                matches!(
+                    validate_dest_path(bad).unwrap_err(),
+                    UecmError::InvalidInput(_)
+                ),
+                "should reject path that collapses to root: {bad}"
+            );
+        }
+    }
+
+    /// `validate_service_data_dir` must reject drive-relative + root-relative
+    /// paths that `zen.exe service install` refuses at runtime.
+    #[test]
+    fn validate_service_data_dir_rejects_relative_and_devicens() {
+        for bad in [
+            "",
+            "   ",
+            r"C:ZenCache",       // drive-relative — no separator after `:`
+            r"\ZenCache",         // root-relative
+            r"ZenCache",          // pure relative
+            r"\\?\D:\ZenCache",   // device namespace
+            r"C:\Windows\Zen",    // forbidden system root
+        ] {
+            assert!(
+                matches!(
+                    validate_service_data_dir(bad).unwrap_err(),
+                    UecmError::InvalidInput(_)
+                ),
+                "should reject service data_dir {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_service_data_dir_accepts_normal_paths() {
+        assert!(validate_service_data_dir(r"D:\ZenCache").is_ok());
+        assert!(validate_service_data_dir(r"\\host\share\Zen").is_ok());
+    }
+
+    /// Codex P2: device-namespace prefix must be rejected so it can't slip
+    /// past the system-root prefix check by keeping `\\?\` glued to `C:\`.
+    #[test]
+    fn validate_data_dir_safe_rejects_device_namespace() {
+        for bad in [
+            r"\\?\C:\Windows\Zen",
+            r"\\.\C:\Windows\Zen",
+            r"//?/C:/Windows/Zen",
+            r"//./C:/Windows/Zen",
+            // Even when targeted at a normally-safe location — UECM never
+            // wants to drive the device namespace.
+            r"\\?\D:\ZenData",
+        ] {
+            assert!(
+                matches!(
+                    validate_data_dir_safe(bad).unwrap_err(),
+                    UecmError::InvalidInput(_)
+                ),
+                "should reject device-ns path {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn sha256_hex_of_matches_known_vector() {
+        // "abc" → ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+        assert_eq!(
+            sha256_hex_of("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn verify_write_response_accepts_matching_sha_and_bytes() {
+        let lua = "server = {}\n";
+        let sha = sha256_hex_of(lua);
+        let env = serde_json::json!({
+            "ok": true,
+            "path": r"C:\Zen\zen.lua",
+            "bytes_written": lua.len() as i64,
+            "sha256": sha,
+        });
+        verify_write_response(&env, &sha, lua.len()).unwrap();
+    }
+
+    #[test]
+    fn verify_write_response_rejects_sha_mismatch() {
+        let lua = "server = {}\n";
+        let env = serde_json::json!({
+            "ok": true,
+            "path": r"C:\Zen\zen.lua",
+            "bytes_written": lua.len() as i64,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        });
+        let err = verify_write_response(&env, &sha256_hex_of(lua), lua.len()).unwrap_err();
+        match err {
+            UecmError::PowerShell(msg) => assert!(msg.contains("sha256")),
+            other => panic!("expected PowerShell err, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn verify_write_response_rejects_byte_count_mismatch() {
+        let lua = "server = {}\n";
+        let env = serde_json::json!({
+            "ok": true,
+            "path": r"C:\Zen\zen.lua",
+            "bytes_written": (lua.len() - 1) as i64,
+            "sha256": sha256_hex_of(lua),
+        });
+        let err = verify_write_response(&env, &sha256_hex_of(lua), lua.len()).unwrap_err();
+        match err {
+            UecmError::PowerShell(msg) => assert!(msg.contains("bytes_written")),
+            other => panic!("expected PowerShell err, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn verify_write_response_rejects_missing_sha_field() {
+        let env = serde_json::json!({ "ok": true, "bytes_written": 12 });
+        assert!(matches!(
+            verify_write_response(&env, "deadbeef", 12).unwrap_err(),
+            UecmError::PowerShell(_)
+        ));
+    }
+
+    #[test]
+    fn parse_envelope_requires_explicit_ok_true() {
+        // Success path: exactly `ok: true` works.
+        let ok = parse_envelope(r#"{"ok": true, "data": 1}"#, "test").unwrap();
+        assert_eq!(ok["data"], 1);
+
+        // Codex P2 fix: missing `ok` is rejected, not silently treated as ok.
+        let err = parse_envelope(r#"{"error": "bad"}"#, "test").unwrap_err();
+        assert!(matches!(err, UecmError::PowerShell(_)));
+
+        // String "true" is not boolean true → rejected.
+        let err = parse_envelope(r#"{"ok": "true"}"#, "test").unwrap_err();
+        assert!(matches!(err, UecmError::PowerShell(_)));
+
+        // Null `ok` → rejected.
+        let err = parse_envelope(r#"{"ok": null}"#, "test").unwrap_err();
+        assert!(matches!(err, UecmError::PowerShell(_)));
+
+        // Explicit false → rejected with the embedded message.
+        let err = parse_envelope(r#"{"ok": false, "message": "bad path"}"#, "test").unwrap_err();
+        match err {
+            UecmError::PowerShell(msg) => assert!(msg.contains("bad path")),
+            other => panic!("expected PowerShell err with bad path, got {:?}", other),
+        }
+
+        // Non-JSON input → PowerShell error with raw snippet.
+        let err = parse_envelope("not json", "test").unwrap_err();
+        assert!(matches!(err, UecmError::PowerShell(_)));
+    }
+
+    /// Codex P2 fix: a dry-run for an endpoint that is still pointed-at by a
+    /// dependent must refuse just like the real apply path. Otherwise the
+    /// dry-run output advertises a plan that cannot actually be applied.
+    #[test]
+    fn unregister_dry_run_refuses_when_dependents_exist() {
+        let mut ctx = fresh_ctx();
+        let db = ctx.db.as_ref().unwrap().clone();
+        let machine_id = machines::insert(&db, &Machine::new("ZEN-01", "10.0.0.10")).unwrap();
+        // master + child pointing at master.
+        let master = crate::core::zen::endpoint::register(
+            &db,
+            &crate::core::zen::endpoint::EndpointInput {
+                machine_id,
+                declared_port: 8559,
+                scheme: "http".into(),
+                role: "shared_upstream".into(),
+                upstream_endpoint_id: None,
+                data_dir: r"D:\ZenMaster".into(),
+                httpserverclass: "asio".into(),
+                lifecycle_mode: "installed_service".into(),
+            },
+        )
+        .unwrap()
+        .id;
+        let _ = crate::core::zen::endpoint::register(
+            &db,
+            &crate::core::zen::endpoint::EndpointInput {
+                machine_id,
+                declared_port: 8558,
+                scheme: "http".into(),
+                role: "local".into(),
+                upstream_endpoint_id: Some(master),
+                data_dir: r"D:\ZenLocal".into(),
+                httpserverclass: "asio".into(),
+                lifecycle_mode: "editor_owned".into(),
+            },
+        )
+        .unwrap();
+        let err = unregister(&mut ctx, master, false, true).unwrap_err();
+        assert!(matches!(err, UecmError::InvalidInput(_)));
+        // Master row must still be present after the refused dry-run.
+        assert!(crate::core::zen::endpoint::get(&db, master).unwrap().is_some());
+    }
+
+    #[test]
+    fn lua_preview_renders_for_seeded_endpoint() {
+        let mut ctx = fresh_ctx();
+        let db = ctx.db.as_ref().unwrap().clone();
+        let machine_id = machines::insert(&db, &Machine::new("ZEN-01", "10.0.0.10")).unwrap();
+        let input = crate::core::zen::endpoint::EndpointInput {
+            machine_id,
+            declared_port: 8558,
+            scheme: "http".into(),
+            role: "local".into(),
+            upstream_endpoint_id: None,
+            data_dir: r"D:\ZenData".into(),
+            httpserverclass: "asio".into(),
+            lifecycle_mode: "editor_owned".into(),
+        };
+        let endpoint_id = crate::core::zen::endpoint::register(&db, &input).unwrap().id;
+        lua_preview(&mut ctx, endpoint_id).unwrap();
+        // Direct re-render to confirm the handler's resolution matches the
+        // pure renderer (which has its own exhaustive tests).
+        let ep = crate::core::zen::endpoint::get(&db, endpoint_id).unwrap().unwrap();
+        let rendered = crate::core::zen::lua_config::render(&ep, None).unwrap();
+        assert!(rendered.contains("datadir = \"D:\\\\ZenData\""));
+    }
+
+    /// Re-registering an existing endpoint with different params must keep
+    /// the original row intact AND return persisted state (not the request
+    /// payload). This guards the codex P2 regression — the JSON output was
+    /// previously echoing the request, misleading automation into thinking
+    /// the DB had changed.
+    #[test]
+    fn register_idempotent_conflict_does_not_lie_about_persisted_state() {
+        let mut ctx = fresh_ctx();
+        let db = ctx.db.as_ref().unwrap().clone();
+        let machine_id = machines::insert(&db, &Machine::new("ZEN-01", "10.0.0.10")).unwrap();
+        // First insert: lifecycle=editor_owned, data_dir=D:\ZenData.
+        register(
+            &mut ctx,
+            machine_id,
+            8558,
+            "http",
+            "local",
+            None,
+            r"D:\ZenData",
+            "asio",
+            None,
+        )
+        .unwrap();
+        // Re-register with different data_dir + lifecycle. core::zen::endpoint
+        // ignores these (idempotent on (machine, port)) — the persisted row
+        // must keep its original values.
+        register(
+            &mut ctx,
+            machine_id,
+            8558,
+            "http",
+            "local",
+            None,
+            r"E:\OtherZen",
+            "asio",
+            Some("installed_service"),
+        )
+        .unwrap();
+        let rows = zen_endpoints::list_for_machine(&db, machine_id).unwrap();
+        assert_eq!(rows.len(), 1, "no duplicate row should be created");
+        assert_eq!(rows[0].data_dir, r"D:\ZenData");
+        assert_eq!(rows[0].lifecycle_mode, "editor_owned");
     }
 }

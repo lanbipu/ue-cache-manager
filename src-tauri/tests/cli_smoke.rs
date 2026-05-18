@@ -292,3 +292,154 @@ fn zen_baseline_lock_rejects_bad_kind() {
     assert!(!out.status.success());
     assert_eq!(out.status.code(), Some(2));
 }
+
+// -------------------------------------------------------------------------
+// Plan 7 T2.5: M2 zen subcommands
+// -------------------------------------------------------------------------
+
+#[test]
+fn zen_register_for_unknown_machine_returns_invalid_input() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let path = tmp.path().to_string_lossy().to_string();
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args([
+            "--json", "zen", "register",
+            "--machine", "9999",
+            "--role", "local",
+        ])
+        .output()
+        .expect("spawn");
+    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(stderr.trim_end()).expect("stderr JSON envelope");
+    assert_eq!(v["code"], "invalid_input");
+}
+
+#[test]
+fn zen_register_then_lua_preview_round_trip() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let path = tmp.path().to_string_lossy().to_string();
+    // Seed a machine via `machine add` so the FK is satisfied. The CLI emits
+    // a Completed event with the created id we can parse out.
+    let added = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args(["--json", "machine", "add", "--ip", "192.168.10.30", "--hostname", "ZEN-01"])
+        .output()
+        .expect("spawn");
+    assert!(added.status.success(), "stderr: {}", String::from_utf8_lossy(&added.stderr));
+
+    // Register an endpoint with all defaults except role.
+    let reg = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args([
+            "--json", "zen", "register",
+            "--machine", "1",
+            "--role", "local",
+            "--data-dir", "D:\\ZenData",
+        ])
+        .output()
+        .expect("spawn");
+    assert!(reg.status.success(), "stderr: {}", String::from_utf8_lossy(&reg.stderr));
+    let reg_doc: serde_json::Value =
+        serde_json::from_str(String::from_utf8(reg.stdout).unwrap().trim_end()).unwrap();
+    assert_eq!(reg_doc["ok"], serde_json::Value::Bool(true));
+    assert_eq!(reg_doc["inserted"], serde_json::Value::Bool(true));
+    assert_eq!(reg_doc["declared_port"], serde_json::Value::from(8558));
+    assert_eq!(reg_doc["role"], "local");
+    assert_eq!(reg_doc["lifecycle_mode"], "editor_owned");
+    let endpoint_id = reg_doc["endpoint_id"].as_i64().expect("endpoint_id");
+
+    // Re-register the same (machine, port) returns inserted=false.
+    let reg2 = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args([
+            "--json", "zen", "register",
+            "--machine", "1",
+            "--role", "local",
+            "--data-dir", "D:\\ZenData",
+        ])
+        .output()
+        .expect("spawn");
+    assert!(reg2.status.success());
+    let reg2_doc: serde_json::Value =
+        serde_json::from_str(String::from_utf8(reg2.stdout).unwrap().trim_end()).unwrap();
+    assert_eq!(reg2_doc["inserted"], serde_json::Value::Bool(false));
+    assert_eq!(reg2_doc["endpoint_id"], serde_json::Value::from(endpoint_id));
+
+    // lua-preview renders the deterministic Lua text for the row.
+    let preview = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args([
+            "--json", "zen", "lua-preview",
+            "--endpoint-id", &endpoint_id.to_string(),
+        ])
+        .output()
+        .expect("spawn");
+    assert!(preview.status.success(), "stderr: {}", String::from_utf8_lossy(&preview.stderr));
+    let preview_doc: serde_json::Value =
+        serde_json::from_str(String::from_utf8(preview.stdout).unwrap().trim_end()).unwrap();
+    let lua = preview_doc["lua"].as_str().expect("lua string");
+    assert!(lua.contains("server = {"));
+    assert!(lua.contains("port = 8558"));
+    assert!(lua.contains("datadir = \"D:\\\\ZenData\""));
+}
+
+#[test]
+fn zen_unregister_without_yes_returns_invalid_input() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let path = tmp.path().to_string_lossy().to_string();
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args(["--json", "zen", "unregister", "--endpoint-id", "1"])
+        .output()
+        .expect("spawn");
+    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(2));
+}
+
+#[test]
+fn zen_apply_config_dry_run_emits_plan_without_invoking_powershell() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let path = tmp.path().to_string_lossy().to_string();
+    // Seed machine + endpoint.
+    let _ = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args(["--json", "machine", "add", "--ip", "192.168.10.30", "--hostname", "ZEN-01"])
+        .output()
+        .expect("spawn");
+    let reg = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args([
+            "--json", "zen", "register",
+            "--machine", "1",
+            "--role", "local",
+            "--data-dir", "D:\\ZenData",
+        ])
+        .output()
+        .expect("spawn");
+    let reg_doc: serde_json::Value =
+        serde_json::from_str(String::from_utf8(reg.stdout).unwrap().trim_end()).unwrap();
+    let endpoint_id = reg_doc["endpoint_id"].as_i64().unwrap();
+
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args([
+            "--json", "zen", "apply-config",
+            "--endpoint-id", &endpoint_id.to_string(),
+            "--dest-path", "C:\\Tools\\UECM\\zen.lua",
+            "--dry-run",
+        ])
+        .output()
+        .expect("spawn");
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    assert_eq!(v["kind"], "completed");
+    assert_eq!(v["summary"]["dry_run"], serde_json::Value::Bool(true));
+    assert_eq!(v["summary"]["operation"], "zen.apply-config");
+    assert!(v["summary"]["details"]["lua"].as_str().unwrap().contains("server = {"));
+    assert_eq!(v["summary"]["details"]["dest_path"], "C:\\Tools\\UECM\\zen.lua");
+}

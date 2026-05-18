@@ -633,6 +633,84 @@ pub enum ZenAction {
         #[command(subcommand)]
         action: ZenBaselineAction,
     },
+    /// Register a zen endpoint for a machine (idempotent on (machine, port)).
+    Register {
+        /// Machine row id this endpoint runs on.
+        #[arg(long, value_name = "ID")]
+        machine: i64,
+        /// Port the endpoint advertises (Plan §1.1 default 8558).
+        #[arg(long, value_name = "PORT", default_value_t = 8558)]
+        declared_port: i64,
+        /// URL scheme (plan §1.1 default `http`; HTTPS unsupported in M2).
+        #[arg(long, value_name = "SCHEME", default_value = "http")]
+        scheme: String,
+        /// Endpoint role: `local` (this machine's own zen) or `shared_upstream`
+        /// (cluster master other locals forward to).
+        #[arg(long, value_name = "ROLE")]
+        role: String,
+        /// Existing `shared_upstream` endpoint id this endpoint forwards to.
+        /// Required only when `--role local` should join a cluster.
+        #[arg(long, value_name = "ID")]
+        upstream_endpoint_id: Option<i64>,
+        /// Absolute zen data directory on the target machine. Defaults to
+        /// `D:\\UECM\\ZenData` if not given — operator should override per
+        /// machine to match the real disk layout.
+        #[arg(long, value_name = "PATH", default_value = r"D:\UECM\ZenData")]
+        data_dir: String,
+        /// zen HTTP server backend (asio default, httpsys for kernel-mode).
+        #[arg(long, value_name = "CLASS", default_value = "asio")]
+        httpserverclass: String,
+        /// Lifecycle mode. Defaults derived from role per Plan §1.1:
+        /// `shared_upstream` → `installed_service` (T2.1 enforces);
+        /// `local` → `editor_owned`. Pass `--lifecycle` to override.
+        #[arg(long, value_name = "MODE")]
+        lifecycle: Option<String>,
+    },
+    /// Delete a registered endpoint. Refuses if other endpoints reference it
+    /// as their upstream — un-point them first.
+    Unregister {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Render zen.lua from the endpoint row + optional upstream and write it
+    /// to the target host. `--dry-run` previews without invoking PowerShell.
+    ApplyConfig {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        /// Absolute destination on the remote host (e.g.
+        /// `C:\Users\<svc>\AppData\Local\UnrealEngine\Common\Zen\Install\zen.lua`).
+        /// REQUIRED: T2.9 will derive this from the binary install dir; until
+        /// then the caller must supply the real path so we never silently
+        /// write to a placeholder while zen continues using a different file.
+        #[arg(long, value_name = "PATH")]
+        dest_path: String,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Render zen.lua to stdout (read-only). Same engine as apply-config
+    /// `--dry-run`, but no destination path is required.
+    LuaPreview {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+    },
+    /// Windows-service management for the endpoint's zenserver.
+    Service {
+        #[command(subcommand)]
+        action: ZenServiceAction,
+    },
+    /// URL ACL (`netsh http`) management for the endpoint.
+    Urlacl {
+        #[command(subcommand)]
+        action: ZenUrlaclAction,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -668,6 +746,103 @@ pub enum ZenBaselineAction {
         yes: bool,
         #[arg(long)]
         dry_run: bool,
+    },
+}
+
+// ---------- zen service ----------
+#[derive(Subcommand, Debug)]
+pub enum ZenServiceAction {
+    /// Install zenserver as a Windows service on the endpoint's host.
+    Install {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Uninstall the zenserver Windows service.
+    Uninstall {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Start the zenserver Windows service (idempotent).
+    Start {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Stop the zenserver Windows service (idempotent). Destructive —
+    /// stopping a `shared_upstream` cuts the whole cluster off, so the
+    /// CLI requires `--yes` (or `--dry-run` to preview).
+    Stop {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Report Windows-service status for zenserver.
+    Status {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+}
+
+// ---------- zen urlacl ----------
+#[derive(Subcommand, Debug)]
+pub enum ZenUrlaclAction {
+    /// Reserve `<scheme>://+:<port>/` for the given user account.
+    Add {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        /// Principal that may bind the prefix (e.g. `NT SERVICE\ZenServer`).
+        /// Note: this is the URL ACL owner, NOT the WinRM auth user — clap
+        /// would refuse to register both as `--user` on the same subcommand
+        /// (`CredentialArgs` already owns that flag).
+        #[arg(long, value_name = "PRINCIPAL")]
+        principal: String,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// List zen-shaped URL reservations on a machine.
+    List {
+        #[arg(long, value_name = "ID")]
+        machine: i64,
+        /// Optional substring port filter (e.g. `8558`).
+        #[arg(long, value_name = "PORT")]
+        port_filter: Option<String>,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Remove the reservation for the endpoint's `<scheme>://+:<port>/`.
+    Remove {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
     },
 }
 
