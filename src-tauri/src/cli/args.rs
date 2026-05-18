@@ -83,6 +83,11 @@ pub enum Domain {
         #[command(subcommand)]
         action: PsoAction,
     },
+    /// Verify what UE actually used by parsing LogDerivedDataCache startup output.
+    Log {
+        #[command(subcommand)]
+        action: LogAction,
+    },
 }
 
 // ---------- system ----------
@@ -609,6 +614,24 @@ pub enum PsoAction {
     },
 }
 
+// ---------- log ----------
+#[derive(Subcommand, Debug)]
+pub enum LogAction {
+    /// Run UE in nullrhi mode and parse its DDC startup output.
+    VerifyStartup {
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        editor_exe: String,
+        #[arg(long)]
+        project: String,
+        #[arg(long, default_value_t = 180)]
+        timeout: u32,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -737,6 +760,26 @@ mod tests {
                 assert_eq!(node, "Shared");
                 assert_eq!(field, "ReadOnly");
                 assert_eq!(value, "false");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_log_verify_startup() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "log", "verify-startup",
+            "--host", "RENDER-01",
+            "--editor-exe", r"C:\UE\Engine\Binaries\Win64\UnrealEditor.exe",
+            "--project", r"D:\Projects\MyVP\MyVP.uproject",
+            "--timeout", "180",
+        ]).unwrap();
+        match cli.command {
+            Domain::Log { action: LogAction::VerifyStartup { host, editor_exe, project, timeout, .. } } => {
+                assert_eq!(host, "RENDER-01");
+                assert!(editor_exe.ends_with("UnrealEditor.exe"));
+                assert!(project.ends_with(".uproject"));
+                assert_eq!(timeout, 180);
             }
             _ => panic!("wrong variant"),
         }

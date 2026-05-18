@@ -62,6 +62,7 @@ fn needs_db(cmd: &Domain) -> bool {
         Domain::Gpu { .. } => true,
         Domain::Ddc { .. } => true,
         Domain::Pso { .. } => true,
+        Domain::Log { .. } => true,
     }
 }
 
@@ -120,6 +121,7 @@ pub fn run(cli: Cli) -> i32 {
         Domain::Gpu { action } => domain_gpu::handle(&mut ctx, action),
         Domain::Ddc { action } => domain_ddc::handle(&mut ctx, action),
         Domain::Pso { action } => domain_pso::handle(&mut ctx, action),
+        Domain::Log { action } => crate::cli::domain_log::handle(&mut ctx, action),
     };
 
     match result {
