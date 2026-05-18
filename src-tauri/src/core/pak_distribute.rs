@@ -35,7 +35,11 @@ pub struct DistributeOutcome {
 #[derive(Clone, Debug)]
 pub struct DistributeProfile {
     pub source_subdir: String,
-    pub file_glob: String,
+    /// One or more glob patterns.  Each element is a single Robocopy file-pattern
+    /// argument (no spaces within an element).  The loopback path (`run_local_robocopy`)
+    /// passes only the first pattern; callers that need all patterns must iterate and
+    /// call `run_one_with_profile` once per pattern — see `pso_cache_profiles()`.
+    pub file_globs: Vec<String>,
     pub ps_script: &'static str,
 }
 
@@ -43,17 +47,38 @@ impl DistributeProfile {
     pub fn ddc_pak() -> Self {
         Self {
             source_subdir: "DerivedDataCache".into(),
-            file_glob: "*.ddp".into(),
+            file_globs: vec!["*.ddp".into()],
             ps_script: "distribute-pak-file.ps1",
         }
     }
 
+    /// PSO cache covers two extensions.  Use `pso_cache_profiles()` when you need
+    /// a separate Robocopy invocation per pattern; this constructor is kept for
+    /// code that only needs to inspect the profile shape.
     pub fn pso_cache() -> Self {
         Self {
             source_subdir: "Saved\\CollectedPSOs".into(),
-            file_glob: "*.upipelinecache *.stablepc.csv".into(),
+            file_globs: vec!["*.upipelinecache".into(), "*.stablepc.csv".into()],
             ps_script: "distribute-pso-cache.ps1",
         }
+    }
+
+    /// Returns one `DistributeProfile` per PSO extension so each gets its own
+    /// Robocopy invocation and there is no ambiguity about single-string patterns.
+    pub fn pso_cache_profiles() -> Vec<Self> {
+        ["*.upipelinecache", "*.stablepc.csv"]
+            .iter()
+            .map(|glob| Self {
+                source_subdir: "Saved\\CollectedPSOs".into(),
+                file_globs: vec![(*glob).into()],
+                ps_script: "distribute-pso-cache.ps1",
+            })
+            .collect()
+    }
+
+    /// The first (and for DDC pak, only) file-glob pattern.
+    pub fn primary_glob(&self) -> &str {
+        self.file_globs.first().map(String::as_str).unwrap_or("")
     }
 }
 
@@ -279,7 +304,7 @@ fn run_local_robocopy(
         let mut args = vec![
             item.source_unc.as_str(),
             item.target_local.as_str(),
-            item.file_name.as_deref().unwrap_or(_profile.file_glob.as_str()),
+            item.file_name.as_deref().unwrap_or(_profile.primary_glob()),
             "/E",
             "/R:3",
             "/W:5",
@@ -514,5 +539,43 @@ mod tests {
             append_source_subdir_once("\\\\HOST\\PSO\\Saved\\CollectedPSOs", "Saved\\CollectedPSOs"),
             "\\\\HOST\\PSO\\Saved\\CollectedPSOs"
         );
+    }
+
+    #[test]
+    fn pso_cache_profile_includes_both_pso_extensions() {
+        let profile = DistributeProfile::pso_cache();
+        assert!(
+            profile.file_globs.iter().any(|g| g == "*.upipelinecache"),
+            "pso_cache profile must include *.upipelinecache"
+        );
+        assert!(
+            profile.file_globs.iter().any(|g| g == "*.stablepc.csv"),
+            "pso_cache profile must include *.stablepc.csv"
+        );
+        // No single element should contain a space (that would be the old broken shape)
+        for g in &profile.file_globs {
+            assert!(!g.contains(' '), "glob pattern must not contain a space: {:?}", g);
+        }
+    }
+
+    #[test]
+    fn pso_cache_profiles_returns_one_profile_per_extension() {
+        let profiles = DistributeProfile::pso_cache_profiles();
+        assert_eq!(profiles.len(), 2);
+        let globs: Vec<&str> = profiles.iter().map(|p| p.primary_glob()).collect();
+        assert!(globs.contains(&"*.upipelinecache"));
+        assert!(globs.contains(&"*.stablepc.csv"));
+        // Each profile has exactly one glob (no space-separated multi-pattern)
+        for p in &profiles {
+            assert_eq!(p.file_globs.len(), 1);
+            assert!(!p.file_globs[0].contains(' '));
+        }
+    }
+
+    #[test]
+    fn ddc_pak_profile_has_single_glob() {
+        let profile = DistributeProfile::ddc_pak();
+        assert_eq!(profile.file_globs.len(), 1);
+        assert_eq!(profile.primary_glob(), "*.ddp");
     }
 }
