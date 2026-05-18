@@ -1,8 +1,15 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
-import { tauriApi, type CheckOutcome, type HealthCheckRun, type RunHealthCheckRequest, type UecmError } from "@/services/tauri";
+import { tauriApi, PROBE_LAYER_MAP, type CheckOutcome, type HealthCheckRun, type ProbeKey, type ProbeLayer, type RunHealthCheckRequest, type UecmError } from "@/services/tauri";
 import { useDiagnosticsStore } from "./diagnostics";
 import { useGpuConsistencyStore } from "./gpuConsistency";
+
+export interface LayeredOutcome {
+  /// Known probe key from PROBE_REGISTRY — guarantees the key has a layer + locale label.
+  /// (Unknown keys are filtered + logged via console.warn, never reach this struct.)
+  key: ProbeKey;
+  outcome: CheckOutcome;
+}
 
 export const useHealthCheckStore = defineStore("healthCheck", () => {
   const diagnostics = useDiagnosticsStore();
@@ -35,6 +42,35 @@ export const useHealthCheckStore = defineStore("healthCheck", () => {
         else if (outcome.status === "offline") out.offline += 1;
         else out.unknown += 1;
       }
+    }
+    return out;
+  });
+
+  const probesByLayer = computed<Record<number, Record<ProbeLayer, LayeredOutcome[]>>>(() => {
+    const out: Record<number, Record<ProbeLayer, LayeredOutcome[]>> = {};
+    for (const [mid, row] of Object.entries(rowsByMachine.value)) {
+      const grouped: Record<ProbeLayer, LayeredOutcome[]> = {
+        l1_port: [],
+        l2_bootstrap: [],
+        l3_business: [],
+      };
+      for (const [key, outcome] of Object.entries(row)) {
+        const layer = (PROBE_LAYER_MAP as Record<string, ProbeLayer | undefined>)[key];
+        if (!layer) {
+          // Unknown key — log loud so renames/typos don't silently disappear in UI.
+          console.warn(
+            `[healthCheck] unknown probe key '${key}' not in PROBE_LAYER_MAP — ` +
+            `update src/services/tauri.ts and src-tauri/src/core/probe_keys.rs in sync.`
+          );
+          continue;
+        }
+        // `layer` truthy means `key` is in PROBE_LAYER_MAP — narrow it to ProbeKey.
+        grouped[layer].push({ key: key as ProbeKey, outcome });
+      }
+      for (const layer of ["l1_port", "l2_bootstrap", "l3_business"] as const) {
+        grouped[layer].sort((a, b) => a.key.localeCompare(b.key));
+      }
+      out[Number(mid)] = grouped;
     }
     return out;
   });
@@ -87,7 +123,7 @@ export const useHealthCheckStore = defineStore("healthCheck", () => {
           ? `${cell.signature.model} / driver ${cell.signature.driver}`
           : "GPU signature differs from baseline.",
         sample: gpuConsistency.baselineLabel,
-        remediation: "Align GPU model and driver version before distributing PSO cache files.",
+        remediation: "Match GPU model and driver version cluster-wide before distributing PSO cache files.",
       };
     }
     return unknown("No GPU inventory row for this machine.");
@@ -121,5 +157,5 @@ export const useHealthCheckStore = defineStore("healthCheck", () => {
     results.value = await tauriApi.listHealthResultsForRun(id);
   }
 
-  return { scanRunId, results, rowsByMachine, summary, isRunning, error, run, loadResults };
+  return { scanRunId, results, rowsByMachine, summary, probesByLayer, isRunning, error, run, loadResults };
 });

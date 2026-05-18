@@ -1,5 +1,6 @@
 //! Orchestrate per-machine probes + cluster-level aggregators (GPU, INI consistency).
 
+use crate::core::network;
 use crate::data::machine_gpus::GpuInfo;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -9,6 +10,8 @@ pub struct CheckOutcome {
     pub status: String,
     pub message: String,
     pub sample: String,
+    #[serde(default)]
+    pub remediation: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -51,9 +54,71 @@ pub fn aggregate_gpu_consistency(gpus: &[GpuInfo]) -> GpuConsistencyReport {
                 g.gpu_model, g.driver_version, same_combo, total
             ),
             sample: format!("{} / {}", g.gpu_model, g.driver_version),
+            remediation: if status == "critical" {
+                "Standardize GPU + driver across cluster, or split into compatible subgroups before PSO distribute"
+                    .into()
+            } else if status == "warning" {
+                "Make every node run the same NVIDIA driver: audit with `nvidia-smi --query`, then push a matched installer cluster-wide"
+                    .into()
+            } else {
+                String::new()
+            },
         });
     }
     GpuConsistencyReport { outcomes }
+}
+
+/// L1 (port-layer) probe. Runs from the operator console — no credentials,
+/// no WinRM, just three TCP connect attempts. Returns three `CheckOutcome`
+/// rows keyed `tcp_5985` / `tcp_445` / `tcp_135` with remediation strings
+/// that direct the operator toward the right bootstrap path.
+pub async fn probe_tcp_ports(host: &str, timeout_ms: u64) -> HashMap<String, CheckOutcome> {
+    let probed = network::probe_host_one(host, timeout_ms).await;
+    let mut out = HashMap::new();
+
+    out.insert(
+        "tcp_5985".into(),
+        port_outcome(
+            "WinRM 5985",
+            probed.winrm_open,
+            "Run `uecm-cli winrm bootstrap <host>` (Path B) when 445+135 are open, or use the USB Path A bootstrap when all three ports are closed.",
+        ),
+    );
+    out.insert(
+        "tcp_445".into(),
+        port_outcome(
+            "SMB 445",
+            probed.smb_open,
+            "Open inbound TCP 445 (FPS-SMB-In-TCP firewall rule) and start LanmanServer. `winrm bootstrap` does both via -EnableSmbServer.",
+        ),
+    );
+    out.insert(
+        "tcp_135".into(),
+        port_outcome(
+            "RPC 135 (Endpoint Mapper)",
+            probed.rpc_open,
+            "Switch network profile to Private (Public default blocks DCOM-In). `winrm bootstrap` does this when -NetworkCategory Private is passed.",
+        ),
+    );
+    out
+}
+
+fn port_outcome(label: &str, open: bool, fix_hint: &str) -> CheckOutcome {
+    if open {
+        CheckOutcome {
+            status: "healthy".into(),
+            message: format!("{} reachable", label),
+            sample: "open".into(),
+            remediation: String::new(),
+        }
+    } else {
+        CheckOutcome {
+            status: "critical".into(),
+            message: format!("{} not reachable (TCP connect failed)", label),
+            sample: "closed".into(),
+            remediation: fix_hint.into(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -98,5 +163,40 @@ mod tests {
     fn machine_with_no_gpu_data_is_unknown() {
         let report = aggregate_gpu_consistency(&[]);
         assert!(report.outcomes.is_empty());
+    }
+
+    #[test]
+    fn check_outcome_serializes_remediation_field() {
+        let outcome = CheckOutcome {
+            status: "critical".into(),
+            message: "LanmanServer stopped".into(),
+            sample: "Stopped".into(),
+            remediation: "Start the service: Start-Service LanmanServer".into(),
+        };
+        let json = serde_json::to_string(&outcome).unwrap();
+        assert!(json.contains("\"remediation\":\"Start the service: Start-Service LanmanServer\""));
+    }
+
+    #[test]
+    fn check_outcome_deserializes_missing_remediation_as_empty() {
+        let json = r#"{"status":"healthy","message":"","sample":""}"#;
+        let outcome: CheckOutcome = serde_json::from_str(json).unwrap();
+        assert_eq!(outcome.remediation, "");
+    }
+
+    #[tokio::test]
+    async fn probe_tcp_ports_returns_three_outcomes_with_remediation() {
+        // Use TEST-NET-3 so probes time out fast and produce "critical" rows.
+        let outcomes = probe_tcp_ports("203.0.113.2", 100).await;
+        assert!(outcomes.contains_key("tcp_5985"));
+        assert!(outcomes.contains_key("tcp_445"));
+        assert!(outcomes.contains_key("tcp_135"));
+        // Each closed port must carry a non-empty remediation string.
+        for key in ["tcp_5985", "tcp_445", "tcp_135"] {
+            let o = outcomes.get(key).unwrap();
+            if o.status == "critical" {
+                assert!(!o.remediation.is_empty(), "{} missing remediation", key);
+            }
+        }
     }
 }
