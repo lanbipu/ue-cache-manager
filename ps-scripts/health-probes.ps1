@@ -12,6 +12,7 @@ param(
     [string]$ShareUnc = "",
     [string]$SvcUsername = "",
     [string]$ExpectedSharedDataCachePath = "",
+    [string]$ExpectedLocalDataCachePath = "",
     [string]$Username,
     [string]$Password,
     [switch]$Local
@@ -33,7 +34,7 @@ function Build-CredentialOrNull {
 
 try {
     $script = {
-        param($ShareUnc, $SvcUsername, $ExpectedSharedDataCachePath)
+        param($ShareUnc, $SvcUsername, $ExpectedSharedDataCachePath, $ExpectedLocalDataCachePath)
         function Probe-SmbService {
             try {
                 $svc = Get-Service -Name LanmanServer -ErrorAction Stop
@@ -99,15 +100,25 @@ try {
                    message = "SYSTEM cmdkey /list contains $SvcUsername = $hasIt"; sample = '' }
             } catch { @{ status='warning'; message=$_.Exception.Message; sample='' } }
         }
-        function Probe-EnvVars {
-            $shared = [Environment]::GetEnvironmentVariable('UE-SharedDataCachePath', 'Machine')
-            if ([string]::IsNullOrEmpty($ExpectedSharedDataCachePath)) {
-                @{ status = ($(if ([string]::IsNullOrEmpty($shared)) {'warning'} else {'healthy'}));
-                   message = "UE-SharedDataCachePath = $shared"; sample = "$shared" }
-            } else {
-                @{ status = ($(if ($shared -eq $ExpectedSharedDataCachePath) {'healthy'} else {'critical'}));
-                   message = "expected $ExpectedSharedDataCachePath, got $shared"; sample = "$shared" }
+        function Probe-EnvShared {
+            param($Expected)
+            $value = [Environment]::GetEnvironmentVariable('UE-SharedDataCachePath', 'Machine')
+            if ([string]::IsNullOrEmpty($Expected)) {
+                $status = if ($value) { 'healthy' } else { 'warning' }
+                return @{ status = $status; message = "UE-SharedDataCachePath = $value"; sample = "$value" }
             }
+            $status = if ($value -eq $Expected) { 'healthy' } else { 'critical' }
+            @{ status = $status; message = "expected $Expected, got $value"; sample = "$value" }
+        }
+        function Probe-EnvLocal {
+            param($Expected)
+            $value = [Environment]::GetEnvironmentVariable('UE-LocalDataCachePath', 'Machine')
+            if ([string]::IsNullOrEmpty($Expected)) {
+                $status = if ($value) { 'healthy' } else { 'warning' }
+                return @{ status = $status; message = "UE-LocalDataCachePath = $value"; sample = "$value" }
+            }
+            $status = if ($value -eq $Expected) { 'healthy' } else { 'critical' }
+            @{ status = $status; message = "expected $Expected, got $value"; sample = "$value" }
         }
         function Probe-SystemWrite {
             if ([string]::IsNullOrEmpty($ShareUnc)) {
@@ -135,19 +146,21 @@ try {
             ntfs_perm        = (Probe-NtfsPerm)
             cred_user        = (Probe-CredUser)
             cred_system      = (Probe-CredSystem)
-            env_vars         = (Probe-EnvVars)
+            env_vars         = (Probe-EnvShared -Expected $ExpectedSharedDataCachePath)
+            env_shared       = (Probe-EnvShared -Expected $ExpectedSharedDataCachePath)
+            env_local        = (Probe-EnvLocal  -Expected $ExpectedLocalDataCachePath)
             system_write     = (Probe-SystemWrite)
         }
         return $results
     }
     if ($Local) {
-        $r = & $script $ShareUnc $SvcUsername $ExpectedSharedDataCachePath
+        $r = & $script $ShareUnc $SvcUsername $ExpectedSharedDataCachePath $ExpectedLocalDataCachePath
     } else {
         $cred = Build-CredentialOrNull -User $Username -Pass $Password
         $invokeArgs = @{
             ComputerName = $HostName
             ScriptBlock  = $script
-            ArgumentList = @($ShareUnc, $SvcUsername, $ExpectedSharedDataCachePath)
+            ArgumentList = @($ShareUnc, $SvcUsername, $ExpectedSharedDataCachePath, $ExpectedLocalDataCachePath)
             ErrorAction  = 'Stop'
             Authentication = 'Negotiate'
         }

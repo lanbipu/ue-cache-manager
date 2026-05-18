@@ -20,6 +20,7 @@ pub fn run(
     share_unc: &str,
     svc_username: &str,
     expected_shared_path: &str,
+    expected_local_path: &str,
     cred: Option<(&str, &str)>,
 ) -> UecmResult<HashMap<String, CheckOutcome>> {
     let mut args: Vec<String> = vec![
@@ -27,6 +28,7 @@ pub fn run(
         "-ShareUnc".into(), share_unc.into(),
         "-SvcUsername".into(), svc_username.into(),
         "-ExpectedSharedDataCachePath".into(), expected_shared_path.into(),
+        "-ExpectedLocalDataCachePath".into(), expected_local_path.into(),
     ];
     if loopback::is_loopback_target(host) {
         // Loopback runs the probe scriptblock inside the current PowerShell
