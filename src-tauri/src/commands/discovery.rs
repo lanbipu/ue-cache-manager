@@ -103,11 +103,24 @@ pub fn refresh_machine(db: State<'_, Db>, machine_id: i64) -> UecmResult<Refresh
         .enumerate()
         .max_by_key(|(_, d)| parse_version(&d.version))
         .map(|(i, _)| i);
+    // Snapshot existing rows so the intree_* metadata persisted by Plan 7
+    // T1.6 (zen-detect-binary) survives a `machine refresh` — discovery and
+    // zen-binary scans are independent flows and one must not wipe the
+    // other's columns. Keys on (version, install_path) which together
+    // uniquely identify an existing UeInstall row for this machine.
+    let existing = machine_ue_installs::list_for_machine(&db, machine_id)?;
+    let intree_for = |version: &str, install_path: &str| {
+        existing
+            .iter()
+            .find(|u| u.version == version && u.install_path == install_path)
+    };
+
     // Replace the whole set so removed installs (e.g. Launcher stub previously
     // recorded as version "4.0") get cleared, and a stale `is_primary` flag
     // from an earlier refresh cannot survive a hardware/install change.
     machine_ue_installs::delete_for_machine(&db, machine_id)?;
     for (idx, d) in detected_ue.iter().enumerate() {
+        let prior = intree_for(&d.version, &d.install_path);
         machine_ue_installs::upsert(
             &db,
             &UeInstall {
@@ -116,6 +129,12 @@ pub fn refresh_machine(db: State<'_, Db>, machine_id: i64) -> UecmResult<Refresh
                 version: d.version.clone(),
                 install_path: d.install_path.clone(),
                 is_primary: Some(idx) == primary_idx,
+                zen_cli_intree_path: prior.and_then(|p| p.zen_cli_intree_path.clone()),
+                zen_cli_intree_version: prior.and_then(|p| p.zen_cli_intree_version.clone()),
+                zen_cli_intree_sha256: prior.and_then(|p| p.zen_cli_intree_sha256.clone()),
+                zenserver_intree_path: prior.and_then(|p| p.zenserver_intree_path.clone()),
+                zenserver_intree_version: prior.and_then(|p| p.zenserver_intree_version.clone()),
+                zenserver_intree_sha256: prior.and_then(|p| p.zenserver_intree_sha256.clone()),
             },
         )?;
     }

@@ -42,6 +42,11 @@ pub fn resolve_db_path() -> UecmResult<PathBuf> {
 /// migrations. Both binaries call this. Creates the parent directory if it
 /// does not exist — important for `UECM_DB_PATH` overrides that point at a
 /// fresh location.
+///
+/// After migrations succeed, runs Plan 7 §1.4 retention GC on zen_probes /
+/// zen_cache_stats as best-effort. A failed GC must not block startup — the
+/// app should still come up and serve cached state, so we log via tracing
+/// and continue.
 pub fn open_and_migrate_db(path: &Path) -> UecmResult<Db> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -59,6 +64,23 @@ pub fn open_and_migrate_db(path: &Path) -> UecmResult<Db> {
         let mut conn = db.lock().unwrap();
         data::schema::migrate(&mut conn)?;
     }
+
+    match crate::core::zen::retention::run(&db) {
+        Ok(report) => {
+            if report.zen_probes_deleted > 0 || report.zen_cache_stats_deleted > 0 {
+                tracing::info!(
+                    target: "zen.retention",
+                    zen_probes_deleted = report.zen_probes_deleted,
+                    zen_cache_stats_deleted = report.zen_cache_stats_deleted,
+                    "startup retention GC complete"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(target: "zen.retention", "startup retention GC failed: {e}");
+        }
+    }
+
     Ok(db)
 }
 

@@ -83,6 +83,11 @@ pub enum Domain {
         #[command(subcommand)]
         action: PsoAction,
     },
+    /// Zen daemon inventory + probes + baselines (Plan 7 M1).
+    Zen {
+        #[command(subcommand)]
+        action: ZenAction,
+    },
 }
 
 // ---------- system ----------
@@ -570,6 +575,99 @@ pub enum PsoAction {
         dry_run: bool,
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
+    },
+}
+
+// ---------- zen (Plan 7 M1) ----------
+#[derive(Subcommand, Debug)]
+pub enum ZenAction {
+    /// Read-only view of latest probe per endpoint.
+    Status {
+        /// Limit to one machine's endpoints (mutually exclusive with --all).
+        #[arg(long, conflicts_with = "all")]
+        machine: Option<i64>,
+        /// Show endpoints across every machine (default).
+        #[arg(long)]
+        all: bool,
+    },
+    /// Probe one or more endpoints right now and persist a row each.
+    Probe {
+        #[arg(long, conflicts_with = "all")]
+        machine: Option<i64>,
+        #[arg(long)]
+        all: bool,
+        /// Per-endpoint timeout in seconds (HTTP connect + read).
+        #[arg(long, default_value_t = 5)]
+        timeout: u64,
+        /// Reserved for future WinRM-tunneled probe — accepted but currently ignored.
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Fetch /stats + /stats/z$ now and persist a row.
+    CacheStats {
+        /// Limit to one endpoint by id (mutually exclusive with --all).
+        #[arg(long, conflicts_with = "all")]
+        endpoint_id: Option<i64>,
+        #[arg(long)]
+        all: bool,
+        #[arg(long, default_value_t = 5)]
+        timeout: u64,
+    },
+    /// Run the zen-detect-binary.ps1 sidecar against a machine and persist.
+    DetectBinary {
+        #[arg(long, conflicts_with = "all")]
+        machine: Option<i64>,
+        #[arg(long)]
+        all: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Read-only list of registered zen endpoints.
+    ListEndpoints {
+        /// Limit to one machine's endpoints.
+        #[arg(long)]
+        machine: Option<i64>,
+    },
+    /// Baseline (zen_binary_expected) inspection and lock/unlock.
+    Baseline {
+        #[command(subcommand)]
+        action: ZenBaselineAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ZenBaselineAction {
+    /// List baseline rows, optionally filtered.
+    List {
+        #[arg(long)]
+        zen_build_version: Option<String>,
+        /// Filter by binary kind (zen_cli | zenserver).
+        #[arg(long, value_name = "KIND")]
+        kind: Option<String>,
+    },
+    /// Set the `locked_by` marker on an existing baseline row.
+    Lock {
+        #[arg(long)]
+        zen_build_version: String,
+        #[arg(long, value_name = "KIND")]
+        kind: String,
+        #[arg(long)]
+        locked_by: String,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Clear the `locked_by` marker on an existing baseline row.
+    Unlock {
+        #[arg(long)]
+        zen_build_version: String,
+        #[arg(long, value_name = "KIND")]
+        kind: String,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
