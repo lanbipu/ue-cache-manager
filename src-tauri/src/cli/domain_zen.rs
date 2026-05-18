@@ -62,7 +62,7 @@ use serde::Serialize;
 use std::time::Duration;
 
 /// Default Windows service name for zenserver. T2.4 ps-scripts use the same.
-const DEFAULT_SERVICE_NAME: &str = "ZenServer";
+pub(crate) const DEFAULT_SERVICE_NAME: &str = "ZenServer";
 
 const KIND_ZEN_CLI: &str = "zen_cli";
 const KIND_ZENSERVER: &str = "zenserver";
@@ -717,7 +717,10 @@ fn validate_kind(kind: &str) -> UecmResult<()> {
 /// `shared_upstream` requires `installed_service` (T2.1 enforces),
 /// `local` defaults to `editor_owned`. Pass-through for anything else so the
 /// validator in `core::zen::endpoint::register` produces the canonical error.
-fn default_lifecycle_for(role: &str) -> &'static str {
+///
+/// `pub(crate)` so the T2.6 Tauri command wrappers in `commands::zen` reuse
+/// the same default-derivation rule and don't drift from the CLI.
+pub(crate) fn default_lifecycle_for(role: &str) -> &'static str {
     match role {
         crate::core::zen::endpoint::ROLE_SHARED_UPSTREAM => "installed_service",
         _ => "editor_owned",
@@ -854,7 +857,7 @@ fn unregister(ctx: &mut Ctx<'_>, endpoint_id: i64, yes: bool, dry_run: bool) -> 
 /// Resolve the upstream UpstreamInfo for an endpoint that has
 /// `upstream_endpoint_id = Some(_)`. Returns `Ok(None)` when the row has no
 /// upstream pointer (consumer should pass `None` to `lua_config::render`).
-fn resolve_upstream_info(db: &Db, ep: &ZenEndpoint) -> UecmResult<Option<UpstreamInfo>> {
+pub(crate) fn resolve_upstream_info(db: &Db, ep: &ZenEndpoint) -> UecmResult<Option<UpstreamInfo>> {
     let Some(upstream_id) = ep.upstream_endpoint_id else {
         return Ok(None);
     };
@@ -878,7 +881,7 @@ fn resolve_upstream_info(db: &Db, ep: &ZenEndpoint) -> UecmResult<Option<Upstrea
     }))
 }
 
-fn render_lua_for(db: &Db, endpoint_id: i64) -> UecmResult<(ZenEndpoint, String)> {
+pub(crate) fn render_lua_for(db: &Db, endpoint_id: i64) -> UecmResult<(ZenEndpoint, String)> {
     let ep = zen_endpoint::get(db, endpoint_id)?.ok_or_else(|| {
         UecmError::InvalidInput(format!("endpoint id={} not found", endpoint_id))
     })?;
@@ -999,7 +1002,7 @@ fn apply_config(
 /// that hashes the original bytes but truncates on write can't escape
 /// detection (the read-back size in T2.4 reads `Get-Item Length`, so the
 /// number reflects the *written* file, not the input string).
-fn verify_write_response(
+pub(crate) fn verify_write_response(
     response: &serde_json::Value,
     expected_sha: &str,
     expected_bytes: usize,
@@ -1034,7 +1037,7 @@ fn verify_write_response(
     Ok(response.clone())
 }
 
-fn invoke_write_lua(
+pub(crate) fn invoke_write_lua(
     host: &str,
     lua_text: &str,
     dest_path: &str,
@@ -1364,7 +1367,7 @@ fn service_status(
 // -----------------------------------------------------------------------------
 
 /// Build the canonical `<scheme>://+:<port>/` reservation URL for an endpoint.
-fn url_prefix_for(ep: &ZenEndpoint) -> String {
+pub(crate) fn url_prefix_for(ep: &ZenEndpoint) -> String {
     format!("{}://+:{}/", ep.scheme, ep.declared_port)
 }
 
@@ -1548,7 +1551,7 @@ fn urlacl_remove(
 /// invoke time. The sidecar's own `$args` (positional) stays empty so the
 /// `--full` hard-block in `zen-service-install.ps1` doesn't trip on caller
 /// positional drift.
-fn build_param_script(script_name: &str, args: &[(&str, &str)]) -> UecmResult<String> {
+pub(crate) fn build_param_script(script_name: &str, args: &[(&str, &str)]) -> UecmResult<String> {
     let body = crate::core::powershell::read_script(script_name)?;
     // Build a PowerShell hashtable literal of the named args.
     // Single-quoted PS strings only need `'` doubled to escape; backslashes
@@ -1572,7 +1575,7 @@ fn build_param_script(script_name: &str, args: &[(&str, &str)]) -> UecmResult<St
 }
 
 /// Dispatch a remote script body through WinRM, with or without credentials.
-fn run_remote(
+pub(crate) fn run_remote(
     host: &str,
     body: &str,
     creds: Option<&(String, String)>,
@@ -1589,7 +1592,7 @@ fn run_remote(
 /// failures. Anything else is a stale/overridden sidecar or a corrupted
 /// envelope; surfacing it as "success" would let bad remote state masquerade
 /// as a successful operation.
-fn parse_envelope(raw: &str, sidecar: &str) -> UecmResult<serde_json::Value> {
+pub(crate) fn parse_envelope(raw: &str, sidecar: &str) -> UecmResult<serde_json::Value> {
     let envelope: serde_json::Value = serde_json::from_str(raw).map_err(|e| {
         UecmError::PowerShell(format!(
             "{sidecar} returned non-JSON output: {e}; raw: {}",
@@ -1620,7 +1623,7 @@ fn parse_envelope(raw: &str, sidecar: &str) -> UecmResult<serde_json::Value> {
 /// drive-absolute or UNC, no device namespace, no forbidden system roots.
 /// Stricter than `validate_data_dir_safe` because it also requires the path
 /// to be absolute (the sidecar refuses `C:ZenCache` and `\ZenCache` outright).
-fn validate_service_data_dir(p: &str) -> UecmResult<()> {
+pub(crate) fn validate_service_data_dir(p: &str) -> UecmResult<()> {
     let trimmed = p.trim();
     if trimmed.is_empty() {
         return Err(UecmError::InvalidInput(
@@ -1658,7 +1661,7 @@ fn validate_service_data_dir(p: &str) -> UecmResult<()> {
 /// (rendered into `server.datadir`). Symmetric with `validate_dest_path`'s
 /// system-root check — once T2.8 lands a richer safety check, this becomes
 /// a delegating wrapper.
-fn validate_data_dir_safe(p: &str) -> UecmResult<()> {
+pub(crate) fn validate_data_dir_safe(p: &str) -> UecmResult<()> {
     let trimmed = p.trim();
     if trimmed.is_empty() {
         return Err(UecmError::InvalidInput(
@@ -1702,7 +1705,7 @@ fn validate_data_dir_safe(p: &str) -> UecmResult<()> {
 /// Compute SHA-256 of the bytes we *intended* to write, for cross-checking
 /// against the sidecar's `sha256` field after a successful write. Lowercase
 /// hex to match the sidecar's `.ToLowerInvariant()` output.
-fn sha256_hex_of(text: &str) -> String {
+pub(crate) fn sha256_hex_of(text: &str) -> String {
     use sha2::Digest;
     let mut hasher = sha2::Sha256::new();
     hasher.update(text.as_bytes());
@@ -1716,7 +1719,7 @@ fn sha256_hex_of(text: &str) -> String {
 ///   - fully-qualified drive-absolute (`C:\...` / `C:/...`) or UNC (`\\host\...`),
 ///   - not equal to or under `C:\Windows`, `C:\Program Files`,
 ///     `C:\Program Files (x86)` (case-insensitive).
-fn validate_dest_path(p: &str) -> UecmResult<()> {
+pub(crate) fn validate_dest_path(p: &str) -> UecmResult<()> {
     let trimmed = p.trim();
     if trimmed.is_empty() {
         return Err(UecmError::InvalidInput(
@@ -1827,7 +1830,7 @@ fn validate_dest_path(p: &str) -> UecmResult<()> {
 /// prefixes; for both, the prefix is preserved and only the "rest" portion
 /// is collapsed. A `..` that would pop past the root stays at the root (no
 /// error, matches Win32 behavior).
-fn collapse_path_segments(p: &str) -> String {
+pub(crate) fn collapse_path_segments(p: &str) -> String {
     let (prefix, rest) = if p.len() >= 3
         && p.as_bytes()[0].is_ascii_alphabetic()
         && p.as_bytes()[1] == b':'
@@ -1871,13 +1874,13 @@ fn collapse_path_segments(p: &str) -> String {
 
 /// Lookup helpers that turn "not found" into `InvalidInput` so the CLI exits
 /// with code 2 (operator input error) instead of 1 (operation failed).
-fn require_endpoint(db: &Db, endpoint_id: i64) -> UecmResult<ZenEndpoint> {
+pub(crate) fn require_endpoint(db: &Db, endpoint_id: i64) -> UecmResult<ZenEndpoint> {
     zen_endpoint::get(db, endpoint_id)?.ok_or_else(|| {
         UecmError::InvalidInput(format!("endpoint id={} not found", endpoint_id))
     })
 }
 
-fn require_machine(db: &Db, machine_id: i64) -> UecmResult<Machine> {
+pub(crate) fn require_machine(db: &Db, machine_id: i64) -> UecmResult<Machine> {
     machines::find_by_id(db, machine_id)?.ok_or_else(|| {
         UecmError::InvalidInput(format!("machine id={} not found", machine_id))
     })
@@ -1887,7 +1890,7 @@ fn require_machine(db: &Db, machine_id: i64) -> UecmResult<Machine> {
 /// final status. Best-effort: a failed log write should not mask the real
 /// operation result, so finish errors are dropped on the floor (operator
 /// already sees the success/failure via the NDJSON Completed event).
-fn finalize_op(
+pub(crate) fn finalize_op(
     db: &Db,
     op_id: i64,
     result: &UecmResult<serde_json::Value>,

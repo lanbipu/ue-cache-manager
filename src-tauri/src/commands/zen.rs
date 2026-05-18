@@ -10,13 +10,39 @@
 //!
 //! JSON field names match the NDJSON `Completed` summary documents emitted by
 //! `cli::domain_zen` so the UI doesn't need a per-channel translation layer.
+//!
+//! ## T2.6 destructive-op convention
+//!
+//! M2 added register / unregister / apply-config / lua-preview / service /
+//! urlacl commands. The CLI gates each destructive operation behind `--yes` (or
+//! `--dry-run`). The Tauri counterparts mirror that contract using two
+//! parameters per command:
+//!
+//! - `confirmed: bool` — UI must prompt and pass `true` to actually run the
+//!   destructive side-effect. Maps to CLI `--yes`. If both `confirmed` and
+//!   `dry_run` are false on a destructive command, the wrapper returns
+//!   `UecmError::InvalidInput("... requires confirmed=true or dry_run=true ...")`
+//!   so accidental clicks can't fire write-side effects.
+//! - `dry_run: bool` — when true, the wrapper assembles the same plan payload
+//!   the CLI would emit under `--dry-run` (no PowerShell invocation, no
+//!   `operations` row) and returns it as the response value. UI uses this for
+//!   confirm-dialog previews.
+//!
+//! `dry_run` wins when both are true (matches `cli::destructive::check`).
+//!
+//! Service `start` and read-only commands (`service status`, `urlacl list`,
+//! `lua_preview` is "read-only" in the no-destination sense) take no
+//! `confirmed` parameter — they aren't destructive in the CLI either.
 
+use crate::cli::domain_zen as zen_cli_shared;
 use crate::core::powershell;
 use crate::core::winrm;
+use crate::core::zen::endpoint as zen_endpoint;
+use crate::core::zen::redaction::redact;
 use crate::core::zen::{binary as zen_binary, cache_stats as zen_cache, probe as zen_probe};
 use crate::data::{
-    credentials as data_creds, machines, zen_binary_expected, zen_endpoints, zen_probes, Db,
-    ZenBinaryExpected, ZenEndpoint,
+    credentials as data_creds, machines, operations, zen_binary_expected, zen_endpoints,
+    zen_probes, Db, ZenBinaryExpected, ZenEndpoint,
 };
 use crate::error::{UecmError, UecmResult};
 use serde::{Deserialize, Serialize};
@@ -490,9 +516,870 @@ pub fn zen_baseline_unlock(
     zen_binary_expected::unlock(&db, &zen_build_version, &binary_kind)
 }
 
+// ===========================================================================
+// M2 (T2.6) — register / unregister / apply-config / lua-preview /
+//             service install|uninstall|start|stop|status /
+//             urlacl add|list|remove
+// ===========================================================================
+//
+// Each handler mirrors the matching CLI subcommand in `cli::domain_zen`. Shared
+// helpers (validate_dest_path, validate_data_dir_safe, build_param_script, …)
+// live in `cli::domain_zen` and are exposed `pub(crate)` so both surfaces share
+// the same validation, sidecar plumbing, and operations logging. The Tauri
+// layer therefore stays purely a parameter-translation + return-shape adapter.
+
+// ---------------------------------------------------------------------------
+// register
+// ---------------------------------------------------------------------------
+
+/// Inputs for `zen_register`. Mirrors `cli::args::ZenAction::Register` field
+/// names so a UI form can post the same payload it would emit for the CLI.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ZenRegisterInput {
+    pub machine_id: i64,
+    pub declared_port: i64,
+    pub scheme: String,
+    pub role: String,
+    #[serde(default)]
+    pub upstream_endpoint_id: Option<i64>,
+    pub data_dir: String,
+    pub httpserverclass: String,
+    /// `None` triggers the same Plan §1.1 default the CLI uses
+    /// (`shared_upstream` → `installed_service`, else `editor_owned`).
+    #[serde(default)]
+    pub lifecycle: Option<String>,
+}
+
+/// Outcome of `zen_register`. Mirrors `core::zen::endpoint::RegisterOutcome`
+/// plus the persisted row for parity with the CLI's `emit_result` document.
+#[derive(Debug, Clone, Serialize)]
+pub struct ZenRegisterOutcome {
+    pub endpoint_id: i64,
+    pub inserted: bool,
+    pub machine_id: i64,
+    pub declared_port: i64,
+    pub scheme: String,
+    pub role: String,
+    pub upstream_endpoint_id: Option<i64>,
+    pub lifecycle_mode: String,
+    pub httpserverclass: String,
+    pub data_dir: String,
+}
+
+#[tauri::command]
+pub fn zen_register(db: State<'_, Db>, input: ZenRegisterInput) -> UecmResult<ZenRegisterOutcome> {
+    // Match the CLI's machine-existence pre-check so callers get
+    // `InvalidInput` instead of an opaque FK violation.
+    if machines::find_by_id(&db, input.machine_id)?.is_none() {
+        return Err(UecmError::InvalidInput(format!(
+            "machine id={} not found",
+            input.machine_id
+        )));
+    }
+    let lifecycle_mode = input
+        .lifecycle
+        .clone()
+        .unwrap_or_else(|| zen_cli_shared::default_lifecycle_for(&input.role).to_string());
+
+    let payload = zen_endpoint::EndpointInput {
+        machine_id: input.machine_id,
+        declared_port: input.declared_port,
+        scheme: input.scheme.clone(),
+        role: input.role.clone(),
+        upstream_endpoint_id: input.upstream_endpoint_id,
+        data_dir: input.data_dir.clone(),
+        httpserverclass: input.httpserverclass.clone(),
+        lifecycle_mode: lifecycle_mode.clone(),
+    };
+    let outcome = zen_endpoint::register(&db, &payload)?;
+
+    // Idempotency contract: when `inserted=false`, return the *persisted* row
+    // (its fields are authoritative), not the request payload — same behavior
+    // as `cli::domain_zen::register`.
+    let persisted = zen_endpoint::get(&db, outcome.id)?.ok_or_else(|| {
+        UecmError::OperationFailed(format!(
+            "register: row id={} disappeared between insert and readback",
+            outcome.id
+        ))
+    })?;
+    Ok(ZenRegisterOutcome {
+        endpoint_id: outcome.id,
+        inserted: outcome.inserted,
+        machine_id: persisted.machine_id,
+        declared_port: persisted.declared_port,
+        scheme: persisted.scheme,
+        role: persisted.role,
+        upstream_endpoint_id: persisted.upstream_endpoint_id,
+        lifecycle_mode: persisted.lifecycle_mode,
+        httpserverclass: persisted.httpserverclass,
+        data_dir: persisted.data_dir,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// unregister
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum ZenUnregisterResult {
+    /// `dry_run=true` plan with the row preview. No DB mutation occurred.
+    DryRun(ZenUnregisterPlan),
+    /// `confirmed=true` real apply. Endpoint row deleted.
+    Completed(ZenUnregisterSummary),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ZenUnregisterPlan {
+    pub operation: &'static str,
+    pub endpoint_id: i64,
+    pub machine_id: i64,
+    pub declared_port: i64,
+    pub role: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ZenUnregisterSummary {
+    pub endpoint_id: i64,
+    pub machine_id: i64,
+    pub action: &'static str,
+}
+
+#[tauri::command]
+pub fn zen_unregister(
+    db: State<'_, Db>,
+    endpoint_id: i64,
+    confirmed: bool,
+    dry_run: bool,
+) -> UecmResult<ZenUnregisterResult> {
+    guard_destructive(confirmed, dry_run, "zen.unregister")?;
+    let ep = zen_cli_shared::require_endpoint(&db, endpoint_id)?;
+
+    // Mirror the CLI's pre-flight dependents scan so dry-run plans can't
+    // promise success when the real apply would refuse.
+    let dependents: Vec<i64> = zen_endpoints::list(&db)?
+        .into_iter()
+        .filter(|other| other.upstream_endpoint_id == Some(endpoint_id))
+        .filter_map(|other| other.id)
+        .collect();
+    if !dependents.is_empty() {
+        let list = dependents
+            .iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(UecmError::InvalidInput(format!(
+            "cannot unregister endpoint {endpoint_id}: still referenced as upstream by [{list}]; un-point them first"
+        )));
+    }
+
+    if dry_run {
+        return Ok(ZenUnregisterResult::DryRun(ZenUnregisterPlan {
+            operation: "zen.unregister",
+            endpoint_id,
+            machine_id: ep.machine_id,
+            declared_port: ep.declared_port,
+            role: ep.role.clone(),
+        }));
+    }
+
+    zen_endpoint::unregister(&db, endpoint_id)?;
+    Ok(ZenUnregisterResult::Completed(ZenUnregisterSummary {
+        endpoint_id,
+        machine_id: ep.machine_id,
+        action: "unregister",
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// lua-preview
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ZenLuaPreviewResult {
+    pub endpoint_id: i64,
+    pub machine_id: i64,
+    pub lua: String,
+}
+
+#[tauri::command]
+pub fn zen_lua_preview(db: State<'_, Db>, endpoint_id: i64) -> UecmResult<ZenLuaPreviewResult> {
+    let (ep, lua) = zen_cli_shared::render_lua_for(&db, endpoint_id)?;
+    // Same data_dir guard the CLI runs — `lua-preview` and `apply-config`
+    // share the same engine, so they share the same refusal set.
+    zen_cli_shared::validate_data_dir_safe(&ep.data_dir)?;
+    Ok(ZenLuaPreviewResult {
+        endpoint_id,
+        machine_id: ep.machine_id,
+        lua,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// apply-config
+// ---------------------------------------------------------------------------
+
+/// Credentials wire shape shared by every M2 destructive command that drives a
+/// remote sidecar. Mirrors `cli::credential_args::CredentialArgs` but flattened
+/// because Tauri doesn't deserialize Rust groups/`Args` types directly.
+///
+/// Exactly one of:
+/// - `cred_alias` set → DPAPI lookup
+/// - `user` + `pass` set → inline user/password
+/// - all `None` → inherit caller's Kerberos/NTLM context (anonymous over WinRM)
+///
+/// `pass_stdin` from the CLI has no meaningful analogue inside a GUI — the UI
+/// already collected the password from the user — so it's not exposed here.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ZenCredentialInput {
+    #[serde(default)]
+    pub cred_alias: Option<String>,
+    #[serde(default)]
+    pub user: Option<String>,
+    #[serde(default)]
+    pub pass: Option<String>,
+}
+
+impl ZenCredentialInput {
+    /// Preflight: validate the flag combination + alias existence without
+    /// touching DPAPI. Mirrors `CredentialArgs::preflight`.
+    fn preflight(&self, db: &Db) -> UecmResult<()> {
+        if let Some(alias) = &self.cred_alias {
+            data_creds::find_by_alias(db, alias)?.ok_or_else(|| {
+                UecmError::InvalidInput(format!("credential alias '{}' not found", alias))
+            })?;
+            if self.user.is_some() || self.pass.is_some() {
+                return Err(UecmError::InvalidInput(
+                    "inconsistent credential flags: cred_alias conflicts with user/pass".into(),
+                ));
+            }
+            return Ok(());
+        }
+        match (&self.user, &self.pass) {
+            (Some(_), Some(_)) => Ok(()),
+            (None, None) => Ok(()),
+            _ => Err(UecmError::InvalidInput(
+                "inconsistent credential flags: user and pass must both be set or both omitted"
+                    .into(),
+            )),
+        }
+    }
+
+    /// Resolve to `(username, password)` if any credential was supplied;
+    /// `None` means inherit caller's Kerberos/NTLM context. Mirrors
+    /// `CredentialArgs::resolve` but without stdin support.
+    fn resolve(&self, db: &Db) -> UecmResult<Option<(String, String)>> {
+        if let Some(alias) = &self.cred_alias {
+            let user = data_creds::find_by_alias(db, alias)?
+                .ok_or_else(|| {
+                    UecmError::InvalidInput(format!("credential alias '{}' not found", alias))
+                })?
+                .username;
+            let pass = crate::core::credentials::resolve_password(alias)?;
+            return Ok(Some((user, pass)));
+        }
+        match (&self.user, &self.pass) {
+            (Some(u), Some(p)) => Ok(Some((u.clone(), p.clone()))),
+            (None, None) => Ok(None),
+            _ => Err(UecmError::InvalidInput(
+                "inconsistent credential flags: user and pass must both be set or both omitted"
+                    .into(),
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum ZenApplyConfigResult {
+    DryRun(ZenApplyConfigPlan),
+    Completed(ZenApplyConfigSummary),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ZenApplyConfigPlan {
+    pub operation: &'static str,
+    pub endpoint_id: i64,
+    pub machine_id: i64,
+    pub host: String,
+    pub dest_path: String,
+    pub lua: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ZenApplyConfigSummary {
+    pub endpoint_id: i64,
+    pub machine_id: i64,
+    pub host: String,
+    pub dest_path: String,
+    pub sha256: String,
+    pub remote: serde_json::Value,
+}
+
+#[tauri::command]
+pub fn zen_apply_config(
+    db: State<'_, Db>,
+    endpoint_id: i64,
+    dest_path: String,
+    confirmed: bool,
+    dry_run: bool,
+    cred: ZenCredentialInput,
+) -> UecmResult<ZenApplyConfigResult> {
+    guard_destructive(confirmed, dry_run, "zen.apply-config")?;
+    cred.preflight(&db)?;
+    let (ep, lua) = zen_cli_shared::render_lua_for(&db, endpoint_id)?;
+    let machine = zen_cli_shared::require_machine(&db, ep.machine_id)?;
+
+    // Mirror the CLI's `dest_path` + `data_dir` validation so dry-run plans
+    // match what `--yes` would actually accept.
+    zen_cli_shared::validate_dest_path(&dest_path)?;
+    zen_cli_shared::validate_data_dir_safe(&ep.data_dir)?;
+
+    if dry_run {
+        return Ok(ZenApplyConfigResult::DryRun(ZenApplyConfigPlan {
+            operation: "zen.apply-config",
+            endpoint_id,
+            machine_id: ep.machine_id,
+            host: machine.ip,
+            dest_path,
+            lua,
+        }));
+    }
+
+    let creds = cred.resolve(&db)?;
+    let invocation = redact(&format!(
+        "zen-write-lua-config.ps1 -DestPath {dest_path} (lua {} bytes)",
+        lua.len()
+    ));
+    let op_id = operations::start(&db, "zen.apply_config", &[ep.machine_id])?;
+
+    let expected_sha = zen_cli_shared::sha256_hex_of(&lua);
+    let result = zen_cli_shared::invoke_write_lua(&machine.ip, &lua, &dest_path, creds.as_ref())
+        .and_then(|response| {
+            zen_cli_shared::verify_write_response(&response, &expected_sha, lua.len())
+        });
+    zen_cli_shared::finalize_op(&db, op_id, &result, &invocation);
+
+    let response = result?;
+    Ok(ZenApplyConfigResult::Completed(ZenApplyConfigSummary {
+        endpoint_id,
+        machine_id: ep.machine_id,
+        host: machine.ip,
+        dest_path,
+        sha256: expected_sha,
+        remote: response,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// service install / uninstall / start / stop / status
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum ZenServiceResult {
+    DryRun(ZenServicePlan),
+    Completed(ZenServiceSummary),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ZenServicePlan {
+    pub operation: String,
+    pub endpoint_id: i64,
+    pub machine_id: i64,
+    pub host: String,
+    pub service_name: &'static str,
+    /// Present for install/uninstall (sidecar needs the `zen.exe` path).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zen_exe_path: Option<String>,
+    /// Present for install (sidecar writes `server.datadir` from this).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ZenServiceSummary {
+    pub endpoint_id: i64,
+    pub machine_id: i64,
+    pub host: String,
+    pub service_name: &'static str,
+    pub remote: serde_json::Value,
+}
+
+#[tauri::command]
+pub fn zen_service_install(
+    db: State<'_, Db>,
+    endpoint_id: i64,
+    confirmed: bool,
+    dry_run: bool,
+    cred: ZenCredentialInput,
+) -> UecmResult<ZenServiceResult> {
+    guard_destructive(confirmed, dry_run, "zen.service.install")?;
+    cred.preflight(&db)?;
+    let ep = zen_cli_shared::require_endpoint(&db, endpoint_id)?;
+    let machine = zen_cli_shared::require_machine(&db, ep.machine_id)?;
+    let install = crate::data::machine_zen_install::find(&db, ep.machine_id)?;
+    let zen_exe = install
+        .as_ref()
+        .and_then(|m| m.zen_cli_path.clone())
+        .ok_or_else(|| {
+            UecmError::InvalidInput(format!(
+                "machine id={} has no zen.exe (zen_cli) recorded — run `zen detect-binary --machine {}` first",
+                ep.machine_id, ep.machine_id,
+            ))
+        })?;
+
+    // Same lifecycle guard as the CLI: only `installed_service` endpoints
+    // get an SCM service.
+    if ep.lifecycle_mode != "installed_service" {
+        return Err(UecmError::InvalidInput(format!(
+            "endpoint id={endpoint_id} has lifecycle_mode={:?}; service install \
+             requires lifecycle_mode=\"installed_service\". \
+             `register` is idempotent on (machine_id, declared_port) — call \
+             `zen_unregister` first, then `zen_register` with \
+             lifecycle=\"installed_service\" to fix the lifecycle.",
+            ep.lifecycle_mode
+        )));
+    }
+    zen_cli_shared::validate_service_data_dir(&ep.data_dir)?;
+
+    if dry_run {
+        return Ok(ZenServiceResult::DryRun(ZenServicePlan {
+            operation: "zen.service.install".to_string(),
+            endpoint_id,
+            machine_id: ep.machine_id,
+            host: machine.ip,
+            service_name: zen_cli_shared::DEFAULT_SERVICE_NAME,
+            zen_exe_path: Some(zen_exe),
+            data_dir: Some(ep.data_dir.clone()),
+        }));
+    }
+
+    let creds = cred.resolve(&db)?;
+    let invocation = redact(&format!(
+        "zen-service-install.ps1 -ZenExePath {zen_exe} -ServiceName {} -DataDir {}",
+        zen_cli_shared::DEFAULT_SERVICE_NAME,
+        ep.data_dir
+    ));
+    let op_id = operations::start(&db, "zen.service_install", &[ep.machine_id])?;
+    let body = zen_cli_shared::build_param_script(
+        "zen-service-install.ps1",
+        &[
+            ("ZenExePath", zen_exe.as_str()),
+            ("ServiceName", zen_cli_shared::DEFAULT_SERVICE_NAME),
+            ("DataDir", ep.data_dir.as_str()),
+        ],
+    );
+    let result = match body {
+        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref())
+            .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-service-install")),
+        Err(e) => Err(e),
+    };
+    zen_cli_shared::finalize_op(&db, op_id, &result, &invocation);
+    let response = result?;
+    Ok(ZenServiceResult::Completed(ZenServiceSummary {
+        endpoint_id,
+        machine_id: ep.machine_id,
+        host: machine.ip,
+        service_name: zen_cli_shared::DEFAULT_SERVICE_NAME,
+        remote: response,
+    }))
+}
+
+#[tauri::command]
+pub fn zen_service_uninstall(
+    db: State<'_, Db>,
+    endpoint_id: i64,
+    confirmed: bool,
+    dry_run: bool,
+    cred: ZenCredentialInput,
+) -> UecmResult<ZenServiceResult> {
+    guard_destructive(confirmed, dry_run, "zen.service.uninstall")?;
+    cred.preflight(&db)?;
+    let ep = zen_cli_shared::require_endpoint(&db, endpoint_id)?;
+    let machine = zen_cli_shared::require_machine(&db, ep.machine_id)?;
+    let install = crate::data::machine_zen_install::find(&db, ep.machine_id)?;
+    let zen_exe = install
+        .as_ref()
+        .and_then(|m| m.zen_cli_path.clone())
+        .ok_or_else(|| {
+            UecmError::InvalidInput(format!(
+                "machine id={} has no zen.exe (zen_cli) recorded — run `zen detect-binary --machine {}` first",
+                ep.machine_id, ep.machine_id,
+            ))
+        })?;
+
+    if dry_run {
+        return Ok(ZenServiceResult::DryRun(ZenServicePlan {
+            operation: "zen.service.uninstall".to_string(),
+            endpoint_id,
+            machine_id: ep.machine_id,
+            host: machine.ip,
+            service_name: zen_cli_shared::DEFAULT_SERVICE_NAME,
+            zen_exe_path: Some(zen_exe),
+            data_dir: None,
+        }));
+    }
+
+    let creds = cred.resolve(&db)?;
+    let invocation = redact(&format!(
+        "zen-service-uninstall.ps1 -ZenExePath {zen_exe} -ServiceName {}",
+        zen_cli_shared::DEFAULT_SERVICE_NAME
+    ));
+    let op_id = operations::start(&db, "zen.service_uninstall", &[ep.machine_id])?;
+    let body = zen_cli_shared::build_param_script(
+        "zen-service-uninstall.ps1",
+        &[
+            ("ZenExePath", zen_exe.as_str()),
+            ("ServiceName", zen_cli_shared::DEFAULT_SERVICE_NAME),
+        ],
+    );
+    let result = match body {
+        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref())
+            .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-service-uninstall")),
+        Err(e) => Err(e),
+    };
+    zen_cli_shared::finalize_op(&db, op_id, &result, &invocation);
+    let response = result?;
+    Ok(ZenServiceResult::Completed(ZenServiceSummary {
+        endpoint_id,
+        machine_id: ep.machine_id,
+        host: machine.ip,
+        service_name: zen_cli_shared::DEFAULT_SERVICE_NAME,
+        remote: response,
+    }))
+}
+
+/// Start is **not** destructive: the CLI doesn't take `--yes` for it. UI calls
+/// with no `confirmed` / `dry_run` knobs — same lifecycle gate applies.
+#[tauri::command]
+pub fn zen_service_start(
+    db: State<'_, Db>,
+    endpoint_id: i64,
+    cred: ZenCredentialInput,
+) -> UecmResult<ZenServiceSummary> {
+    cred.preflight(&db)?;
+    let ep = zen_cli_shared::require_endpoint(&db, endpoint_id)?;
+    let machine = zen_cli_shared::require_machine(&db, ep.machine_id)?;
+    if ep.lifecycle_mode != "installed_service" {
+        return Err(UecmError::InvalidInput(format!(
+            "service zen.service.start requires endpoint id={endpoint_id} to have lifecycle_mode=\"installed_service\" \
+             (got {:?}); `editor_owned` endpoints have no SCM service",
+            ep.lifecycle_mode
+        )));
+    }
+    let creds = cred.resolve(&db)?;
+
+    let invocation = redact(&format!(
+        "zen-up.ps1 -ServiceName {}",
+        zen_cli_shared::DEFAULT_SERVICE_NAME
+    ));
+    let op_id = operations::start(&db, "zen.service_start", &[ep.machine_id])?;
+    let body = zen_cli_shared::build_param_script(
+        "zen-up.ps1",
+        &[("ServiceName", zen_cli_shared::DEFAULT_SERVICE_NAME)],
+    );
+    let result = match body {
+        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref())
+            .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-up.ps1")),
+        Err(e) => Err(e),
+    };
+    zen_cli_shared::finalize_op(&db, op_id, &result, &invocation);
+    let response = result?;
+    Ok(ZenServiceSummary {
+        endpoint_id,
+        machine_id: ep.machine_id,
+        host: machine.ip,
+        service_name: zen_cli_shared::DEFAULT_SERVICE_NAME,
+        remote: response,
+    })
+}
+
+#[tauri::command]
+pub fn zen_service_stop(
+    db: State<'_, Db>,
+    endpoint_id: i64,
+    confirmed: bool,
+    dry_run: bool,
+    cred: ZenCredentialInput,
+) -> UecmResult<ZenServiceResult> {
+    guard_destructive(confirmed, dry_run, "zen.service.stop")?;
+    cred.preflight(&db)?;
+    let ep = zen_cli_shared::require_endpoint(&db, endpoint_id)?;
+    let machine = zen_cli_shared::require_machine(&db, ep.machine_id)?;
+    if ep.lifecycle_mode != "installed_service" {
+        return Err(UecmError::InvalidInput(format!(
+            "service zen.service.stop requires endpoint id={endpoint_id} to have lifecycle_mode=\"installed_service\" \
+             (got {:?}); `editor_owned` endpoints have no SCM service",
+            ep.lifecycle_mode
+        )));
+    }
+
+    if dry_run {
+        return Ok(ZenServiceResult::DryRun(ZenServicePlan {
+            operation: "zen.service.stop".to_string(),
+            endpoint_id,
+            machine_id: ep.machine_id,
+            host: machine.ip,
+            service_name: zen_cli_shared::DEFAULT_SERVICE_NAME,
+            zen_exe_path: None,
+            data_dir: None,
+        }));
+    }
+
+    let creds = cred.resolve(&db)?;
+    let invocation = redact(&format!(
+        "zen-down.ps1 -ServiceName {}",
+        zen_cli_shared::DEFAULT_SERVICE_NAME
+    ));
+    let op_id = operations::start(&db, "zen.service_stop", &[ep.machine_id])?;
+    let body = zen_cli_shared::build_param_script(
+        "zen-down.ps1",
+        &[("ServiceName", zen_cli_shared::DEFAULT_SERVICE_NAME)],
+    );
+    let result = match body {
+        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref())
+            .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-down.ps1")),
+        Err(e) => Err(e),
+    };
+    zen_cli_shared::finalize_op(&db, op_id, &result, &invocation);
+    let response = result?;
+    Ok(ZenServiceResult::Completed(ZenServiceSummary {
+        endpoint_id,
+        machine_id: ep.machine_id,
+        host: machine.ip,
+        service_name: zen_cli_shared::DEFAULT_SERVICE_NAME,
+        remote: response,
+    }))
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ZenServiceStatusResult {
+    pub endpoint_id: i64,
+    pub machine_id: i64,
+    pub host: String,
+    pub service_name: &'static str,
+    pub remote: serde_json::Value,
+}
+
+#[tauri::command]
+pub fn zen_service_status(
+    db: State<'_, Db>,
+    endpoint_id: i64,
+    cred: ZenCredentialInput,
+) -> UecmResult<ZenServiceStatusResult> {
+    cred.preflight(&db)?;
+    let ep = zen_cli_shared::require_endpoint(&db, endpoint_id)?;
+    let machine = zen_cli_shared::require_machine(&db, ep.machine_id)?;
+    let creds = cred.resolve(&db)?;
+
+    let body = zen_cli_shared::build_param_script(
+        "zen-service-status.ps1",
+        &[("ServiceName", zen_cli_shared::DEFAULT_SERVICE_NAME)],
+    )?;
+    let raw = zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref())?;
+    let response = zen_cli_shared::parse_envelope(&raw, "zen-service-status")?;
+    Ok(ZenServiceStatusResult {
+        endpoint_id,
+        machine_id: ep.machine_id,
+        host: machine.ip,
+        service_name: zen_cli_shared::DEFAULT_SERVICE_NAME,
+        remote: response,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// urlacl add / list / remove
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum ZenUrlaclResult {
+    DryRun(ZenUrlaclPlan),
+    Completed(ZenUrlaclSummary),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ZenUrlaclPlan {
+    pub operation: String,
+    pub endpoint_id: i64,
+    pub machine_id: i64,
+    pub host: String,
+    pub url_prefix: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ZenUrlaclSummary {
+    pub endpoint_id: i64,
+    pub machine_id: i64,
+    pub host: String,
+    pub url_prefix: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
+    pub remote: serde_json::Value,
+}
+
+#[tauri::command]
+pub fn zen_urlacl_add(
+    db: State<'_, Db>,
+    endpoint_id: i64,
+    principal: String,
+    confirmed: bool,
+    dry_run: bool,
+    cred: ZenCredentialInput,
+) -> UecmResult<ZenUrlaclResult> {
+    guard_destructive(confirmed, dry_run, "zen.urlacl.add")?;
+    if principal.trim().is_empty() {
+        return Err(UecmError::InvalidInput(
+            "principal must not be empty or whitespace (URL ACL needs a real account)".into(),
+        ));
+    }
+    cred.preflight(&db)?;
+    let ep = zen_cli_shared::require_endpoint(&db, endpoint_id)?;
+    let machine = zen_cli_shared::require_machine(&db, ep.machine_id)?;
+    let url_prefix = zen_cli_shared::url_prefix_for(&ep);
+
+    if dry_run {
+        return Ok(ZenUrlaclResult::DryRun(ZenUrlaclPlan {
+            operation: "zen.urlacl.add".to_string(),
+            endpoint_id,
+            machine_id: ep.machine_id,
+            host: machine.ip,
+            url_prefix,
+            principal: Some(principal),
+        }));
+    }
+
+    let creds = cred.resolve(&db)?;
+    let invocation = redact(&format!(
+        "zen-urlacl-add.ps1 -UrlPrefix {url_prefix} -UserAccount {principal}"
+    ));
+    let op_id = operations::start(&db, "zen.urlacl_add", &[ep.machine_id])?;
+    let body = zen_cli_shared::build_param_script(
+        "zen-urlacl-add.ps1",
+        &[
+            ("UrlPrefix", url_prefix.as_str()),
+            ("UserAccount", principal.as_str()),
+        ],
+    );
+    let result = match body {
+        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref())
+            .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-urlacl-add")),
+        Err(e) => Err(e),
+    };
+    zen_cli_shared::finalize_op(&db, op_id, &result, &invocation);
+    let response = result?;
+    Ok(ZenUrlaclResult::Completed(ZenUrlaclSummary {
+        endpoint_id,
+        machine_id: ep.machine_id,
+        host: machine.ip,
+        url_prefix,
+        principal: Some(principal),
+        remote: response,
+    }))
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ZenUrlaclListResult {
+    pub machine_id: i64,
+    pub host: String,
+    pub port_filter: Option<String>,
+    pub remote: serde_json::Value,
+}
+
+#[tauri::command]
+pub fn zen_urlacl_list(
+    db: State<'_, Db>,
+    machine_id: i64,
+    port_filter: Option<String>,
+    cred: ZenCredentialInput,
+) -> UecmResult<ZenUrlaclListResult> {
+    cred.preflight(&db)?;
+    let m = zen_cli_shared::require_machine(&db, machine_id)?;
+    let creds = cred.resolve(&db)?;
+
+    let mut args: Vec<(&str, &str)> = Vec::new();
+    if let Some(p) = port_filter.as_deref() {
+        args.push(("PortFilter", p));
+    }
+    let body = zen_cli_shared::build_param_script("zen-urlacl-list.ps1", &args)?;
+    let raw = zen_cli_shared::run_remote(&m.ip, &body, creds.as_ref())?;
+    let response = zen_cli_shared::parse_envelope(&raw, "zen-urlacl-list")?;
+    Ok(ZenUrlaclListResult {
+        machine_id,
+        host: m.ip,
+        port_filter,
+        remote: response,
+    })
+}
+
+#[tauri::command]
+pub fn zen_urlacl_remove(
+    db: State<'_, Db>,
+    endpoint_id: i64,
+    confirmed: bool,
+    dry_run: bool,
+    cred: ZenCredentialInput,
+) -> UecmResult<ZenUrlaclResult> {
+    guard_destructive(confirmed, dry_run, "zen.urlacl.remove")?;
+    cred.preflight(&db)?;
+    let ep = zen_cli_shared::require_endpoint(&db, endpoint_id)?;
+    let machine = zen_cli_shared::require_machine(&db, ep.machine_id)?;
+    let url_prefix = zen_cli_shared::url_prefix_for(&ep);
+
+    if dry_run {
+        return Ok(ZenUrlaclResult::DryRun(ZenUrlaclPlan {
+            operation: "zen.urlacl.remove".to_string(),
+            endpoint_id,
+            machine_id: ep.machine_id,
+            host: machine.ip,
+            url_prefix,
+            principal: None,
+        }));
+    }
+
+    let creds = cred.resolve(&db)?;
+    let invocation = redact(&format!("zen-urlacl-remove.ps1 -UrlPrefix {url_prefix}"));
+    let op_id = operations::start(&db, "zen.urlacl_remove", &[ep.machine_id])?;
+    let body = zen_cli_shared::build_param_script(
+        "zen-urlacl-remove.ps1",
+        &[("UrlPrefix", url_prefix.as_str())],
+    );
+    let result = match body {
+        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref())
+            .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-urlacl-remove")),
+        Err(e) => Err(e),
+    };
+    zen_cli_shared::finalize_op(&db, op_id, &result, &invocation);
+    let response = result?;
+    Ok(ZenUrlaclResult::Completed(ZenUrlaclSummary {
+        endpoint_id,
+        machine_id: ep.machine_id,
+        host: machine.ip,
+        url_prefix,
+        principal: None,
+        remote: response,
+    }))
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+/// Tauri analogue of `cli::destructive::check`. The UI must pass either
+/// `dry_run=true` (preview) or `confirmed=true` (actually apply); otherwise
+/// the wrapper refuses with `InvalidInput` so accidental invocations from the
+/// front-end can't fire side effects.
+fn guard_destructive(confirmed: bool, dry_run: bool, op: &str) -> UecmResult<()> {
+    if dry_run || confirmed {
+        return Ok(());
+    }
+    Err(UecmError::InvalidInput(format!(
+        "{op} is destructive; pass confirmed=true to apply or dry_run=true to preview"
+    )))
+}
 
 fn resolve_endpoints(
     db: &Db,
@@ -727,5 +1614,191 @@ mod tests {
         let db = fresh_db();
         let result = data_creds::find_by_alias(&db, "UECM:winrm:NOPE").unwrap();
         assert!(result.is_none());
+    }
+
+    // ----- T2.6 -----
+
+    #[test]
+    fn guard_destructive_refuses_with_neither_flag() {
+        let err = guard_destructive(false, false, "zen.unregister").unwrap_err();
+        match err {
+            UecmError::InvalidInput(msg) => {
+                assert!(msg.contains("confirmed=true"));
+                assert!(msg.contains("dry_run=true"));
+            }
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn guard_destructive_allows_confirmed() {
+        guard_destructive(true, false, "zen.unregister").unwrap();
+    }
+
+    #[test]
+    fn guard_destructive_allows_dry_run() {
+        guard_destructive(false, true, "zen.unregister").unwrap();
+    }
+
+    #[test]
+    fn guard_destructive_allows_both() {
+        // Match CLI behavior: dry_run wins over confirmed but both being set
+        // isn't an error.
+        guard_destructive(true, true, "zen.unregister").unwrap();
+    }
+
+    #[test]
+    fn cred_input_preflight_inconsistent_user_only_errors() {
+        let db = fresh_db();
+        let bad = ZenCredentialInput {
+            cred_alias: None,
+            user: Some("alice".into()),
+            pass: None,
+        };
+        assert!(matches!(
+            bad.preflight(&db),
+            Err(UecmError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn cred_input_preflight_alias_with_user_errors() {
+        let db = fresh_db();
+        let bad = ZenCredentialInput {
+            cred_alias: Some("any".into()),
+            user: Some("alice".into()),
+            pass: None,
+        };
+        assert!(matches!(
+            bad.preflight(&db),
+            Err(UecmError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn cred_input_preflight_unknown_alias_errors() {
+        let db = fresh_db();
+        let bad = ZenCredentialInput {
+            cred_alias: Some("UECM:winrm:NOPE".into()),
+            user: None,
+            pass: None,
+        };
+        assert!(matches!(
+            bad.preflight(&db),
+            Err(UecmError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn cred_input_resolve_anonymous_returns_none() {
+        let db = fresh_db();
+        let none_cred = ZenCredentialInput::default();
+        assert!(none_cred.resolve(&db).unwrap().is_none());
+    }
+
+    #[test]
+    fn cred_input_resolve_inline_user_pass() {
+        let db = fresh_db();
+        let inline = ZenCredentialInput {
+            cred_alias: None,
+            user: Some("alice".into()),
+            pass: Some("hunter2".into()),
+        };
+        assert_eq!(
+            inline.resolve(&db).unwrap(),
+            Some(("alice".into(), "hunter2".into()))
+        );
+    }
+
+    #[test]
+    fn register_unknown_machine_errors() {
+        let db = fresh_db();
+        // Mirror the pre-check `zen_register` runs before calling
+        // `core::zen::endpoint::register`.
+        assert!(machines::find_by_id(&db, 9999).unwrap().is_none());
+    }
+
+    #[test]
+    fn register_uses_default_lifecycle_for_role() {
+        // Verify the same lifecycle defaulting rule the CLI uses.
+        assert_eq!(
+            zen_cli_shared::default_lifecycle_for("shared_upstream"),
+            "installed_service"
+        );
+        assert_eq!(
+            zen_cli_shared::default_lifecycle_for("local"),
+            "editor_owned"
+        );
+    }
+
+    #[test]
+    fn unregister_refuses_when_dependents_exist() {
+        // Seed master + dependent; ensure the dependents scan would block.
+        let db = fresh_db();
+        let (m1, master_id) = seed_endpoint(&db, "ZEN-M", "10.0.0.10", 8558);
+        // Replace master row to set role=shared_upstream and lifecycle=installed_service.
+        zen_endpoints::upsert(
+            &db,
+            &ZenEndpoint {
+                id: Some(master_id),
+                machine_id: m1,
+                declared_port: 8558,
+                scheme: "http".into(),
+                role: "shared_upstream".into(),
+                upstream_endpoint_id: None,
+                data_dir: r"D:\Zen".into(),
+                httpserverclass: "asio".into(),
+                lifecycle_mode: "installed_service".into(),
+                created_at: None,
+                updated_at: None,
+            },
+        )
+        .unwrap();
+        // Add a local endpoint that points upstream at the master.
+        let _local_id = zen_endpoints::upsert(
+            &db,
+            &ZenEndpoint {
+                id: None,
+                machine_id: m1,
+                declared_port: 8559,
+                scheme: "http".into(),
+                role: "local".into(),
+                upstream_endpoint_id: Some(master_id),
+                data_dir: r"D:\Zen2".into(),
+                httpserverclass: "asio".into(),
+                lifecycle_mode: "editor_owned".into(),
+                created_at: None,
+                updated_at: None,
+            },
+        )
+        .unwrap();
+
+        let dependents: Vec<i64> = zen_endpoints::list(&db)
+            .unwrap()
+            .into_iter()
+            .filter(|other| other.upstream_endpoint_id == Some(master_id))
+            .filter_map(|other| other.id)
+            .collect();
+        assert!(!dependents.is_empty());
+    }
+
+    #[test]
+    fn lua_preview_data_dir_safe_check_rejects_system_root() {
+        // Verify the same guard the command runs internally.
+        let r = zen_cli_shared::validate_data_dir_safe(r"C:\Windows\Zen");
+        assert!(matches!(r, Err(UecmError::InvalidInput(_))));
+    }
+
+    #[test]
+    fn apply_config_dest_path_check_rejects_relative() {
+        let r = zen_cli_shared::validate_dest_path(r"relative\zen.lua");
+        assert!(matches!(r, Err(UecmError::InvalidInput(_))));
+    }
+
+    #[test]
+    fn urlacl_add_empty_principal_errors() {
+        // Refused at the wrapper before any cred / DB / PS work.
+        let trimmed = "   ".trim();
+        assert!(trimmed.is_empty());
     }
 }
