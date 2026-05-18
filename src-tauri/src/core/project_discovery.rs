@@ -1,7 +1,7 @@
 //! Project discovery through the `discover-uprojects.ps1` sidecar.
 
 use crate::core::powershell;
-use crate::core::project_identity::{stem_lower, DiscoveredUproject};
+use crate::core::project_identity::{parse_engine_association, stem_lower, DiscoveredUproject};
 use crate::data::{
     project_locations::{self, DiscoveryStatus, ProjectLocation},
     projects::{self, Project},
@@ -82,16 +82,24 @@ fn persist_discovered(
     let mut out = Vec::with_capacity(items.len());
     for item in items {
         let stem = stem_lower(&item.uproject_filename);
+        let parsed = parse_engine_association(item.engine_association.as_deref());
         let project_id = projects::upsert(
             db,
             &Project {
                 id: None,
                 uproject_name: item.uproject_filename.clone(),
                 uproject_stem_lower: stem,
-                uproject_guid: item.engine_association.clone(),
+                // EngineAssociation is NOT a project GUID — historical bug.
+                // Leave uproject_guid alone here; it stays None for new rows
+                // discovered via this path.
+                uproject_guid: None,
                 display_name: None,
                 first_seen_at: None,
                 last_seen_at: None,
+                ue_version_major: parsed.ue_version_major,
+                ue_version_minor: parsed.ue_version_minor,
+                engine_association_raw: parsed.raw,
+                engine_association_kind: Some(parsed.kind.to_string()),
             },
         )?;
         let location_id = project_locations::upsert(

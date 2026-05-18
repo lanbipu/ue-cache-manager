@@ -227,6 +227,15 @@ const MIGRATIONS: &[(&str, &str)] = &[
         CREATE INDEX IF NOT EXISTS idx_pso_distributions_file ON pso_distributions(pso_cache_file_id);
         "#,
     ),
+    (
+        "013_projects_zen_engine_association",
+        r#"
+        ALTER TABLE projects ADD COLUMN ue_version_major INTEGER;
+        ALTER TABLE projects ADD COLUMN ue_version_minor INTEGER;
+        ALTER TABLE projects ADD COLUMN engine_association_raw TEXT;
+        ALTER TABLE projects ADD COLUMN engine_association_kind TEXT;
+        "#,
+    ),
 ];
 
 pub fn migrate(conn: &mut Connection) -> UecmResult<()> {
