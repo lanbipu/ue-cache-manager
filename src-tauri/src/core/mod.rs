@@ -8,6 +8,7 @@ pub mod gpu_consistency;
 pub mod health_check;
 pub mod health_probes;
 pub mod ini_apply;
+pub mod ini_backend_graph;
 pub mod ini_diagnostics;
 pub mod ini_editor;
 pub mod ini_scanner;
