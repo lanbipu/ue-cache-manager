@@ -14,7 +14,9 @@ use std::collections::HashMap;
 
 pub fn handle(ctx: &mut Ctx<'_>, action: HealthAction) -> UecmResult<()> {
     match action {
-        HealthAction::Run { machine_ids, cred } => run(ctx, &machine_ids, &cred),
+        HealthAction::Run { machine_ids, expected_local_path, expected_shared_path, cred } => {
+            run(ctx, &machine_ids, &expected_local_path, &expected_shared_path, &cred)
+        }
         HealthAction::Runs { limit } => list_runs(ctx, limit),
         HealthAction::Results { scan_run_id } => list_results(ctx, scan_run_id),
         HealthAction::ConsistencyCheck { hosts, cred } => {
@@ -83,7 +85,13 @@ pub fn handle(ctx: &mut Ctx<'_>, action: HealthAction) -> UecmResult<()> {
     }
 }
 
-fn run(ctx: &mut Ctx<'_>, machine_ids: &[i64], cred: &CredentialArgs) -> UecmResult<()> {
+fn run(
+    ctx: &mut Ctx<'_>,
+    machine_ids: &[i64],
+    expected_local_path: &str,
+    expected_shared_path: &str,
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
     let db = ctx.require_db()?.clone();
 
     // Resolve credentials first (needs DB for alias lookup).
@@ -168,8 +176,8 @@ fn run(ctx: &mut Ctx<'_>, machine_ids: &[i64], cred: &CredentialArgs) -> UecmRes
             &machine.ip,
             &cluster_share_unc,
             &cluster_svc_username,
-            &cluster_share_unc,
-            "",
+            expected_shared_path,
+            expected_local_path,
             cred_opt,
         ) {
             Ok(map) => map,

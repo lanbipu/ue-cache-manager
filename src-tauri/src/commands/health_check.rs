@@ -38,6 +38,14 @@ pub struct RunHealthCheckRequest {
     pub machine_ids: Vec<i64>,
     pub credential_alias: String,
     pub project_paths: Vec<String>,
+    /// Expected value for UE-LocalDataCachePath.  When `None` or empty string,
+    /// the env_local probe only checks that the variable is set (presence-only).
+    #[serde(default)]
+    pub expected_local_path: Option<String>,
+    /// Expected value for UE-SharedDataCachePath.  Same semantics as
+    /// `expected_local_path`.
+    #[serde(default)]
+    pub expected_shared_path: Option<String>,
 }
 
 #[tauri::command]
@@ -48,6 +56,8 @@ pub fn run_health_check(
 ) -> UecmResult<HealthRunSummary> {
     let machine_ids = request.machine_ids;
     let credential_alias = request.credential_alias;
+    let expected_local_path = request.expected_local_path.unwrap_or_default();
+    let expected_shared_path = request.expected_shared_path.unwrap_or_default();
     let project_paths_per_machine: HashMap<i64, Vec<String>> = machine_ids
         .iter()
         .map(|machine_id| (*machine_id, request.project_paths.clone()))
@@ -104,8 +114,20 @@ pub fn run_health_check(
         let svc_username = cluster_svc_username.clone();
         let expected_shared = share_unc.clone();
 
+        // Use operator-supplied expected paths when provided; fall back to the
+        // cluster share UNC for env_shared (existing behaviour) and empty string
+        // for env_local (presence-only check).
+        let eff_expected_shared = if expected_shared_path.is_empty() {
+            expected_shared.as_str()
+        } else {
+            expected_shared_path.as_str()
+        };
         let probes = match health_probes::run(
-            &machine.ip, &share_unc, &svc_username, &expected_shared, "",
+            &machine.ip,
+            &share_unc,
+            &svc_username,
+            eff_expected_shared,
+            &expected_local_path,
             Some((&cred_row.username, &password)),
         ) {
             Ok(map) => map,

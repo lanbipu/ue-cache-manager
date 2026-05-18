@@ -550,6 +550,16 @@ pub enum HealthAction {
     Run {
         #[arg(long, value_name = "M1,M2,...", value_delimiter = ',')]
         machine_ids: Vec<i64>,
+        /// Expected value for UE-LocalDataCachePath env var on each machine.
+        /// When supplied, the env_local probe does an exact-match comparison
+        /// instead of a presence-only check.  Leave unset to keep the old
+        /// behaviour (presence only).
+        #[arg(long, default_value = "")]
+        expected_local_path: String,
+        /// Expected value for UE-SharedDataCachePath env var on each machine.
+        /// Same semantics as --expected-local-path.
+        #[arg(long, default_value = "")]
+        expected_shared_path: String,
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
@@ -970,6 +980,45 @@ mod tests {
         match cli.command {
             Domain::Ini { action: IniAction::GcResume { unused_file_age, .. } } => {
                 assert_eq!(unused_file_age, 30);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_health_run_with_expected_paths() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "health", "run",
+            "--machine-ids", "1,2",
+            "--expected-local-path", r"D:\UE-DDC-Local",
+            "--expected-shared-path", r"\\NAS\DDC",
+            "--cred-alias", "admin",
+        ])
+        .unwrap();
+        match cli.command {
+            Domain::Health {
+                action: HealthAction::Run { expected_local_path, expected_shared_path, .. },
+            } => {
+                assert_eq!(expected_local_path, r"D:\UE-DDC-Local");
+                assert_eq!(expected_shared_path, r"\\NAS\DDC");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_health_run_without_expected_paths_defaults_to_empty() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "health", "run",
+            "--machine-ids", "1",
+        ])
+        .unwrap();
+        match cli.command {
+            Domain::Health {
+                action: HealthAction::Run { expected_local_path, expected_shared_path, .. },
+            } => {
+                assert_eq!(expected_local_path, "");
+                assert_eq!(expected_shared_path, "");
             }
             _ => panic!("wrong variant"),
         }
