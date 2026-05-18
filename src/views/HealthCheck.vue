@@ -74,6 +74,33 @@ const selectedDetail = computed(() => {
   const machine = machines.machines.find((m) => m.id === selected.value?.machineId);
   return { def, outcome, machine };
 });
+
+const LAYER_ORDER = ["l1_port", "l2_bootstrap", "l3_business"] as const;
+const LAYER_FALLBACK: Record<(typeof LAYER_ORDER)[number], string> = {
+  l1_port: "L1 - Port reachability",
+  l2_bootstrap: "L2 - Bootstrap configuration",
+  l3_business: "L3 - Business workflow",
+};
+
+function layerLabel(layer: (typeof LAYER_ORDER)[number]): string {
+  const key = `healthCheck.layer.${layer}`;
+  const translated = t(key);
+  return translated === key ? LAYER_FALLBACK[layer] : translated;
+}
+
+function toneFor(status: string): "healthy" | "warning" | "critical" | "offline" | "unknown" | "na" {
+  switch (status) {
+    case "healthy":
+    case "warning":
+    case "critical":
+    case "offline":
+    case "unknown":
+    case "na":
+      return status;
+    default:
+      return "unknown";
+  }
+}
 </script>
 
 <template>
@@ -128,7 +155,50 @@ const selectedDetail = computed(() => {
         <p class="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">{{ t("healthCheck.emptyHint") }}</p>
       </div>
     </section>
-    <section v-else class="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[3fr_2fr]">
+    <section v-else class="min-h-0 flex-1">
+      <div data-health-layers class="space-y-6 border-b p-6">
+        <div v-for="machine in machines.machines.filter((m) => m.id != null)" :key="`layered-${machine.id}`" class="space-y-2">
+          <header class="flex items-baseline gap-2">
+            <h3 class="font-display text-sm font-extrabold">{{ machine.hostname }}</h3>
+            <span class="font-mono text-xs text-muted-foreground">{{ machine.ip }}</span>
+          </header>
+          <template v-for="layer in LAYER_ORDER" :key="`${machine.id}-${layer}`">
+            <section class="mt-4">
+              <h4 class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                {{ layerLabel(layer) }}
+              </h4>
+              <table class="w-full text-sm">
+                <tbody>
+                  <template
+                    v-for="probe in health.probesByLayer[machine.id as number]?.[layer] ?? []"
+                    :key="probe.key"
+                  >
+                    <tr class="border-t border-border" :data-probe-key="probe.key">
+                      <td class="px-2 py-1 font-mono text-xs text-muted-foreground">{{ probe.key }}</td>
+                      <td class="px-2 py-1">
+                        <UecmStatusBadge :tone="toneFor(probe.outcome.status)" :label="probe.outcome.status" />
+                      </td>
+                      <td class="px-2 py-1 text-foreground">{{ probe.outcome.message }}</td>
+                    </tr>
+                    <tr
+                      v-if="probe.outcome.remediation && (probe.outcome.status === 'critical' || probe.outcome.status === 'warning')"
+                      class="border-t border-border/50"
+                      :data-probe-remediation="probe.key"
+                    >
+                      <td></td>
+                      <td colspan="2" class="px-2 py-1 text-xs text-muted-foreground">
+                        <UecmIcon name="wrench" class="mr-1 inline" />
+                        {{ probe.outcome.remediation }}
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </section>
+          </template>
+        </div>
+      </div>
+      <div class="grid min-h-0 grid-cols-1 lg:grid-cols-[3fr_2fr]">
       <HealthMatrix class="border-r" :machines="machines.machines" :rows-by-machine="health.rowsByMachine" :selected-machine-id="selected?.machineId ?? null" :selected-check-id="selected?.checkId ?? null" @select="selected = $event" />
       <aside data-health-detail class="overflow-y-auto p-6">
         <p v-if="!selectedDetail" class="text-sm text-muted-foreground">{{ t("healthCheck.selectCellHint") }}</p>
@@ -174,6 +244,7 @@ const selectedDetail = computed(() => {
           <pre class="rounded-md border bg-card p-3 font-mono text-xs text-muted-foreground whitespace-pre-wrap">{{ selectedDetail.outcome?.message ?? t("healthCheck.noProbeOutput") }}</pre>
         </div>
       </aside>
+      </div>
     </section>
 
     <section data-health-gpu-section class="space-y-2 border-t p-6">
