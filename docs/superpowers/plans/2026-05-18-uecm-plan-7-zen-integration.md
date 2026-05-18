@@ -415,32 +415,32 @@ zen_ini:
   #   (1) 配置 ZenShared 指向 cluster master endpoint（让 render node 走集群共享 cache）
   #   (2) 关闭 legacy SMB+Pak 配置（避免双路径冲突）
   rules:
+    # NOTE: section name is bare (no brackets) — core::ini_editor wraps it
+    # via format!("[{}]", section). See docs/research/zen-ini-rules.yaml.
     enable_zen_shared:
       ini_file: DefaultEngine.ini
-      # ⚠ 实际 section/key/value_template 待 M0 ZenShared 定向 fact-find 后填入。
-      # 候选位置见 docs/research/zen-launch-mechanism.md §6.3。
-      # 候选 A (沿用 InstalledDerivedDataBackendGraph 风格):
-      section: "[InstalledDerivedDataBackendGraph]"
+      section: InstalledDerivedDataBackendGraph
       key: ZenShared
-      value_template: "(Type=Zen, Host=\"{host}\", Port={port}, Namespace=\"ue.ddc\")"
+      value_template: '(Type=Zen, Host="{host}", Port={port}, Namespace="{namespace}")'
       backup: true
-      # 候选 B (UE 5.4+ 新 hierarchy):
-      # section: "[/Script/Engine.DerivedDataCacheSettings]"
-      # key: ZenShared.Host
-      # value_template: "{host}"
-      # 两个候选都要 M0 实测确认。
+      # T0.5 verified on UE 5.7.4 (lanPC sandbox 2026-05-18) — see
+      # docs/research/zen-launch-mechanism.md §8.1 for log proof.
     disable_legacy_smb_shared:
       ini_file: DefaultEngine.ini
-      section: "[InstalledDerivedDataBackendGraph]"
+      section: InstalledDerivedDataBackendGraph
       key: Shared
-      # remove 操作：删整行，或注释掉
       action: remove
       backup: true
-      # env var UE-SharedDataCachePath 也需清理（user-level，PS 脚本处理）
+      # Clear env var in BOTH scopes — UECM's setx-machine.ps1 + health-probes.ps1
+      # use Machine scope; operator-set setx (no /M) writes User scope. Clearing
+      # only one leaves SMB path reactivated.
+      env_cleanup:
+        - var: UE-SharedDataCachePath
+          scopes: [machine, user]
     disable_legacy_pak:
       ini_file: DefaultEngine.ini
-      section: "[InstalledDerivedDataBackendGraph]"
-      key: "Pak,CompressedPak"
+      section: InstalledDerivedDataBackendGraph
+      keys: [Pak, CompressedPak]   # exact-match removal — each backend entry listed separately
       action: remove
       backup: true
 
@@ -577,7 +577,7 @@ uecm-cli health run --json
 - [ ] T4.1 INI Scanner 加 R012–R018，从 YAML 读规则（不 hardcode）。v4: R012-R014 改成 ZenShared 视角，R016/R018 接 install 路径表
 - [ ] T4.2 Health Check 加 4 行：`zen_reachable` / `zen_version_consistent` / `zen_binary_intact` / `zen_cache_provider_ready`。v4: `zen_version_consistent` 比对 `machine_zen_install.zenserver_build_version`（不是 UE major/minor）
 - [ ] T4.3 R016 binary_intact 接 `zen_binary_expected (zen_build_version, binary_kind)` 表；比对 install 路径 sha256；不一致告警优先于匹配。InTree 漂移仅日志不告警
-- [ ] T4.4 `core::zen::verify` 实现：在 fixture 工程上跑 enable → 起 editor → 抓启动日志确认 `ZenShared: Using ZenServer HTTP service at <host>:<port> status: OK!` 出现 → 探测 cluster master /stats/z$ 命中率 > 0
+- [ ] T4.4 `core::zen::verify` 实现：在 fixture 工程上跑 enable → 起 editor headless → 抓启动日志确认 `ZenShared: Using ZenServer HTTP service at <host>:<port> status: OK!` 出现 → 探测 cluster master /stats/z$ 命中率 > 0。**v4 T0.5 实测发现**：`UnrealEditor.exe -Unattended -Quit` 不立即退出（卡在 asset registry / Python plugin / Pak mount 等步骤 >3 分钟），所以 verify 实现必须用流式 stdout 监控 + 命中 ZenShared 日志后立即 kill editor，或者用 `UnrealEditor-Cmd.exe -run=<commandlet>` 跑会主动退出的 commandlet
 - [ ] T4.5 CLI: `zen verify-rules --ue-version X --ue-install PATH [--write-verified]`
 - [ ] T4.6 PS 脚本：`zen-verify-rules.ps1`
 - [ ] T4.7 验收：健康检查识别"集群 zen 版本不一致"、"zen.exe 被 UE 升级覆盖"；`verify-rules` 在 fixture 工程上跑通
@@ -631,7 +631,7 @@ uecm-cli health run --json
 | service install --full 误用 | PS 脚本 hard-block `--full`；CLI 不暴露这个 flag |
 | 拍摄现场断网 upstream zen 不可达 | 本机 zen 仍可用；Health Check 用降级状态而非 CRITICAL |
 | UECM crash 时未完成 enable | `operations.status='running'` 超 1 小时自动标 `interrupted`，UI 提示重跑 |
-| 多 editor 同启 zen 抢锁 | zen 本身 sponsor 机制处理 |
+| 多 editor 同启 zen — **抢占而非共享**（v4 T0.5 实测修订）| 后启的 editor 会 shutdown 前一个 zen + 以自己为 owner 重启；老 editor 失去 sponsor 但 lazy 重连。**集群 master 必须用 `zen service install` (installed_service)，避免被 editor 抢占**。`zen enable` dry-run 应警告 operator 不要在同机跑第二个 editor sponsor |
 | secret 泄露 | §12 红线 + `zen/redaction.rs` |
 | UE 新主版本 ZenShared 配置形态变了 | YAML `overrides` 加 entry；`unverified_policy=refuse` 兜底 |
 | zen 升级后 CB 格式 incompat | mini-parser fixture 加新版本样本；schema_version bump；旧版 raw_cb 保留可读 |

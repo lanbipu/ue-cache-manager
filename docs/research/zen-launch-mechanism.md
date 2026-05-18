@@ -313,16 +313,74 @@ ZenShared.Port=8558
 | §11 风险 "UE 升级覆盖 zen.exe" | 对策改为「监测 install 路径 sha256 漂移；InTree 漂移仅作信息」 |
 | §12 Red Line #6 "禁动 zen.exe / zenserver.exe" | 措辞改为「禁动 InTree 和 install 路径下的 zen binary —— UECM 仅监测不修复 hash 不一致」 |
 
-## 8. 待办的 ZenShared 定向 fact-find
+## 8. T0.5 ZenShared 定向 fact-find — 结果
 
-M0 收尾前还需做一次小型实测确认 ZenShared 启用 INI 形态（plan §6 yaml 内容生成的依据）：
+2026-05-18 在 lanPC sandbox `E:\Sandbox\uecm_t05_zen_shared`（从 UE 5.7 自带 `TP_BlankBP` 复制改名）跑完，结论如下：
 
-1. 在 lanPC 上手工配 `test_0311` 的 DefaultEngine.ini 加 ZenShared upstream 指向自己（`http://127.0.0.1:8558` 走自己 local zen 作 shared 上游 — 自环但能验配置形态）；
-2. 重启 UE editor，抓 log 看 ZenShared 加载行；
-3. 确认 INI section + key + value 真实写法；
-4. 写入 `docs/research/zen-ini-rules.yaml` 作为 T0.5 deliverable。
+### 8.1 候选 A 一击中
 
-这一步需要 user 在 lanPC 桌面前手工创建空工程（如果不想动 test_0311）+ 改 INI + 重启 editor。准备好后我把 PS 脚本 + 检查清单发出去。
+在 sandbox 工程的 `DefaultEngine.ini` 末尾追加：
+
+```ini
+[InstalledDerivedDataBackendGraph]
+ZenShared=(Type=Zen, Host="127.0.0.1", Port=8558, Namespace="ue.ddc")
+```
+
+启 UE 5.7.4 editor headless 模式（`-Unattended -NoSplash -NoSound -nullrhi -Quit -log`），日志直接出现成功证据：
+
+```
+[10:18:05] LogDerivedDataCache: Display: ZenShared: Using ZenServer HTTP service at 127.0.0.1 with namespace ue.ddc status: OK!.
+```
+
+对比 test_0311（无 ZenShared 配置）的日志：
+
+```
+LogDerivedDataCache: ZenShared: Disabled because Host is set to 'None'
+```
+
+**候选 A 的 section/key/value_template 是 5.7.4 的正确写法**，已落 `docs/research/zen-ini-rules.yaml` 作为 verified rule。候选 B（`[/Script/Engine.DerivedDataCacheSettings]` section）不需要尝试。
+
+### 8.2 意外发现：多 editor 启动 zen 是「抢占」不是「共享」
+
+T0.5 sandbox 启动时同时被监测到：
+
+```
+[10:18:03] LogZenServiceInstance: Warning: Found locked valid lock file 'F:/Epic/DDC/Zen/.lock' but can't find registered process (Pid: 31792), will attempt shut down
+[10:18:03] LogZenServiceInstance: Warning: Found locked but invalid lock file at 'F:/Epic/DDC/Zen/.lock', attempting shut down of zenserver process with pid 31792
+[10:18:03] LogZenServiceInstance: Display: Attempting termination of zenserver process with pid 31792
+[10:18:03] LogZenServiceInstance: Display: Successfully shut down zenserver process with pid 31792
+[10:18:03] LogZenServiceInstance: Display: Launching executable '...\Common\Zen\Install\zenserver.exe', ... --owner-pid 38024 --child-id Zen_38024_Startup
+```
+
+PID 31792 是被 test_0311 editor (PID 27304) sponsor 的 zenserver；sandbox UE (PID 38024) 检测到 lockfile 有效但「无法找到注册的进程」就直接 shutdown 然后重启 zen 以自己为 owner。
+
+**含义**：plan §11 风险表 "多 editor 同启 zen 抢锁 — zen 本身 sponsor 机制处理" 的措辞不准确。**实际行为是抢占（preemption），不是协作**。对集群设计的含义：
+
+- Render node 上每台机器只能有一个 UE editor 拥有 local zen sponsor；
+- Cluster master 必须用 `zen service install`（plan §1.1 `lifecycle_mode='installed_service'`）跑 zen，避免被 editor sponsor 抢占；
+- 任何 sponsor-mode zen 一旦被新 editor 启动撞上，老 zen 会被 shutdown — 这会让老 editor 此后访问 zen 失败直到它自己再 sponsor 一次（UE 5.4+ 是 lazy 重连，不立即 fatal）。
+
+### 8.3 意外发现：`-Quit` headless flag 在 5.7.4 不立即退出
+
+启动参数包含 `-Unattended -NoSplash -NoSound -nullrhi -Quit -log`，但 editor 在 `LogInit: Engine is initialized` 之后（~20 秒）**继续**加载 asset registry / Python plugins / Pak 等，3 分钟超时仍未退出，被外部 kill 强杀。
+
+**含义**：plan §M4 T4.4 `core::zen::verify` 实现 headless verify 时**不能依赖 `-Quit`**。可选实现：
+
+- **a) commandlet 模式**：`UnrealEditor-Cmd.exe <uproject> -run=Help`（或别的 commandlet）跑完自动退出；
+- **b) 流式监控**：启 editor 同时实时 tail stdout，看到 `LogDerivedDataCache: ... ZenShared: Using ZenServer ... status: OK!` 立刻 kill；
+- **c) 死等超时**：固定 N 秒后 kill，从 log 里 grep 验证字段（最简单但浪费时间）。
+
+T4.4 推荐 b) 加 a) fallback。
+
+### 8.4 副作用：test_0311 zen sponsor 被替换
+
+T0.5 sandbox 跑完被 kill 后，由 sandbox UE 拉起的 zenserver (owner-pid 38024) 也跟着死（sponsor UE 退出 zen 跟着退）。结果：
+
+- 端口 8558 当前**没人 listen**；
+- test_0311 UE editor (PID 27304) 仍在跑但失去了 zen sponsor；
+- UE 5.4+ lazy 重连：test_0311 editor 下次需要 cache 时会重新 sponsor 一个新 zen，不需要重启 editor。
+
+若 user 立即在 test_0311 editor 上发起 cook / build / package 之类操作，会触发新 zen sponsor，状态自愈。
 
 ## 附录 A：完整启动 log（test_0311 / UE 5.7 / 2026-05-18 14:18:10）
 
