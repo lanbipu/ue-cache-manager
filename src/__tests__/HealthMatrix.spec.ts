@@ -5,7 +5,7 @@ import HealthMatrix from "@/components/diagnostics/HealthMatrix.vue";
 const machines = [{ id: 1, hostname: "RENDER-01", ip: "192.168.10.21", role: "render", status: "online", last_seen_at: null }];
 
 describe("HealthMatrix", () => {
-  it("renders 11 check columns and emits selection", async () => {
+  it("renders all check columns and emits selection", async () => {
     const wrapper = mount(HealthMatrix, {
       props: {
         machines,
@@ -14,7 +14,8 @@ describe("HealthMatrix", () => {
         selectedCheckId: null,
       },
     });
-    expect(wrapper.findAll("th").length).toBe(12);
+    // 13 HEALTH_CHECKS entries + 1 machine-label header = 14 columns
+    expect(wrapper.findAll("th").length).toBe(14);
     await wrapper.find("[data-matrix-cell]").trigger("click");
     expect(wrapper.emitted("select")?.[0]?.[0]).toMatchObject({ machineId: 1 });
   });
