@@ -12,6 +12,7 @@ pub mod endpoint;
 pub mod lockfile;
 pub mod lua_config;
 pub mod probe;
+pub mod redaction;
 pub mod retention;
 
 #[cfg(test)]
