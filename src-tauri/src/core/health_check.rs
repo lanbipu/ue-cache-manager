@@ -57,7 +57,7 @@ pub fn aggregate_gpu_consistency(gpus: &[GpuInfo]) -> GpuConsistencyReport {
                 "Standardize GPU + driver across cluster, or split into compatible subgroups before PSO distribute"
                     .into()
             } else if status == "warning" {
-                "Align driver versions cluster-wide via `nvidia-smi --query` audit + matched installer rollout"
+                "Make every node run the same NVIDIA driver: audit with `nvidia-smi --query`, then push a matched installer cluster-wide"
                     .into()
             } else {
                 String::new()
