@@ -522,7 +522,11 @@ where
     F: std::future::Future<Output = UecmResult<T>>,
 {
     match tokio::runtime::Handle::try_current().ok() {
-        Some(h) => tokio::task::block_in_place(|| h.block_on(fut)),
+        // Called from spawn_blocking (or any dedicated blocking thread):
+        // block_on drives the future directly on this thread.
+        // block_in_place must NOT be used here — it requires a tokio worker
+        // thread and panics from spawn_blocking threads.
+        Some(h) => h.block_on(fut),
         None => {
             let rt = tokio::runtime::Runtime::new()
                 .map_err(|e| UecmError::OperationFailed(format!("tokio rt: {}", e)))?;
@@ -857,5 +861,25 @@ mod tests {
             DeployEvent::PlanCompleted { .. } => {} // any PlanCompleted is success here
             other => panic!("expected PlanCompleted, got {:?}", other),
         }
+    }
+
+    /// Verify block_on_async works when called from spawn_blocking inside a
+    /// tokio runtime. This is exactly the path deploy_ddc_run takes:
+    ///   tokio runtime -> spawn_blocking -> run_plan -> block_on_async
+    ///
+    /// The original bug: block_in_place panics from spawn_blocking threads
+    /// because they are not tokio worker threads. The fix (h.block_on directly)
+    /// must not panic here.
+    #[test]
+    fn block_on_async_works_from_spawn_blocking_in_tokio_context() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(async {
+            tokio::task::spawn_blocking(|| {
+                block_on_async(async { Ok::<i32, UecmError>(42) })
+            })
+            .await
+            .unwrap()
+        });
+        assert_eq!(result.unwrap(), 42);
     }
 }
