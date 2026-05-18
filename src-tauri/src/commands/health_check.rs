@@ -105,7 +105,7 @@ pub fn run_health_check(
         let expected_shared = share_unc.clone();
 
         let probes = match health_probes::run(
-            &machine.ip, &share_unc, &svc_username, &expected_shared,
+            &machine.ip, &share_unc, &svc_username, &expected_shared, "",
             Some((&cred_row.username, &password)),
         ) {
             Ok(map) => map,
@@ -114,9 +114,13 @@ pub fn run_health_check(
                     scan_run_id: scan_id, machine_id: mid, done: true,
                     error: Some(e.to_string()),
                 });
-                summary.offline += 1; summary.total += 8;
+                summary.offline += 1; summary.total += 11;
                 let mut row = HashMap::<String, CheckOutcome>::new();
-                for k in ["smb","firewall_445","share_reachable","ntfs_perm","cred_user","cred_system","env_vars","system_write"] {
+                for k in [
+                    "smb","firewall_445","share_reachable","ntfs_perm",
+                    "cred_user","cred_system","env_vars","env_local","env_shared",
+                    "rs_service","system_write",
+                ] {
                     row.insert(k.into(), CheckOutcome { status: "offline".into(), message: e.to_string(), sample: "".into() });
                 }
                 health_check_runs::upsert(&db, scan_id, mid, &serde_json::to_value(&row).unwrap())?;
@@ -138,6 +142,20 @@ pub fn run_health_check(
         row.insert("ini_consistency".into(), ini_outcome);
         row.insert("pso_precaching".into(), pso_outcome);
         row.insert("gpu_consistency".into(), gpu_outcome);
+
+        // Replace the round-trip's inline rs_service slot with the detailed
+        // classification from `core::renderstream_service` (catches local
+        // interactive users in addition to LocalSystem). Probe failure leaves
+        // any previous slot untouched — the failure mode is not propagated.
+        if let Ok(rs_report) = crate::core::renderstream_service::report(
+            &machine.ip,
+            Some((cred_row.username.as_str(), password.as_str())),
+        ) {
+            row.insert(
+                "rs_service".into(),
+                crate::core::renderstream_service::into_check_outcome(&rs_report),
+            );
+        }
 
         for v in row.values() {
             summary.total += 1;

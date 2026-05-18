@@ -148,6 +148,9 @@ fn run(ctx: &mut Ctx<'_>, machine_ids: &[i64], cred: &CredentialArgs) -> UecmRes
                     "cred_user",
                     "cred_system",
                     "env_vars",
+                    "env_local",
+                    "env_shared",
+                    "rs_service",
                     "system_write",
                 ] {
                     row.insert(
@@ -166,7 +169,7 @@ fn run(ctx: &mut Ctx<'_>, machine_ids: &[i64], cred: &CredentialArgs) -> UecmRes
                     &serde_json::to_value(&row).unwrap(),
                 )?;
                 offline += 1;
-                total_checks += 8;
+                total_checks += 11;
                 ctx.emitter
                     .emit_event(&Event::ItemCompleted {
                         item_id: format!("machine:{}", mid),
@@ -202,6 +205,20 @@ fn run(ctx: &mut Ctx<'_>, machine_ids: &[i64], cred: &CredentialArgs) -> UecmRes
         row.insert("ini_consistency".into(), ini_outcome);
         row.insert("pso_precaching".into(), pso_outcome);
         row.insert("gpu_consistency".into(), gpu_outcome);
+
+        // Replace the round-trip's inline rs_service slot with the detailed
+        // classification from `core::renderstream_service` (catches local
+        // interactive users in addition to LocalSystem). Probe failure leaves
+        // the slot untouched.
+        if let Ok(rs_report) = crate::core::renderstream_service::report(
+            &machine.ip,
+            cred_opt,
+        ) {
+            row.insert(
+                "rs_service".into(),
+                crate::core::renderstream_service::into_check_outcome(&rs_report),
+            );
+        }
 
         let machine_checks = row.len() as i64;
         for v in row.values() {
