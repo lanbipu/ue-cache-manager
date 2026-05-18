@@ -48,10 +48,11 @@ pub struct ParsedKey {
     pub line_number: usize,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ParsedSection {
     pub name: String,
     pub keys: Vec<ParsedKey>,
+    pub backend_nodes: Vec<crate::core::ini_backend_graph::BackendNode>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -407,6 +408,7 @@ mod tests {
                 value: v.to_string(),
                 line_number: 0,
             }).collect(),
+            backend_nodes: vec![],
         }
     }
 
@@ -469,6 +471,7 @@ mod tests {
                     value: "1".into(),
                     line_number: 12,
                 }],
+                backend_nodes: vec![],
             }],
         };
         let findings = run_rules(&file, &EnvVarState::default());
@@ -502,6 +505,7 @@ mod tests {
                         line_number: idx + 1,
                     })
                     .collect(),
+                backend_nodes: vec![],
             }],
         }
     }
