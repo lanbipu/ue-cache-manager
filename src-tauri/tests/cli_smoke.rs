@@ -401,6 +401,201 @@ fn zen_unregister_without_yes_returns_invalid_input() {
 }
 
 // -------------------------------------------------------------------------
+// Plan 7 T4.5: zen verify-rules (resolve-only mode)
+// -------------------------------------------------------------------------
+
+/// Drop-in fixture yaml — matches the shape of the real `zen-ini-rules.yaml`
+/// but verified-only on 5.7 so we can exercise both the verified branch and
+/// the unverified+refuse branch without depending on the real rules file.
+const T45_FIXTURE_YAML: &str = r#"
+zen_ini:
+  applies_to: ">=5.4"
+  rules:
+    enable_zen_shared:
+      ini_file: DefaultEngine.ini
+      section: InstalledDerivedDataBackendGraph
+      key: ZenShared
+      value_template: '(Type=Zen, Host="{host}", Port={port}, Namespace="{namespace}")'
+      backup: true
+    disable_legacy_smb_shared:
+      ini_file: DefaultEngine.ini
+      section: InstalledDerivedDataBackendGraph
+      key: Shared
+      action: remove
+      backup: true
+      env_cleanup:
+        - var: UE-SharedDataCachePath
+          scopes: [machine, user]
+    disable_legacy_pak:
+      ini_file: DefaultEngine.ini
+      section: InstalledDerivedDataBackendGraph
+      keys: [Pak, CompressedPak]
+      action: remove
+      backup: true
+
+verified_versions:
+  - "5.7"
+
+unverified_policy: refuse
+
+overrides: {}
+"#;
+
+#[test]
+fn zen_verify_rules_verified_version_emits_ok_true_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = dir.path().join("zen-ini-rules.yaml");
+    std::fs::write(&yaml, T45_FIXTURE_YAML).unwrap();
+    let tmp_db = tempfile::NamedTempFile::new().unwrap();
+
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", tmp_db.path().to_string_lossy().to_string())
+        .env("UECM_ZEN_RULES_PATH", &yaml)
+        .args([
+            "--json", "zen", "verify-rules",
+            "--ue-version", "5.7",
+            "--ue-install", "C:\\UE\\5.7",
+        ])
+        .output()
+        .expect("spawn");
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    assert_eq!(v["ok"], serde_json::Value::Bool(true));
+    assert_eq!(v["ue_version"], "5.7");
+    assert_eq!(v["matched_rule_version"], "5.7");
+    assert_eq!(v["ue_install"], "C:\\UE\\5.7");
+    assert_eq!(v["policy"], "refuse");
+    assert_eq!(v["wrote"], serde_json::Value::Bool(false));
+    assert_eq!(v["rules"]["enable_zen_shared"]["key"], "ZenShared");
+    assert_eq!(v["rules"]["disable_legacy_pak"]["keys"][0], "Pak");
+}
+
+#[test]
+fn zen_verify_rules_unverified_refuse_emits_ok_false_exit_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = dir.path().join("zen-ini-rules.yaml");
+    std::fs::write(&yaml, T45_FIXTURE_YAML).unwrap();
+    let tmp_db = tempfile::NamedTempFile::new().unwrap();
+
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", tmp_db.path().to_string_lossy().to_string())
+        .env("UECM_ZEN_RULES_PATH", &yaml)
+        .args([
+            "--json", "zen", "verify-rules",
+            "--ue-version", "5.8",
+            "--ue-install", "C:\\UE\\5.8",
+        ])
+        .output()
+        .expect("spawn");
+    // Exit code 0 even though ok:false — the JSON flag carries the signal.
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    assert_eq!(v["ok"], serde_json::Value::Bool(false));
+    assert_eq!(v["ue_version"], "5.8");
+    assert!(v["message"].as_str().unwrap().contains("5.8"));
+}
+
+#[test]
+fn zen_verify_rules_write_verified_appends_new_version_to_yaml() {
+    // Variant of the fixture with warn policy so 5.8 resolves and gets promoted.
+    let warn_yaml = T45_FIXTURE_YAML.replace(
+        "unverified_policy: refuse",
+        "unverified_policy: warn",
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = dir.path().join("zen-ini-rules.yaml");
+    std::fs::write(&yaml, &warn_yaml).unwrap();
+    let tmp_db = tempfile::NamedTempFile::new().unwrap();
+
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", tmp_db.path().to_string_lossy().to_string())
+        .env("UECM_ZEN_RULES_PATH", &yaml)
+        .args([
+            "--json", "zen", "verify-rules",
+            "--ue-version", "5.8.0",
+            "--ue-install", "C:\\UE\\5.8",
+            "--write-verified",
+        ])
+        .output()
+        .expect("spawn");
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    assert_eq!(v["ok"], serde_json::Value::Bool(true));
+    assert_eq!(v["wrote"], serde_json::Value::Bool(true));
+    let after = v["verified_versions_after"].as_array().unwrap();
+    assert!(after.iter().any(|x| x == "5.7"));
+    assert!(after.iter().any(|x| x == "5.8"));
+    // And the file on disk has been mutated — re-read and confirm 5.8 is there.
+    let file_after = std::fs::read_to_string(&yaml).unwrap();
+    assert!(file_after.contains("5.8"), "yaml on disk should include 5.8 now: {}", file_after);
+}
+
+#[test]
+fn zen_verify_rules_write_verified_on_already_verified_returns_wrote_false() {
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = dir.path().join("zen-ini-rules.yaml");
+    std::fs::write(&yaml, T45_FIXTURE_YAML).unwrap();
+    let before = std::fs::read_to_string(&yaml).unwrap();
+    let tmp_db = tempfile::NamedTempFile::new().unwrap();
+
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", tmp_db.path().to_string_lossy().to_string())
+        .env("UECM_ZEN_RULES_PATH", &yaml)
+        .args([
+            "--json", "zen", "verify-rules",
+            "--ue-version", "5.7.4",
+            "--ue-install", "C:\\UE\\5.7",
+            "--write-verified",
+        ])
+        .output()
+        .expect("spawn");
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    assert_eq!(v["ok"], serde_json::Value::Bool(true));
+    assert_eq!(v["wrote"], serde_json::Value::Bool(false));
+    // File on disk untouched.
+    let after = std::fs::read_to_string(&yaml).unwrap();
+    assert_eq!(before, after);
+}
+
+#[test]
+fn zen_verify_rules_runs_without_writable_db() {
+    // Codex P2 (T4.5): verify-rules is DB-free — it only resolves the
+    // yaml. Forcing DB-open made the command unusable when the data dir
+    // was read-only / SQLite was broken. Point UECM_DB_PATH at a path
+    // inside a non-existent parent dir: open_and_migrate_db would fail
+    // here, but the verify-rules dispatch should skip DB altogether and
+    // still produce a clean ok:true plan.
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = dir.path().join("zen-ini-rules.yaml");
+    std::fs::write(&yaml, T45_FIXTURE_YAML).unwrap();
+    let unwritable_db = dir.path().join("no-such-dir/uecm.sqlite3");
+
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", unwritable_db.to_string_lossy().to_string())
+        .env("UECM_ZEN_RULES_PATH", &yaml)
+        .args([
+            "--json", "zen", "verify-rules",
+            "--ue-version", "5.7",
+            "--ue-install", "C:\\UE\\5.7",
+        ])
+        .output()
+        .expect("spawn");
+    assert!(
+        out.status.success(),
+        "verify-rules should succeed without DB; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    assert_eq!(v["ok"], serde_json::Value::Bool(true));
+}
+
+// -------------------------------------------------------------------------
 // Plan 7 T3.6: `--backend` flag on ddc {generate, verify, distribute}
 // -------------------------------------------------------------------------
 

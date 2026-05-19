@@ -169,6 +169,9 @@ pub fn handle(ctx: &mut Ctx<'_>, action: ZenAction) -> UecmResult<()> {
         ZenAction::Disable { project_id, machines, yes, dry_run, cred } => {
             project_disable(ctx, project_id, &machines, yes, dry_run, &cred)
         }
+        ZenAction::VerifyRules { ue_version, ue_install, write_verified } => {
+            verify_rules(ctx, &ue_version, &ue_install, write_verified)
+        }
     }
 }
 
@@ -2577,6 +2580,228 @@ fn project_disable(
 }
 
 // -----------------------------------------------------------------------------
+// verify-rules (T4.5) — resolve-only mode
+// -----------------------------------------------------------------------------
+//
+// T4.4 (drive a headless UE editor + watch its log) and T4.6 (PS sidecar) are
+// deferred — `verify-rules` ships the offline half: parse the yaml, resolve
+// the effective rule set for the supplied UE version, render the plan as
+// JSON, and (optionally) append the verified version back to the yaml.
+//
+// Output shape on success:
+//   { ok: true, ue_version, matched_rule_version, ue_install, policy,
+//     warnings: [...], rules: {...}, verified_versions_after: [...],
+//     wrote: bool, yaml_path?: string }
+//
+// On resolve failure (e.g. unverified + policy=refuse), we still emit a
+// single JSON document with `ok: false` and exit 0 — the JSON `ok` flag is
+// the source of truth, per the CLI convention (matches `lua-preview` style).
+
+/// Extract `major.minor` from a UE version string. Returns `None` on
+/// non-numeric / missing components — the spec requires the rules loader's
+/// resolver to do the real validation, so we only need a tolerant pre-check
+/// for the failure-path message and the verified_versions write key.
+fn major_minor_of(ue_version: &str) -> Option<String> {
+    let trimmed = ue_version.trim();
+    let mut parts = trimmed.split('.');
+    let major = parts.next()?.trim();
+    let minor = parts.next()?.trim();
+    if major.is_empty() || minor.is_empty() {
+        return None;
+    }
+    if major.parse::<u32>().is_err() || minor.parse::<u32>().is_err() {
+        return None;
+    }
+    Some(format!("{}.{}", major, minor))
+}
+
+/// Resolve the yaml path the CLI is allowed to write back to. Mirrors the
+/// `load_default()` discovery order (env override → on-disk candidates),
+/// returning `None` when only the embedded build-time snapshot would be
+/// available — we refuse to "write" to that since it's compiled in.
+fn writable_rules_path() -> Option<std::path::PathBuf> {
+    if let Ok(over) = std::env::var("UECM_ZEN_RULES_PATH") {
+        let p = std::path::PathBuf::from(over);
+        // Env override always wins. If the operator typoed the path,
+        // load_default() already errored out before we got here.
+        return Some(p);
+    }
+    let p = zen_rules::default_path();
+    if p.is_file() {
+        Some(p)
+    } else {
+        None
+    }
+}
+
+/// Append `version` (major.minor) to the `verified_versions` array in the
+/// yaml at `path` if it isn't already present. Returns `Ok(true)` when the
+/// file was rewritten, `Ok(false)` when the version was already verified.
+///
+/// Reads the yaml as a `serde_yaml::Value` and mutates only the
+/// `verified_versions` array — this preserves the wire-format `zen_ini:`
+/// wrapping (which the public `ZenRules` flat serialization would lose) and
+/// keeps unrelated fields intact. Comments are lost (serde_yaml limitation).
+fn append_verified_version(path: &std::path::Path, version: &str) -> UecmResult<bool> {
+    let text = std::fs::read_to_string(path).map_err(|e| {
+        UecmError::Configuration(format!(
+            "verify-rules: failed to read yaml at {} for write: {}",
+            path.display(),
+            e
+        ))
+    })?;
+    let mut doc: serde_yaml::Value = serde_yaml::from_str(&text).map_err(|e| {
+        UecmError::Configuration(format!(
+            "verify-rules: yaml at {} did not parse as a generic document: {}",
+            path.display(),
+            e
+        ))
+    })?;
+    // verified_versions must be a top-level sequence per the schema.
+    let Some(map) = doc.as_mapping_mut() else {
+        return Err(UecmError::Configuration(format!(
+            "verify-rules: yaml at {} is not a mapping at the top level",
+            path.display()
+        )));
+    };
+    let key = serde_yaml::Value::String("verified_versions".to_string());
+    let entry = map.entry(key).or_insert(serde_yaml::Value::Sequence(Vec::new()));
+    let Some(seq) = entry.as_sequence_mut() else {
+        return Err(UecmError::Configuration(format!(
+            "verify-rules: yaml at {} has `verified_versions` but it isn't a sequence",
+            path.display()
+        )));
+    };
+    // Idempotent: skip if already present (string compare on major.minor).
+    let already = seq.iter().any(|v| v.as_str().map(|s| s == version).unwrap_or(false));
+    if already {
+        return Ok(false);
+    }
+    seq.push(serde_yaml::Value::String(version.to_string()));
+
+    let new_text = serde_yaml::to_string(&doc).map_err(|e| {
+        UecmError::Configuration(format!(
+            "verify-rules: failed to re-serialize yaml: {}",
+            e
+        ))
+    })?;
+    std::fs::write(path, new_text).map_err(|e| {
+        UecmError::Configuration(format!(
+            "verify-rules: failed to write yaml at {}: {}",
+            path.display(),
+            e
+        ))
+    })?;
+    Ok(true)
+}
+
+fn verify_rules(
+    ctx: &mut Ctx<'_>,
+    ue_version: &str,
+    ue_install: &str,
+    write_verified: bool,
+) -> UecmResult<()> {
+    let rules = zen_rules::load_default()?;
+    let policy_str = match rules.unverified_policy {
+        zen_rules::UnverifiedPolicy::Refuse => "refuse",
+        zen_rules::UnverifiedPolicy::Warn => "warn",
+    };
+
+    match zen_rules::resolve(&rules, ue_version) {
+        Ok(resolved) => {
+            // Successful resolve: render the plan + optionally append the
+            // matched major.minor to verified_versions on disk.
+            let mut wrote = false;
+            let mut yaml_path_str: Option<String> = None;
+            let mut verified_after: Vec<String> = rules.verified_versions.clone();
+
+            if write_verified {
+                let already = verified_after.iter().any(|v| v == &resolved.matched_version);
+                if !already {
+                    let path = writable_rules_path().ok_or_else(|| {
+                        UecmError::Configuration(
+                            "verify-rules --write-verified: no on-disk yaml to write \
+                             (only the embedded build-time snapshot is available; set \
+                             UECM_ZEN_RULES_PATH or place zen-ini-rules.yaml next to the binary)"
+                                .into(),
+                        )
+                    })?;
+                    wrote = append_verified_version(&path, &resolved.matched_version)?;
+                    if wrote {
+                        verified_after.push(resolved.matched_version.clone());
+                    }
+                    yaml_path_str = Some(path.display().to_string());
+                } else {
+                    // Already verified — still report the yaml path for transparency.
+                    if let Some(p) = writable_rules_path() {
+                        yaml_path_str = Some(p.display().to_string());
+                    }
+                }
+            }
+
+            let doc = serde_json::json!({
+                "ok": true,
+                "ue_version": ue_version,
+                "matched_rule_version": resolved.matched_version,
+                "ue_install": ue_install,
+                "policy": policy_str,
+                "warnings": resolved.warnings,
+                "rules": {
+                    "enable_zen_shared": {
+                        "ini_file": resolved.rules.enable_zen_shared.ini_file,
+                        "section": resolved.rules.enable_zen_shared.section,
+                        "key": resolved.rules.enable_zen_shared.key,
+                        "value_template": resolved.rules.enable_zen_shared.value_template,
+                        "backup": resolved.rules.enable_zen_shared.backup,
+                    },
+                    "disable_legacy_smb_shared": {
+                        "ini_file": resolved.rules.disable_legacy_smb_shared.ini_file,
+                        "section": resolved.rules.disable_legacy_smb_shared.section,
+                        "key": resolved.rules.disable_legacy_smb_shared.key,
+                        "action": resolved.rules.disable_legacy_smb_shared.action,
+                        "backup": resolved.rules.disable_legacy_smb_shared.backup,
+                        "env_cleanup": resolved.rules.disable_legacy_smb_shared.env_cleanup,
+                    },
+                    "disable_legacy_pak": {
+                        "ini_file": resolved.rules.disable_legacy_pak.ini_file,
+                        "section": resolved.rules.disable_legacy_pak.section,
+                        "keys": resolved.rules.disable_legacy_pak.keys,
+                        "action": resolved.rules.disable_legacy_pak.action,
+                        "backup": resolved.rules.disable_legacy_pak.backup,
+                    },
+                },
+                "verified_versions_after": verified_after,
+                "wrote": wrote,
+                "yaml_path": yaml_path_str,
+            });
+            ctx.emitter.emit_result(&doc).ok();
+            Ok(())
+        }
+        Err(UecmError::InvalidInput(msg)) => {
+            // Resolve refused (e.g. version unverified under policy=refuse,
+            // or below applies_to floor). Emit ok:false and exit 0 — the
+            // JSON `ok` flag is the contract; exit code stays clean per the
+            // T4.5 spec so automation can keep scripting around this without
+            // wrapping each call in error trapping.
+            let mm = major_minor_of(ue_version).unwrap_or_else(|| ue_version.to_string());
+            let doc = serde_json::json!({
+                "ok": false,
+                "ue_version": ue_version,
+                "matched_rule_version": mm,
+                "ue_install": ue_install,
+                "policy": policy_str,
+                "message": msg,
+                "verified_versions_after": rules.verified_versions,
+                "wrote": false,
+            });
+            ctx.emitter.emit_result(&doc).ok();
+            Ok(())
+        }
+        Err(other) => Err(other),
+    }
+}
+
+// -----------------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------------
 
@@ -3735,6 +3960,186 @@ mod tests {
         .unwrap();
         let cred = CredentialArgs::default_for_test();
         project_disable(&mut ctx, project_id, &[m1], false, true, &cred).unwrap();
+    }
+
+    // ----- verify-rules (T4.5) -------------------------------------------
+
+    /// Drop-in fixture yaml mirroring the production layout but verified-only
+    /// on UE 5.7 so we can flex both the verified and unverified branches.
+    const VERIFY_RULES_FIXTURE_YAML: &str = r#"
+zen_ini:
+  applies_to: ">=5.4"
+  rules:
+    enable_zen_shared:
+      ini_file: DefaultEngine.ini
+      section: InstalledDerivedDataBackendGraph
+      key: ZenShared
+      value_template: '(Type=Zen, Host="{host}", Port={port}, Namespace="{namespace}")'
+      backup: true
+    disable_legacy_smb_shared:
+      ini_file: DefaultEngine.ini
+      section: InstalledDerivedDataBackendGraph
+      key: Shared
+      action: remove
+      backup: true
+      env_cleanup:
+        - var: UE-SharedDataCachePath
+          scopes: [machine, user]
+    disable_legacy_pak:
+      ini_file: DefaultEngine.ini
+      section: InstalledDerivedDataBackendGraph
+      keys: [Pak, CompressedPak]
+      action: remove
+      backup: true
+
+verified_versions:
+  - "5.7"
+
+unverified_policy: refuse
+
+overrides: {}
+"#;
+
+    /// Spin up a tempdir + writable fixture yaml + UECM_ZEN_RULES_PATH
+    /// override that persists for the lifetime of the returned tuple.
+    /// Tests must hold the env guard for the duration of the load.
+    fn fixture_yaml_dir() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("zen-ini-rules.yaml");
+        std::fs::write(&p, VERIFY_RULES_FIXTURE_YAML).unwrap();
+        (dir, p)
+    }
+
+    /// Same env-override guard pattern as the rules_loader tests — restores
+    /// the previous value (or removes the var) on drop.
+    struct EnvVarGuard {
+        key: &'static str,
+        prev: Option<String>,
+    }
+    impl EnvVarGuard {
+        fn set(key: &'static str, val: &std::path::Path) -> Self {
+            let prev = std::env::var(key).ok();
+            std::env::set_var(key, val);
+            Self { key, prev }
+        }
+    }
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    #[test]
+    fn verify_rules_resolves_verified_version() {
+        let (_dir, p) = fixture_yaml_dir();
+        let _lock = crate::ENV_TEST_LOCK.lock().unwrap();
+        let _guard = EnvVarGuard::set("UECM_ZEN_RULES_PATH", &p);
+        let mut ctx = fresh_ctx();
+        verify_rules(&mut ctx, "5.7", "C:\\UE\\5.7", false).unwrap();
+        // Yaml on disk is unchanged.
+        let after = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(after.trim(), VERIFY_RULES_FIXTURE_YAML.trim());
+    }
+
+    #[test]
+    fn verify_rules_resolves_patch_tolerant() {
+        let (_dir, p) = fixture_yaml_dir();
+        let _lock = crate::ENV_TEST_LOCK.lock().unwrap();
+        let _guard = EnvVarGuard::set("UECM_ZEN_RULES_PATH", &p);
+        let mut ctx = fresh_ctx();
+        // 5.7.4 must resolve via the patch-stripping resolver.
+        verify_rules(&mut ctx, "5.7.4", "C:\\UE\\5.7.4", false).unwrap();
+    }
+
+    #[test]
+    fn verify_rules_unverified_refuse_emits_ok_false_exit_zero() {
+        let (_dir, p) = fixture_yaml_dir();
+        let _lock = crate::ENV_TEST_LOCK.lock().unwrap();
+        let _guard = EnvVarGuard::set("UECM_ZEN_RULES_PATH", &p);
+        let mut ctx = fresh_ctx();
+        // 5.8 not in verified_versions and policy=refuse → must return Ok(())
+        // (the JSON ok:false flag carries the signal; exit code stays 0).
+        let r = verify_rules(&mut ctx, "5.8", "C:\\UE\\5.8", false);
+        assert!(r.is_ok(), "unverified+refuse must not propagate as Err; got {:?}", r);
+    }
+
+    #[test]
+    fn verify_rules_write_verified_on_already_verified_is_noop() {
+        let (_dir, p) = fixture_yaml_dir();
+        let _lock = crate::ENV_TEST_LOCK.lock().unwrap();
+        let _guard = EnvVarGuard::set("UECM_ZEN_RULES_PATH", &p);
+        let before = std::fs::read_to_string(&p).unwrap();
+        let mut ctx = fresh_ctx();
+        verify_rules(&mut ctx, "5.7", "C:\\UE\\5.7", true).unwrap();
+        let after = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(before, after, "5.7 already verified; file must be untouched");
+    }
+
+    #[test]
+    fn verify_rules_write_verified_appends_new_version() {
+        // Use the warn-policy variant so 5.8 resolves and is then promoted.
+        let warn_yaml = VERIFY_RULES_FIXTURE_YAML.replace(
+            "unverified_policy: refuse",
+            "unverified_policy: warn",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("zen-ini-rules.yaml");
+        std::fs::write(&p, &warn_yaml).unwrap();
+
+        let _lock = crate::ENV_TEST_LOCK.lock().unwrap();
+        let _guard = EnvVarGuard::set("UECM_ZEN_RULES_PATH", &p);
+        let mut ctx = fresh_ctx();
+        verify_rules(&mut ctx, "5.8", "C:\\UE\\5.8", true).unwrap();
+
+        // Re-parse the written yaml and confirm 5.8 is now in verified_versions.
+        let after = std::fs::read_to_string(&p).unwrap();
+        let parsed = zen_rules::parse_str(&after).expect("rewritten yaml still parses");
+        assert!(
+            parsed.verified_versions.iter().any(|v| v == "5.8"),
+            "expected 5.8 in {:?}",
+            parsed.verified_versions
+        );
+        // Pre-existing 5.7 must survive.
+        assert!(parsed.verified_versions.iter().any(|v| v == "5.7"));
+    }
+
+    #[test]
+    fn verify_rules_write_verified_strips_patch_when_writing() {
+        // Promote 5.8 via 5.8.3 input. The on-disk value must be the
+        // major.minor key the resolver uses, not the input string.
+        let warn_yaml = VERIFY_RULES_FIXTURE_YAML.replace(
+            "unverified_policy: refuse",
+            "unverified_policy: warn",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("zen-ini-rules.yaml");
+        std::fs::write(&p, &warn_yaml).unwrap();
+
+        let _lock = crate::ENV_TEST_LOCK.lock().unwrap();
+        let _guard = EnvVarGuard::set("UECM_ZEN_RULES_PATH", &p);
+        let mut ctx = fresh_ctx();
+        verify_rules(&mut ctx, "5.8.3", "C:\\UE\\5.8.3", true).unwrap();
+
+        let after = std::fs::read_to_string(&p).unwrap();
+        let parsed = zen_rules::parse_str(&after).expect("rewritten yaml still parses");
+        assert!(
+            parsed.verified_versions.iter().any(|v| v == "5.8"),
+            "must store 5.8 (major.minor), not 5.8.3; got {:?}",
+            parsed.verified_versions
+        );
+    }
+
+    #[test]
+    fn major_minor_of_strips_patch() {
+        assert_eq!(major_minor_of("5.7"), Some("5.7".into()));
+        assert_eq!(major_minor_of("5.7.4"), Some("5.7".into()));
+        assert_eq!(major_minor_of("5.7.4-pre"), Some("5.7".into()));
+        assert_eq!(major_minor_of(""), None);
+        assert_eq!(major_minor_of("5"), None);
+        assert_eq!(major_minor_of("x.y"), None);
     }
 
     // Helper for tests: empty CredentialArgs.

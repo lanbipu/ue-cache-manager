@@ -793,6 +793,36 @@ pub enum ZenAction {
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
+    /// Resolve the zen INI rule set for a given UE version (T4.5 resolve-only).
+    ///
+    /// Parses `zen-ini-rules.yaml`, resolves the effective rules for the
+    /// supplied `--ue-version`, and prints the plan as JSON. T4.4/T4.6 (the
+    /// real headless-editor verifier + PS sidecar) are deferred — this command
+    /// is the offline half of "promote a new UE version to verified" so the
+    /// operator can review the rules and (with `--write-verified`) record the
+    /// version as verified in the yaml.
+    ///
+    /// `--ue-install` is captured as metadata only — no path I/O happens here.
+    /// `--write-verified` appends the major.minor to `verified_versions` in
+    /// the yaml on disk when the resolve succeeds and the version isn't
+    /// already listed. The yaml file path is the same one `load_default()`
+    /// picks (env override or on-disk candidate); writing to the embedded
+    /// fallback is refused.
+    VerifyRules {
+        /// UE version to resolve rules for (e.g. `5.7` or `5.7.4`). Patch
+        /// component is allowed but ignored — overrides and verified-version
+        /// lookup are keyed by major.minor only.
+        #[arg(long, value_name = "X.Y")]
+        ue_version: String,
+        /// Engine install path on the target host (emitted as metadata only;
+        /// no I/O performed here — T4.4 will use this for the real verifier).
+        #[arg(long, value_name = "PATH")]
+        ue_install: String,
+        /// On success, append the UE major.minor to `verified_versions` in the
+        /// yaml file. No-op if already verified.
+        #[arg(long)]
+        write_verified: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1236,6 +1266,53 @@ mod tests {
             }
             _ => panic!("expected Zen::Disable"),
         }
+    }
+
+    // ---------- T4.5: zen verify-rules ----------
+
+    #[test]
+    fn zen_verify_rules_parses_required_flags() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "zen", "verify-rules",
+            "--ue-version", "5.7",
+            "--ue-install", "C:\\UE\\5.7",
+        ]).unwrap();
+        match cli.command {
+            Domain::Zen { action: ZenAction::VerifyRules {
+                ue_version, ue_install, write_verified,
+            } } => {
+                assert_eq!(ue_version, "5.7");
+                assert_eq!(ue_install, "C:\\UE\\5.7");
+                assert!(!write_verified);
+            }
+            _ => panic!("expected Zen::VerifyRules"),
+        }
+    }
+
+    #[test]
+    fn zen_verify_rules_accepts_write_verified() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "zen", "verify-rules",
+            "--ue-version", "5.8.0",
+            "--ue-install", "/Users/lan/UE",
+            "--write-verified",
+        ]).unwrap();
+        match cli.command {
+            Domain::Zen { action: ZenAction::VerifyRules { write_verified, ue_version, .. } } => {
+                assert!(write_verified);
+                assert_eq!(ue_version, "5.8.0");
+            }
+            _ => panic!("expected Zen::VerifyRules"),
+        }
+    }
+
+    #[test]
+    fn zen_verify_rules_rejects_missing_ue_version() {
+        let r = Cli::try_parse_from([
+            "uecm-cli", "zen", "verify-rules",
+            "--ue-install", "C:\\UE\\5.7",
+        ]);
+        assert!(r.is_err());
     }
 
     #[test]

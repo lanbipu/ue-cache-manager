@@ -41,7 +41,7 @@ impl<'a> Ctx<'a> {
 /// remain runnable even when the data directory is unwritable or the DB file
 /// is broken. Per Codex review feedback on Task 1.4 / 2.1.
 fn needs_db(cmd: &Domain) -> bool {
-    use crate::cli::args::{MachineAction, SystemAction};
+    use crate::cli::args::{MachineAction, SystemAction, ZenAction};
     match cmd {
         // `machine scan` is a stateless network probe — no DB writes.
         // Everything else in the Machine domain reads or writes tables.
@@ -62,9 +62,13 @@ fn needs_db(cmd: &Domain) -> bool {
         Domain::Gpu { .. } => true,
         Domain::Ddc { .. } => true,
         Domain::Pso { .. } => true,
-        // All zen commands either read from or write to SQLite (endpoints / probes /
-        // cache_stats / baselines / binary inventory rows).
-        Domain::Zen { .. } => true,
+        // Most zen commands need DB (endpoints / probes / cache_stats /
+        // baselines / binary inventory rows). Exception: `zen verify-rules`
+        // is a pure yaml-resolver — no DB access. Codex P2 fix from T4.5
+        // review: forcing DB-open here makes the command unusable when the
+        // data dir is read-only or the SQLite file is broken, even though
+        // verify-rules only needs the embedded yaml.
+        Domain::Zen { action } => !matches!(action, ZenAction::VerifyRules { .. }),
     }
 }
 
