@@ -1,5 +1,6 @@
 pub mod batch;
 pub mod bootstrap;
+pub mod cache_backend;
 pub mod credentials;
 pub mod ddc_pak;
 pub mod discovery;
