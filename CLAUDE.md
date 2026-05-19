@@ -4,6 +4,10 @@
 
 UECM 所有功能走 **WinRM pull 模式**（operator 触发的离散配置 / 短任务），不引入常驻 agent；好处是无升级负担、走 Windows 原生认证、动作可审计。仅当 DDC distribute / PSO collect 等长任务体验扛不住、要做 nDisplay-like 实时编排（参考 Switchboard Listener）、或需节点主动上报（UE 崩溃 / OOM / GPU 状态）时，才为对应域单独引入 lightweight Windows Service agent；配置类继续走 WinRM，两条通道并存。
 
+## Plan 7 — Zen daemon integration（已结）
+
+UECM ↔ Zen 全链路集成已合 main（PR #10，2026-05-20）。改 zen 相关代码前先读 `docs/zen-integration.md`（操作员手册）+ `docs/research/plan7-deferral-acceptance-2026-05-20.md`（22 轮 codex review 修过的设计 gap 表）；grep「Codex round N」可定位为什么某段代码长成现在这样，避免重复踩坑。
+
 ## Figma → 代码任务
 
 接到任何「实现 Figma 设计」「把这个 Figma 文件做成代码」「按设计稿写组件」类任务时，**先读 `.claude/rules/figma-design-system.md`**——里面定义了：
