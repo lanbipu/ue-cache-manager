@@ -226,6 +226,17 @@ fn run_with_rt(
                         // L1 ports still probed — operator may have lost WinRM but kept TCP visibility.
                         let l1 = rt.block_on(crate::core::health_check::probe_tcp_ports(&machine.ip, 1000));
                         for (k, v) in l1 { row.insert(k, v); }
+                        // Merge zen health rows on the offline path too —
+                        // codex P2 from T4.1-T4.3 review wants stable layout
+                        // regardless of WinRM reachability. Most rows will
+                        // be "unknown" but the keys present.
+                        if let Ok(zen_rows) =
+                            crate::core::health_check::zen_health_for_machine(&db, mid)
+                        {
+                            for (k, v) in zen_rows {
+                                row.insert(k, v);
+                            }
+                        }
                         health_check_runs::upsert(&db, scan_id, mid, &serde_json::to_value(&row).unwrap())?;
                         let mut rc = Counters::default();
                         for v in row.values() { rc.tally(v); }
@@ -278,6 +289,31 @@ fn run_with_rt(
         row.insert("ini_consistency".into(), ini_outcome);
         row.insert("pso_precaching".into(), pso_outcome);
         row.insert("gpu_consistency".into(), gpu_outcome);
+
+        // T4.2 / T4.3 wiring (mirror commands::health_check::run_health_check):
+        // Always emit the 4 zen keys so the row has a stable layout. The
+        // helper returns "unknown" rows when no zen install / endpoints /
+        // probes exist — operators can distinguish "no data" from
+        // "data says broken". A DB error doesn't nuke the whole run.
+        match crate::core::health_check::zen_health_for_machine(&db, mid) {
+            Ok(zen_rows) => {
+                for (k, v) in zen_rows {
+                    row.insert(k, v);
+                }
+            }
+            Err(e) => {
+                eprintln!("[health run] zen_health_for_machine({}) failed: {}", mid, e);
+                row.insert(
+                    "zen_reachable".into(),
+                    crate::core::health_check::CheckOutcome {
+                        status: "unknown".into(),
+                        message: format!("zen health query failed: {e}"),
+                        sample: "".into(),
+                        remediation: "Inspect tracing logs; re-run when DB is recovered.".into(),
+                    },
+                );
+            }
+        }
 
         let machine_checks = row.len() as i64;
         let mut row_counters = Counters::default();
