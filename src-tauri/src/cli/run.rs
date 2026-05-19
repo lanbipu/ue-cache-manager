@@ -64,11 +64,18 @@ fn needs_db(cmd: &Domain) -> bool {
         Domain::Pso { .. } => true,
         // Most zen commands need DB (endpoints / probes / cache_stats /
         // baselines / binary inventory rows). Exception: `zen verify-rules`
-        // is a pure yaml-resolver — no DB access. Codex P2 fix from T4.5
-        // review: forcing DB-open here makes the command unusable when the
-        // data dir is read-only or the SQLite file is broken, even though
-        // verify-rules only needs the embedded yaml.
-        Domain::Zen { action } => !matches!(action, ZenAction::VerifyRules { .. }),
+        // is a pure yaml-resolver in the resolve-only mode — no DB access.
+        // Codex P2 fix from T4.5 review: forcing DB-open here makes the
+        // command unusable when the data dir is read-only or the SQLite
+        // file is broken, even though verify-rules only needs the embedded
+        // yaml.
+        //
+        // T4.4 added `--run-editor` which DOES need DB (machine lookup +
+        // operations row). Re-enable DB-open for that branch only.
+        Domain::Zen { action } => match action {
+            ZenAction::VerifyRules { run_editor, .. } => *run_editor,
+            _ => true,
+        },
     }
 }
 

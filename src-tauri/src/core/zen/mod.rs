@@ -16,6 +16,7 @@ pub mod probe;
 pub mod redaction;
 pub mod rules_loader;
 pub mod retention;
+pub mod verify;
 
 #[cfg(test)]
 pub mod test_http;

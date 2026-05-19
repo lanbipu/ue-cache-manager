@@ -112,6 +112,13 @@ pub fn handle(ctx: &mut Ctx<'_>, action: ZenAction) -> UecmResult<()> {
         ZenAction::Unregister { endpoint_id, yes, dry_run } => {
             unregister(ctx, endpoint_id, yes, dry_run)
         }
+        ZenAction::ChangeRole {
+            endpoint_id,
+            new_role,
+            upstream_endpoint_id,
+            yes,
+            dry_run,
+        } => change_role(ctx, endpoint_id, &new_role, upstream_endpoint_id, yes, dry_run),
         ZenAction::ApplyConfig {
             endpoint_id,
             dest_path,
@@ -121,8 +128,53 @@ pub fn handle(ctx: &mut Ctx<'_>, action: ZenAction) -> UecmResult<()> {
         } => apply_config(ctx, endpoint_id, &dest_path, yes, dry_run, &cred),
         ZenAction::LuaPreview { endpoint_id } => lua_preview(ctx, endpoint_id),
         ZenAction::Service { action } => match action {
-            ZenServiceAction::Install { endpoint_id, yes, dry_run, cred } => {
-                service_install(ctx, endpoint_id, yes, dry_run, &cred)
+            ZenServiceAction::Install {
+                endpoint_id,
+                service_user,
+                service_pass,
+                service_pass_stdin,
+                yes,
+                dry_run,
+                cred,
+            } => {
+                // Codex P3: a password without a user gets silently dropped
+                // (the PS sidecar only emits `-p` when `-u` is set). Reject
+                // up-front so the operator never thinks they installed under
+                // a specific account when in fact zen fell back to
+                // LocalService. Mirror the PS-side IsNullOrWhiteSpace by
+                // treating whitespace-only strings as missing. Empty
+                // `--service-pass ""` is also treated as missing here so
+                // the error message stays accurate.
+                let pass_provided = service_pass
+                    .as_deref()
+                    .map(|p| !p.is_empty())
+                    .unwrap_or(false)
+                    || service_pass_stdin;
+                if pass_provided
+                    && service_user
+                        .as_deref()
+                        .map(|u| u.trim().is_empty())
+                        .unwrap_or(true)
+                {
+                    return Err(UecmError::InvalidInput(
+                        "--service-pass / --service-pass-stdin requires --service-user; \
+                         the password is forwarded to zen only when the user is set"
+                            .into(),
+                    ));
+                }
+                // Codex P2: defer stdin read until service_install confirms
+                // the request will actually be applied. dry-run / missing
+                // --yes / preflight failures should not consume stdin.
+                service_install(
+                    ctx,
+                    endpoint_id,
+                    service_user.as_deref(),
+                    service_pass.as_deref(),
+                    service_pass_stdin,
+                    yes,
+                    dry_run,
+                    &cred,
+                )
             }
             ZenServiceAction::Uninstall { endpoint_id, yes, dry_run, cred } => {
                 service_uninstall(ctx, endpoint_id, yes, dry_run, &cred)
@@ -169,9 +221,32 @@ pub fn handle(ctx: &mut Ctx<'_>, action: ZenAction) -> UecmResult<()> {
         ZenAction::Disable { project_id, machines, yes, dry_run, cred } => {
             project_disable(ctx, project_id, &machines, yes, dry_run, &cred)
         }
-        ZenAction::VerifyRules { ue_version, ue_install, write_verified } => {
-            verify_rules(ctx, &ue_version, &ue_install, write_verified)
-        }
+        ZenAction::VerifyRules {
+            ue_version,
+            ue_install,
+            write_verified,
+            run_editor,
+            machine,
+            uproject_path,
+            timeout_seconds,
+            expected_host,
+            expected_port,
+            expected_namespace,
+            cred,
+        } => verify_rules(
+            ctx,
+            &ue_version,
+            &ue_install,
+            write_verified,
+            run_editor,
+            machine,
+            uproject_path.as_deref(),
+            timeout_seconds,
+            expected_host.as_deref(),
+            expected_port,
+            expected_namespace.as_deref(),
+            &cred,
+        ),
     }
 }
 
@@ -876,6 +951,75 @@ fn unregister(ctx: &mut Ctx<'_>, endpoint_id: i64, yes: bool, dry_run: bool) -> 
     Ok(())
 }
 
+/// `zen change-role` — flip an endpoint between `local` and
+/// `shared_upstream` without unregister + re-register. Validation is
+/// delegated to `core::zen::endpoint::change_role` (single transaction
+/// covering current-state read, role/upstream/lifecycle/dependents
+/// checks, and the update).
+fn change_role(
+    ctx: &mut Ctx<'_>,
+    endpoint_id: i64,
+    new_role: &str,
+    new_upstream: Option<i64>,
+    yes: bool,
+    dry_run: bool,
+) -> UecmResult<()> {
+    let outcome = destructive::check(yes, dry_run, "zen.change-role")?;
+    let db = ctx.require_db()?.clone();
+
+    // Codex P2: run the same role/lifecycle/upstream/dependents checks the
+    // real apply path runs — otherwise dry-run reports a plan as
+    // executable when the real `--yes` would refuse (e.g.
+    // editor_owned → shared_upstream, demote with dependents).
+    let current = zen_endpoint::validate_change_role(
+        &db,
+        endpoint_id,
+        new_role,
+        new_upstream,
+    )?;
+
+    if outcome == Outcome::DryRun {
+        destructive::emit_plan(
+            ctx.emitter.as_mut(),
+            "zen.change-role",
+            serde_json::json!({
+                "endpoint_id": endpoint_id,
+                "machine_id": current.machine_id,
+                "declared_port": current.declared_port,
+                "current_role": current.role,
+                "current_upstream_endpoint_id": current.upstream_endpoint_id,
+                "new_role": new_role,
+                "new_upstream_endpoint_id": new_upstream,
+                "lifecycle_mode": current.lifecycle_mode,
+            }),
+        );
+        return Ok(());
+    }
+
+    zen_endpoint::change_role(&db, endpoint_id, new_role, new_upstream)?;
+
+    // Re-fetch so the JSON reflects the persisted row (in particular,
+    // confirms the upstream pointer landed where the caller asked).
+    let after = zen_endpoint::get(&db, endpoint_id)?.ok_or_else(|| {
+        UecmError::OperationFailed(format!(
+            "endpoint id={endpoint_id} disappeared between change_role and re-fetch"
+        ))
+    })?;
+
+    let summary = serde_json::json!({
+        "ok": true,
+        "endpoint_id": endpoint_id,
+        "machine_id": after.machine_id,
+        "previous_role": current.role,
+        "new_role": after.role,
+        "previous_upstream_endpoint_id": current.upstream_endpoint_id,
+        "new_upstream_endpoint_id": after.upstream_endpoint_id,
+        "action": "change-role",
+    });
+    ctx.emitter.emit_event(&Event::Completed { summary }).ok();
+    Ok(())
+}
+
 // -----------------------------------------------------------------------------
 // apply-config / lua-preview (T2.5)
 // -----------------------------------------------------------------------------
@@ -1087,9 +1231,13 @@ enum ServiceVerb {
     Stop,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn service_install(
     ctx: &mut Ctx<'_>,
     endpoint_id: i64,
+    service_user: Option<&str>,
+    service_pass_inline: Option<&str>,
+    service_pass_stdin: bool,
     yes: bool,
     dry_run: bool,
     cred: &CredentialArgs,
@@ -1147,6 +1295,11 @@ fn service_install(
     // those checks here so `--dry-run` doesn't approve a plan the real apply
     // path always rejects.
     validate_service_data_dir(&ep.data_dir)?;
+    // Codex P2: same idea for the service-account / password pair — the
+    // sidecar would reject `.\\render-svc` without a password, so dry-run
+    // must reject it too instead of printing an "approved" plan that the
+    // real apply path fails.
+    validate_service_account_pair(service_user, service_pass_inline, service_pass_stdin)?;
 
     if dry_run {
         destructive::emit_plan(
@@ -1159,6 +1312,10 @@ fn service_install(
                 "service_name": DEFAULT_SERVICE_NAME,
                 "zen_exe_path": zen_exe,
                 "data_dir": ep.data_dir,
+                "service_user": service_user,
+                // Don't echo the password into the dry-run plan and don't
+                // read stdin yet — preview should be side-effect free.
+                "service_pass_supplied": service_pass_inline.is_some() || service_pass_stdin,
             }),
         );
         return Ok(());
@@ -1169,21 +1326,55 @@ fn service_install(
         ));
     }
 
+    // Codex P2: read stdin only AFTER the dry-run / --yes guards pass so a
+    // preview or rejected destructive command never consumes secret input.
+    let resolved_pass: Option<String> = if service_pass_stdin {
+        use std::io::BufRead;
+        let mut line = String::new();
+        std::io::stdin().lock().read_line(&mut line).map_err(|e| {
+            UecmError::InvalidInput(format!(
+                "read --service-pass-stdin from stdin: {e}"
+            ))
+        })?;
+        Some(line.trim_end_matches(['\r', '\n']).to_string())
+    } else {
+        service_pass_inline.map(str::to_string)
+    };
+    let service_pass = resolved_pass.as_deref();
+
     let creds = cred.resolve(&db)?;
+    // Build the invocation string for log_text. ServicePassword is wrapped
+    // in `--password <REDACTED>`-shape to leverage the existing redactor —
+    // the actual flag we pass to PS is `-ServicePassword` which the
+    // flag-name-based redactor doesn't catch, so we redact manually.
+    let pass_marker = if service_pass.is_some() {
+        " -ServicePassword [REDACTED]"
+    } else {
+        ""
+    };
+    let user_marker = service_user
+        .map(|u| format!(" -ServiceUser {u}"))
+        .unwrap_or_default();
     let invocation = redact(&format!(
-        "zen-service-install.ps1 -ZenExePath {zen_exe} -ServiceName {DEFAULT_SERVICE_NAME} -DataDir {}",
+        "zen-service-install.ps1 -ZenExePath {zen_exe} -ServiceName {DEFAULT_SERVICE_NAME} -DataDir {}{user_marker}{pass_marker}",
         ep.data_dir
     ));
     let op_id = operations::start(&db, "zen.service_install", &[ep.machine_id])?;
 
-    let body = build_param_script(
-        "zen-service-install.ps1",
-        &[
-            ("ZenExePath", zen_exe.as_str()),
-            ("ServiceName", DEFAULT_SERVICE_NAME),
-            ("DataDir", ep.data_dir.as_str()),
-        ],
-    );
+    // Build the parameter list. ServiceUser / ServicePassword only added
+    // when supplied — zen.exe defaults to LocalService when omitted.
+    let mut params: Vec<(&str, &str)> = vec![
+        ("ZenExePath", zen_exe.as_str()),
+        ("ServiceName", DEFAULT_SERVICE_NAME),
+        ("DataDir", ep.data_dir.as_str()),
+    ];
+    if let Some(u) = service_user {
+        params.push(("ServiceUser", u));
+    }
+    if let Some(p) = service_pass {
+        params.push(("ServicePassword", p));
+    }
+    let body = build_param_script("zen-service-install.ps1", &params);
     let result = match body {
         Ok(body) => run_remote(&machine.ip, &body, creds.as_ref())
             .and_then(|raw| parse_envelope(&raw, "zen-service-install")),
@@ -1649,6 +1840,60 @@ pub(crate) fn parse_envelope(raw: &str, sidecar: &str) -> UecmResult<serde_json:
 /// drive-absolute or UNC, no device namespace, no forbidden system roots.
 /// Stricter than `validate_data_dir_safe` because it also requires the path
 /// to be absolute (the sidecar refuses `C:ZenCache` and `\ZenCache` outright).
+/// Returns true if `user` names a Windows built-in service account that
+/// requires no password. Mirrors `Normalize-Account` in
+/// `zen-service-install.ps1`: accepts both short forms (`LocalSystem`,
+/// `.\\LocalService`) and long forms (`NT AUTHORITY\\LocalService`).
+pub(crate) fn is_builtin_service_account(user: &str) -> bool {
+    let t = user.trim().to_ascii_lowercase();
+    matches!(
+        t.as_str(),
+        "localsystem"
+            | "nt authority\\system"
+            | "nt authority\\localsystem"
+            | ".\\localsystem"
+            | "localservice"
+            | "nt authority\\localservice"
+            | ".\\localservice"
+            | "networkservice"
+            | "nt authority\\networkservice"
+            | ".\\networkservice"
+    )
+}
+
+/// Validate the service-account / password coherency the PS sidecar will
+/// enforce. Returning the error from here (instead of only the sidecar)
+/// makes `--dry-run` reflect what real `--yes` apply would do.
+///
+/// Codex P3: callers historically passed `password.is_some()`, which
+/// treated `Some("")` as supplied even though the sidecar's
+/// `[string]::IsNullOrEmpty($ServicePassword)` check rejects it. Take the
+/// password string here (rather than a bool) and coerce empty/whitespace
+/// to "missing" so dry-run mirrors apply.
+pub(crate) fn validate_service_account_pair(
+    service_user: Option<&str>,
+    service_pass: Option<&str>,
+    service_pass_stdin: bool,
+) -> UecmResult<()> {
+    let Some(u) = service_user else {
+        return Ok(());
+    };
+    if u.trim().is_empty() {
+        return Ok(());
+    }
+    let pass_supplied = service_pass.map(|p| !p.is_empty()).unwrap_or(false)
+        || service_pass_stdin;
+    if !is_builtin_service_account(u) && !pass_supplied {
+        return Err(UecmError::InvalidInput(format!(
+            "service_user {u:?} is not a Windows built-in account; a password \
+             is required (built-in accounts: LocalSystem / LocalService / \
+             NetworkService). Pass --service-pass / --service-pass-stdin, or \
+             pick a built-in account."
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_service_data_dir(p: &str) -> UecmResult<()> {
     let trimmed = p.trim();
     if trimmed.is_empty() {
@@ -2695,12 +2940,48 @@ fn append_verified_version(path: &std::path::Path, version: &str) -> UecmResult<
     Ok(true)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn verify_rules(
     ctx: &mut Ctx<'_>,
     ue_version: &str,
     ue_install: &str,
     write_verified: bool,
+    run_editor: bool,
+    machine: Option<i64>,
+    uproject_path: Option<&str>,
+    timeout_seconds: Option<u64>,
+    expected_host: Option<&str>,
+    expected_port: Option<i64>,
+    expected_namespace: Option<&str>,
+    cred: &CredentialArgs,
 ) -> UecmResult<()> {
+    // Codex P2: verifier-only flags without --run-editor are a script bug
+    // we must surface, not silently drop. The resolve-only branch never
+    // consults these fields, so accepting them would let CI/operators
+    // believe the headless editor verifier had run when it had not.
+    if !run_editor {
+        let cred_set = cred.cred_alias.is_some()
+            || cred.user.is_some()
+            || cred.pass.is_some()
+            || cred.pass_stdin;
+        if machine.is_some()
+            || uproject_path.is_some()
+            || timeout_seconds.is_some()
+            || expected_host.is_some()
+            || expected_port.is_some()
+            || expected_namespace.is_some()
+            || cred_set
+        {
+            return Err(UecmError::InvalidInput(
+                "--machine / --uproject-path / --timeout-seconds / --expected-* / \
+                 credential flags require --run-editor; without it the resolve-only \
+                 path ignores them and would falsely report a successful verifier run"
+                    .into(),
+            ));
+        }
+    }
+    let timeout_seconds = timeout_seconds.unwrap_or(300);
+
     let rules = zen_rules::load_default()?;
     let policy_str = match rules.unverified_policy {
         zen_rules::UnverifiedPolicy::Refuse => "refuse",
@@ -2709,13 +2990,41 @@ fn verify_rules(
 
     match zen_rules::resolve(&rules, ue_version) {
         Ok(resolved) => {
+            // T4.4: when `--run-editor` is set we run the headless verifier
+            // FIRST, so a failing verifier blocks the `--write-verified` leg
+            // from promoting an unverified version. Codex P2 fix: previously
+            // we wrote verified_versions first then ran the editor — a
+            // verifier timeout / host mismatch / WinRM error would still
+            // leave the yaml marked as verified, and subsequent `zen enable`
+            // would bypass `unverified_policy=refuse`.
+            let verify_outcome_json = if run_editor {
+                Some(run_verify_editor(
+                    ctx,
+                    ue_install,
+                    machine,
+                    uproject_path,
+                    timeout_seconds,
+                    expected_host,
+                    expected_port,
+                    expected_namespace,
+                    cred,
+                )?)
+            } else {
+                None
+            };
+            let verifier_ok = match &verify_outcome_json {
+                None => true,
+                Some(v) => v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false),
+            };
+
             // Successful resolve: render the plan + optionally append the
-            // matched major.minor to verified_versions on disk.
+            // matched major.minor to verified_versions on disk. We skip the
+            // write step when the verifier (if requested) reported failure.
             let mut wrote = false;
             let mut yaml_path_str: Option<String> = None;
             let mut verified_after: Vec<String> = rules.verified_versions.clone();
 
-            if write_verified {
+            if write_verified && verifier_ok {
                 let already = verified_after.iter().any(|v| v == &resolved.matched_version);
                 if !already {
                     let path = writable_rules_path().ok_or_else(|| {
@@ -2739,8 +3048,12 @@ fn verify_rules(
                 }
             }
 
+            // Top-level `ok` ANDs the verifier's `ok` in when --run-editor
+            // is set, so the caller can branch on a single flag.
+            let combined_ok = verifier_ok;
+
             let doc = serde_json::json!({
-                "ok": true,
+                "ok": combined_ok,
                 "ue_version": ue_version,
                 "matched_rule_version": resolved.matched_version,
                 "ue_install": ue_install,
@@ -2773,6 +3086,7 @@ fn verify_rules(
                 "verified_versions_after": verified_after,
                 "wrote": wrote,
                 "yaml_path": yaml_path_str,
+                "verify_outcome": verify_outcome_json,
             });
             ctx.emitter.emit_result(&doc).ok();
             Ok(())
@@ -2783,6 +3097,10 @@ fn verify_rules(
             // JSON `ok` flag is the contract; exit code stays clean per the
             // T4.5 spec so automation can keep scripting around this without
             // wrapping each call in error trapping.
+            //
+            // We don't launch the editor when the resolve already refused —
+            // the rules say this UE version isn't supported, so any verifier
+            // outcome would be misleading.
             let mm = major_minor_of(ue_version).unwrap_or_else(|| ue_version.to_string());
             let doc = serde_json::json!({
                 "ok": false,
@@ -2793,11 +3111,178 @@ fn verify_rules(
                 "message": msg,
                 "verified_versions_after": rules.verified_versions,
                 "wrote": false,
+                "verify_outcome": serde_json::Value::Null,
             });
             ctx.emitter.emit_result(&doc).ok();
             Ok(())
         }
         Err(other) => Err(other),
+    }
+}
+
+/// T4.4: ship `zen-verify-rules.ps1` to the target machine via WinRM and
+/// return the verifier's outcome as a serde_json `Value`. The CLI handler
+/// embeds the result under `verify_outcome` in the top-level result doc, and
+/// folds the inner `ok` into the outer `ok`.
+///
+/// Output shape (matches what UI / scripts consume from `verify_outcome`):
+///
+/// ```text
+/// {
+///   ok: bool,
+///   matched: bool,
+///   match_line?: string,
+///   matched_host?: string, matched_port?: int, matched_namespace?: string,
+///   elapsed_sec: int, editor_pid?: int, killed: bool,
+///   log_tail: [string, ...],
+///   message?: string,         // present when ok=false
+///   exit_code?: int,          // present when editor crashed
+///   machine_id: int, host: string,   // echoed back for joinability
+/// }
+/// ```
+#[allow(clippy::too_many_arguments)]
+fn run_verify_editor(
+    ctx: &mut Ctx<'_>,
+    ue_install: &str,
+    machine: Option<i64>,
+    uproject_path: Option<&str>,
+    timeout_seconds: u64,
+    expected_host: Option<&str>,
+    expected_port: Option<i64>,
+    expected_namespace: Option<&str>,
+    cred: &CredentialArgs,
+) -> UecmResult<serde_json::Value> {
+    let machine_id = machine.ok_or_else(|| {
+        UecmError::InvalidInput(
+            "zen verify-rules --run-editor: --machine <id> is required".into(),
+        )
+    })?;
+    let up = uproject_path.ok_or_else(|| {
+        UecmError::InvalidInput(
+            "zen verify-rules --run-editor: --uproject-path <PATH> is required".into(),
+        )
+    })?;
+    if timeout_seconds == 0 {
+        return Err(UecmError::InvalidInput(
+            "zen verify-rules --run-editor: --timeout-seconds must be > 0".into(),
+        ));
+    }
+
+    let db = ctx.require_db()?.clone();
+    let m = machines::find_by_id(&db, machine_id)?.ok_or_else(|| {
+        UecmError::InvalidInput(format!("machine id={} not found", machine_id))
+    })?;
+    let creds = cred.resolve(&db)?;
+
+    let input = crate::core::zen::verify::VerifyInput {
+        ue_root: ue_install.to_string(),
+        uproject_path: up.to_string(),
+        timeout_seconds,
+        expected_host: expected_host.map(|s| s.to_string()),
+        expected_port,
+        expected_namespace: expected_namespace.map(|s| s.to_string()),
+    };
+
+    let invocation = redact(&format!(
+        "zen-verify-rules.ps1 -UeRoot '{}' -UprojectPath '{}' -TimeoutSeconds {}",
+        ue_install, up, timeout_seconds
+    ));
+    let op_id = operations::start(&db, "zen.verify_rules.run_editor", &[machine_id])?;
+
+    let cred_ref = creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str()));
+    let result = crate::core::zen::verify::verify_endpoint(&m.ip, cred_ref, &input);
+
+    let (outcome_json, op_result_for_log) = match result {
+        Ok(outcome) => {
+            let v = serde_json::json!({
+                "ok": true,
+                "matched": outcome.matched,
+                "match_line": outcome.match_line,
+                "matched_host": outcome.matched_host,
+                "matched_port": outcome.matched_port,
+                "matched_namespace": outcome.matched_namespace,
+                "elapsed_sec": outcome.elapsed_sec,
+                "editor_pid": outcome.editor_pid,
+                "killed": outcome.killed,
+                "log_tail": outcome.log_tail,
+                "machine_id": machine_id,
+                "host": m.ip.clone(),
+            });
+            (Some(v), Ok::<serde_json::Value, UecmError>(serde_json::Value::Null))
+        }
+        Err(UecmError::PowerShell(msg)) => {
+            // Codex P2: distinguish between
+            //   (a) a sidecar that ran and returned `{ok:false,...}` →
+            //       semantic failure; surface as JSON with ok=false and
+            //       let the caller exit 0 (the run-editor outcome is
+            //       legitimate data, not a transport failure).
+            //   (b) a transport failure: WinRM unreachable, auth denied,
+            //       PowerShell crashed before producing output → must
+            //       propagate as `Err(PowerShell)` so `exit_code_for`
+            //       returns 4 (powershell_failed) and automation can
+            //       distinguish "verifier ran and disagreed" from
+            //       "verifier never ran". Same contract as the other
+            //       zen remote commands.
+            //
+            // parse_outcome_json embeds the sidecar envelope in the
+            // error string as `... ; outcome: <json>` when it has one.
+            // No such marker → no envelope → transport failure.
+            let outcome_obj: Option<serde_json::Value> = msg
+                .find("; outcome: ")
+                .and_then(|idx| {
+                    let json_part = &msg[(idx + "; outcome: ".len())..];
+                    serde_json::from_str::<serde_json::Value>(json_part).ok()
+                });
+            match outcome_obj {
+                Some(o) => {
+                    let mut doc = serde_json::json!({
+                        "ok": false,
+                        "message": msg.clone(),
+                        "machine_id": machine_id,
+                        "host": m.ip.clone(),
+                    });
+                    if let (Some(obj), Some(inner)) = (doc.as_object_mut(), o.as_object()) {
+                        for (k, v) in inner {
+                            if k == "ok" || k == "message" {
+                                continue;
+                            }
+                            obj.insert(k.clone(), v.clone());
+                        }
+                    }
+                    (
+                        Some(doc),
+                        Err::<serde_json::Value, UecmError>(UecmError::PowerShell(msg)),
+                    )
+                }
+                None => {
+                    // Transport / protocol error — no envelope to surface.
+                    // Log and re-raise as Err so the CLI exits with the
+                    // powershell_failed code, mirroring zen probe /
+                    // service-install / etc.
+                    (None, Err(UecmError::PowerShell(msg)))
+                }
+            }
+        }
+        Err(other) => {
+            // Non-PowerShell errors (Configuration, InvalidInput, etc.)
+            // are also propagated — they aren't sidecar envelopes either.
+            (None, Err(other))
+        }
+    };
+
+    finalize_op(&db, op_id, &op_result_for_log, &invocation);
+
+    if let Some(doc) = outcome_json {
+        return Ok(doc);
+    }
+    // No envelope to surface — propagate the underlying error so the CLI
+    // exit code reflects the transport failure (powershell_failed=4 etc.)
+    // rather than 0.
+    match op_result_for_log {
+        Err(e) => Err(e),
+        Ok(_) => Err(UecmError::OperationFailed(
+            "verify_endpoint produced no envelope and no error".into(),
+        )),
     }
 }
 
@@ -3377,7 +3862,7 @@ mod tests {
         };
         // --dry-run with editor_owned must still error out (DB state matters,
         // not the dry-run flag).
-        let err = service_install(&mut ctx, endpoint_id, false, true, &cred).unwrap_err();
+        let err = service_install(&mut ctx, endpoint_id, None, None, false, false, true, &cred).unwrap_err();
         match err {
             UecmError::InvalidInput(msg) => {
                 assert!(msg.contains("lifecycle"), "msg={msg}");
@@ -4032,13 +4517,38 @@ overrides: {}
         }
     }
 
+    /// T4.5 / T4.4: verify_rules signature now carries 8 extra params for the
+    /// run-editor path. Tests that only exercise the resolve-only branch
+    /// route through this wrapper so the call sites stay readable.
+    fn verify_rules_resolve_only(
+        ctx: &mut Ctx<'_>,
+        ue_version: &str,
+        ue_install: &str,
+        write_verified: bool,
+    ) -> UecmResult<()> {
+        verify_rules(
+            ctx,
+            ue_version,
+            ue_install,
+            write_verified,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            &CredentialArgs::default_for_test(),
+        )
+    }
+
     #[test]
     fn verify_rules_resolves_verified_version() {
         let (_dir, p) = fixture_yaml_dir();
         let _lock = crate::ENV_TEST_LOCK.lock().unwrap();
         let _guard = EnvVarGuard::set("UECM_ZEN_RULES_PATH", &p);
         let mut ctx = fresh_ctx();
-        verify_rules(&mut ctx, "5.7", "C:\\UE\\5.7", false).unwrap();
+        verify_rules_resolve_only(&mut ctx, "5.7", "C:\\UE\\5.7", false).unwrap();
         // Yaml on disk is unchanged.
         let after = std::fs::read_to_string(&p).unwrap();
         assert_eq!(after.trim(), VERIFY_RULES_FIXTURE_YAML.trim());
@@ -4051,7 +4561,7 @@ overrides: {}
         let _guard = EnvVarGuard::set("UECM_ZEN_RULES_PATH", &p);
         let mut ctx = fresh_ctx();
         // 5.7.4 must resolve via the patch-stripping resolver.
-        verify_rules(&mut ctx, "5.7.4", "C:\\UE\\5.7.4", false).unwrap();
+        verify_rules_resolve_only(&mut ctx, "5.7.4", "C:\\UE\\5.7.4", false).unwrap();
     }
 
     #[test]
@@ -4062,7 +4572,7 @@ overrides: {}
         let mut ctx = fresh_ctx();
         // 5.8 not in verified_versions and policy=refuse → must return Ok(())
         // (the JSON ok:false flag carries the signal; exit code stays 0).
-        let r = verify_rules(&mut ctx, "5.8", "C:\\UE\\5.8", false);
+        let r = verify_rules_resolve_only(&mut ctx, "5.8", "C:\\UE\\5.8", false);
         assert!(r.is_ok(), "unverified+refuse must not propagate as Err; got {:?}", r);
     }
 
@@ -4073,7 +4583,7 @@ overrides: {}
         let _guard = EnvVarGuard::set("UECM_ZEN_RULES_PATH", &p);
         let before = std::fs::read_to_string(&p).unwrap();
         let mut ctx = fresh_ctx();
-        verify_rules(&mut ctx, "5.7", "C:\\UE\\5.7", true).unwrap();
+        verify_rules_resolve_only(&mut ctx, "5.7", "C:\\UE\\5.7", true).unwrap();
         let after = std::fs::read_to_string(&p).unwrap();
         assert_eq!(before, after, "5.7 already verified; file must be untouched");
     }
@@ -4092,7 +4602,7 @@ overrides: {}
         let _lock = crate::ENV_TEST_LOCK.lock().unwrap();
         let _guard = EnvVarGuard::set("UECM_ZEN_RULES_PATH", &p);
         let mut ctx = fresh_ctx();
-        verify_rules(&mut ctx, "5.8", "C:\\UE\\5.8", true).unwrap();
+        verify_rules_resolve_only(&mut ctx, "5.8", "C:\\UE\\5.8", true).unwrap();
 
         // Re-parse the written yaml and confirm 5.8 is now in verified_versions.
         let after = std::fs::read_to_string(&p).unwrap();
@@ -4121,7 +4631,7 @@ overrides: {}
         let _lock = crate::ENV_TEST_LOCK.lock().unwrap();
         let _guard = EnvVarGuard::set("UECM_ZEN_RULES_PATH", &p);
         let mut ctx = fresh_ctx();
-        verify_rules(&mut ctx, "5.8.3", "C:\\UE\\5.8.3", true).unwrap();
+        verify_rules_resolve_only(&mut ctx, "5.8.3", "C:\\UE\\5.8.3", true).unwrap();
 
         let after = std::fs::read_to_string(&p).unwrap();
         let parsed = zen_rules::parse_str(&after).expect("rewritten yaml still parses");

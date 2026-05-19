@@ -190,23 +190,7 @@ pub fn change_role(
     let conn = db.lock().unwrap();
     let tx = conn.unchecked_transaction()?;
 
-    let current = zen_endpoints::get_tx(&tx, endpoint_id)?.ok_or_else(|| {
-        UecmError::InvalidInput(format!("zen endpoint {endpoint_id} does not exist"))
-    })?;
-
-    // The new role must be compatible with the current lifecycle_mode.
-    // (Plan §634: promoting to `shared_upstream` while the row is still
-    // `editor_owned` would advertise the row as cluster master even though
-    // the underlying zen would get preempted by editor sponsors.)
-    validate_role_lifecycle(new_role, &current.lifecycle_mode)?;
-    validate_upstream_tx(&tx, new_role, new_upstream, Some(endpoint_id))?;
-
-    // Demoting `shared_upstream → local` while children still point here
-    // would leave them referencing a `local` endpoint. Refuse and make the
-    // operator un-point dependents first (same policy as `unregister`).
-    if current.role == ROLE_SHARED_UPSTREAM && new_role != ROLE_SHARED_UPSTREAM {
-        ensure_no_dependents_on_demote_tx(&tx, endpoint_id)?;
-    }
+    let current = validate_change_role_tx(&tx, endpoint_id, new_role, new_upstream)?;
 
     let updated = ZenEndpoint {
         id: current.id,
@@ -239,6 +223,61 @@ pub fn list(db: &Db) -> UecmResult<Vec<ZenEndpoint>> {
 /// Thin pass-through to [`zen_endpoints::list_for_machine`].
 pub fn list_for_machine(db: &Db, machine_id: i64) -> UecmResult<Vec<ZenEndpoint>> {
     zen_endpoints::list_for_machine(db, machine_id)
+}
+
+/// Validate a `change_role` transition without writing. Used by CLI /
+/// Tauri dry-run paths so a preview can't promise success when the real
+/// apply would refuse the transition (codex P2 — `--dry-run` previously
+/// emitted the plan before the `lifecycle_mode != installed_service` /
+/// dependents-on-demote / bad-upstream checks ran).
+///
+/// Returns the current endpoint row when all validation passes, so the
+/// caller has the same "before" snapshot the real `change_role` would
+/// see — useful for building the plan JSON without a second DB read.
+pub fn validate_change_role(
+    db: &Db,
+    endpoint_id: i64,
+    new_role: &str,
+    new_upstream: Option<i64>,
+) -> UecmResult<ZenEndpoint> {
+    validate_role(new_role)?;
+    let conn = db.lock().unwrap();
+    // The read-only path doesn't need a transaction (no writes), but
+    // grabbing one keeps a consistent snapshot across the multi-query
+    // checks below (mirrors `change_role`'s real-apply path).
+    let tx = conn.unchecked_transaction()?;
+    let current = validate_change_role_tx(&tx, endpoint_id, new_role, new_upstream)?;
+    // Don't commit — there were no writes.
+    Ok(current)
+}
+
+/// Inner helper shared by `change_role` (write) and `validate_change_role`
+/// (read-only). Returns the current row when all validation passes.
+fn validate_change_role_tx(
+    tx: &Connection,
+    endpoint_id: i64,
+    new_role: &str,
+    new_upstream: Option<i64>,
+) -> UecmResult<ZenEndpoint> {
+    let current = zen_endpoints::get_tx(tx, endpoint_id)?.ok_or_else(|| {
+        UecmError::InvalidInput(format!("zen endpoint {endpoint_id} does not exist"))
+    })?;
+
+    // The new role must be compatible with the current lifecycle_mode.
+    // (Plan §634: promoting to `shared_upstream` while the row is still
+    // `editor_owned` would advertise the row as cluster master even though
+    // the underlying zen would get preempted by editor sponsors.)
+    validate_role_lifecycle(new_role, &current.lifecycle_mode)?;
+    validate_upstream_tx(tx, new_role, new_upstream, Some(endpoint_id))?;
+
+    // Demoting `shared_upstream → local` while children still point here
+    // would leave them referencing a `local` endpoint. Refuse and make the
+    // operator un-point dependents first (same policy as `unregister`).
+    if current.role == ROLE_SHARED_UPSTREAM && new_role != ROLE_SHARED_UPSTREAM {
+        ensure_no_dependents_on_demote_tx(tx, endpoint_id)?;
+    }
+
+    Ok(current)
 }
 
 // ---- internal helpers ------------------------------------------------------

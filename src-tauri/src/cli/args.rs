@@ -705,6 +705,34 @@ pub enum ZenAction {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Switch an existing endpoint's role (`local` ↔ `shared_upstream`).
+    ///
+    /// Avoids the unregister + re-register dance when an operator only
+    /// needs to flip topology. All transitions enforced by
+    /// `core::zen::endpoint::change_role`:
+    /// - `local → shared_upstream`: caller MUST set `--upstream-endpoint-id None`
+    ///   (omit it). A master can't itself point upstream.
+    /// - `shared_upstream → local`: optionally set `--upstream-endpoint-id`
+    ///   to point at another master, otherwise the endpoint becomes
+    ///   standalone.
+    /// - `local → local`: rewires the upstream pointer.
+    /// - `shared_upstream → local` while dependents still reference this
+    ///   endpoint as their upstream → refused (operator un-points first).
+    ChangeRole {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        /// New role: `local` or `shared_upstream`.
+        #[arg(long, value_name = "ROLE")]
+        new_role: String,
+        /// Desired upstream pointer AFTER the transition. Omit for
+        /// `shared_upstream` (rejected if set) or for standalone `local`.
+        #[arg(long, value_name = "ID")]
+        upstream_endpoint_id: Option<i64>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Render zen.lua from the endpoint row + optional upstream and write it
     /// to the target host. `--dry-run` previews without invoking PowerShell.
     ApplyConfig {
@@ -793,35 +821,74 @@ pub enum ZenAction {
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
-    /// Resolve the zen INI rule set for a given UE version (T4.5 resolve-only).
+    /// Resolve the zen INI rule set for a given UE version (T4.5 resolve-only,
+    /// extended by T4.4 with `--run-editor`).
     ///
-    /// Parses `zen-ini-rules.yaml`, resolves the effective rules for the
-    /// supplied `--ue-version`, and prints the plan as JSON. T4.4/T4.6 (the
-    /// real headless-editor verifier + PS sidecar) are deferred — this command
-    /// is the offline half of "promote a new UE version to verified" so the
-    /// operator can review the rules and (with `--write-verified`) record the
-    /// version as verified in the yaml.
+    /// Without `--run-editor` this is the original T4.5 behavior: parse
+    /// `zen-ini-rules.yaml`, resolve the effective rules for the supplied
+    /// `--ue-version`, and print the plan as JSON. With `--run-editor`, after
+    /// the resolve succeeds the command also drives a headless UE editor on
+    /// the target machine via the `zen-verify-rules.ps1` sidecar (T4.6) and
+    /// watches its log for the ZenShared OK line. See
+    /// `docs/research/zen-launch-mechanism.md` §8 for the matching line and
+    /// why the editor has to be killed instead of waited on.
     ///
-    /// `--ue-install` is captured as metadata only — no path I/O happens here.
-    /// `--write-verified` appends the major.minor to `verified_versions` in
-    /// the yaml on disk when the resolve succeeds and the version isn't
-    /// already listed. The yaml file path is the same one `load_default()`
-    /// picks (env override or on-disk candidate); writing to the embedded
-    /// fallback is refused.
+    /// `--ue-install` is captured as metadata for the resolve-only path; it
+    /// IS used as the editor root (`Engine\Binaries\Win64\UnrealEditor-Cmd.exe`)
+    /// when `--run-editor` is set. `--write-verified` appends the major.minor
+    /// to `verified_versions` in the yaml on disk when the resolve succeeds
+    /// and the version isn't already listed. The yaml file path is the same
+    /// one `load_default()` picks (env override or on-disk candidate);
+    /// writing to the embedded fallback is refused.
     VerifyRules {
         /// UE version to resolve rules for (e.g. `5.7` or `5.7.4`). Patch
         /// component is allowed but ignored — overrides and verified-version
         /// lookup are keyed by major.minor only.
         #[arg(long, value_name = "X.Y")]
         ue_version: String,
-        /// Engine install path on the target host (emitted as metadata only;
-        /// no I/O performed here — T4.4 will use this for the real verifier).
+        /// Engine install path on the target host (used as `UeRoot` when
+        /// `--run-editor` is set; metadata-only otherwise).
         #[arg(long, value_name = "PATH")]
         ue_install: String,
         /// On success, append the UE major.minor to `verified_versions` in the
         /// yaml file. No-op if already verified.
         #[arg(long)]
         write_verified: bool,
+        /// When set, after the resolve runs the real T4.4 verifier against the
+        /// target machine via WinRM: launches `UnrealEditor-Cmd.exe` headless,
+        /// tails its log for the ZenShared OK line, kills the editor when the
+        /// regex matches. Requires `--uproject-path` and `--machine`.
+        #[arg(long)]
+        run_editor: bool,
+        /// Machine id (from inventory) to run the headless verifier on.
+        /// Required with `--run-editor`.
+        #[arg(long, value_name = "ID")]
+        machine: Option<i64>,
+        /// Absolute path on the target host to the `.uproject` to open.
+        /// Required with `--run-editor`. The project must already have zen
+        /// enabled (run `zen enable` first).
+        #[arg(long, value_name = "PATH")]
+        uproject_path: Option<String>,
+        /// Editor-log tail timeout in seconds. Default 300 — UE 5.7 typically
+        /// emits the ZenShared line within 20-60 s of starting; 300 is a
+        /// generous ceiling. Only valid with `--run-editor`; supplying this
+        /// without `--run-editor` is rejected so callers don't believe the
+        /// verifier ran when it didn't.
+        #[arg(long, value_name = "SECS")]
+        timeout_seconds: Option<u64>,
+        /// Optional: assert the matched line's host equals this. Mismatch
+        /// flips the run-editor outcome's `ok` to false.
+        #[arg(long, value_name = "HOST")]
+        expected_host: Option<String>,
+        /// Optional: assert the matched neighbour line's port equals this.
+        #[arg(long, value_name = "PORT")]
+        expected_port: Option<i64>,
+        /// Optional: assert the matched line's namespace equals this.
+        /// Default `ue.ddc` is applied by the sidecar when omitted.
+        #[arg(long, value_name = "NS")]
+        expected_namespace: Option<String>,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
     },
 }
 
@@ -868,6 +935,22 @@ pub enum ZenServiceAction {
     Install {
         #[arg(long, value_name = "ID")]
         endpoint_id: i64,
+        /// Optional service account. Forwarded to `zen.exe service
+        /// install -u <user>`. Empty / omitted → zen default
+        /// (NT AUTHORITY\\LocalService). Common values:
+        /// `LocalSystem`, `.\\uecm-test`, `DOMAIN\\renderfarm-svc`.
+        #[arg(long, value_name = "USER")]
+        service_user: Option<String>,
+        /// Password for `--service-user`. Required for non-built-in
+        /// accounts (LocalSystem / LocalService / NetworkService have
+        /// no password). Visible briefly in zen.exe argv — use
+        /// `--service-pass-stdin` to read from stdin instead.
+        #[arg(long, value_name = "PASS", conflicts_with = "service_pass_stdin")]
+        service_pass: Option<String>,
+        /// Read service password from stdin (single line, trailing
+        /// CR/LF trimmed). Mutually exclusive with `--service-pass`.
+        #[arg(long)]
+        service_pass_stdin: bool,
         #[arg(long)]
         yes: bool,
         #[arg(long)]
@@ -1279,11 +1362,18 @@ mod tests {
         ]).unwrap();
         match cli.command {
             Domain::Zen { action: ZenAction::VerifyRules {
-                ue_version, ue_install, write_verified,
+                ue_version, ue_install, write_verified, run_editor,
+                machine, uproject_path, timeout_seconds, ..
             } } => {
                 assert_eq!(ue_version, "5.7");
                 assert_eq!(ue_install, "C:\\UE\\5.7");
                 assert!(!write_verified);
+                assert!(!run_editor);
+                assert!(machine.is_none());
+                assert!(uproject_path.is_none());
+                // Default is no longer baked into clap — handler applies 300
+                // when --run-editor is set. The bare invocation parses None.
+                assert!(timeout_seconds.is_none());
             }
             _ => panic!("expected Zen::VerifyRules"),
         }
@@ -1301,6 +1391,42 @@ mod tests {
             Domain::Zen { action: ZenAction::VerifyRules { write_verified, ue_version, .. } } => {
                 assert!(write_verified);
                 assert_eq!(ue_version, "5.8.0");
+            }
+            _ => panic!("expected Zen::VerifyRules"),
+        }
+    }
+
+    // T4.4: --run-editor adds the headless verifier hop. We just assert
+    // the flags plumb through clap into ZenAction::VerifyRules; the actual
+    // dispatch lives in `cli::domain_zen::verify_rules`.
+    #[test]
+    fn zen_verify_rules_accepts_run_editor_flags() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "zen", "verify-rules",
+            "--ue-version", "5.7",
+            "--ue-install", "D:\\UE_5.7",
+            "--run-editor",
+            "--machine", "5",
+            "--uproject-path", "E:\\proj\\p.uproject",
+            "--timeout-seconds", "120",
+            "--expected-host", "127.0.0.1",
+            "--expected-port", "8558",
+            "--expected-namespace", "ue.ddc",
+            "--cred-alias", "render-svc",
+        ]).unwrap();
+        match cli.command {
+            Domain::Zen { action: ZenAction::VerifyRules {
+                run_editor, machine, uproject_path, timeout_seconds,
+                expected_host, expected_port, expected_namespace, cred, ..
+            } } => {
+                assert!(run_editor);
+                assert_eq!(machine, Some(5));
+                assert_eq!(uproject_path.as_deref(), Some("E:\\proj\\p.uproject"));
+                assert_eq!(timeout_seconds, Some(120));
+                assert_eq!(expected_host.as_deref(), Some("127.0.0.1"));
+                assert_eq!(expected_port, Some(8558));
+                assert_eq!(expected_namespace.as_deref(), Some("ue.ddc"));
+                assert_eq!(cred.cred_alias.as_deref(), Some("render-svc"));
             }
             _ => panic!("expected Zen::VerifyRules"),
         }

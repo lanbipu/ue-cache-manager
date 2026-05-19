@@ -596,6 +596,129 @@ fn zen_verify_rules_runs_without_writable_db() {
 }
 
 // -------------------------------------------------------------------------
+// Plan 7 T4.4: zen verify-rules --run-editor
+// -------------------------------------------------------------------------
+
+#[test]
+fn zen_verify_rules_run_editor_requires_machine_flag() {
+    // --run-editor without --machine must surface InvalidInput before any
+    // WinRM call. Exit code 2 (invalid_input) per the CLI exit-code table.
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = dir.path().join("zen-ini-rules.yaml");
+    std::fs::write(&yaml, T45_FIXTURE_YAML).unwrap();
+    let tmp_db = tempfile::NamedTempFile::new().unwrap();
+
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", tmp_db.path().to_string_lossy().to_string())
+        .env("UECM_ZEN_RULES_PATH", &yaml)
+        .args([
+            "--json", "zen", "verify-rules",
+            "--ue-version", "5.7",
+            "--ue-install", "C:\\UE\\5.7",
+            "--run-editor",
+            "--uproject-path", "C:\\proj\\p.uproject",
+        ])
+        .output()
+        .expect("spawn");
+    assert!(!out.status.success(), "missing --machine should fail");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "exit code 2 (invalid_input); stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn zen_verify_rules_run_editor_requires_uproject_path() {
+    // --run-editor without --uproject-path must surface InvalidInput.
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = dir.path().join("zen-ini-rules.yaml");
+    std::fs::write(&yaml, T45_FIXTURE_YAML).unwrap();
+    let tmp_db = tempfile::NamedTempFile::new().unwrap();
+
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", tmp_db.path().to_string_lossy().to_string())
+        .env("UECM_ZEN_RULES_PATH", &yaml)
+        .args([
+            "--json", "zen", "verify-rules",
+            "--ue-version", "5.7",
+            "--ue-install", "C:\\UE\\5.7",
+            "--run-editor",
+            "--machine", "1",
+        ])
+        .output()
+        .expect("spawn");
+    assert!(!out.status.success(), "missing --uproject-path should fail");
+    assert_eq!(out.status.code(), Some(2));
+}
+
+#[test]
+fn zen_verify_rules_run_editor_errors_on_unknown_machine() {
+    // --run-editor with a machine id that isn't in inventory must surface
+    // an error BEFORE any WinRM call (machines::find_by_id returns None).
+    // We use a fresh DB and a machine id that can't exist there.
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = dir.path().join("zen-ini-rules.yaml");
+    std::fs::write(&yaml, T45_FIXTURE_YAML).unwrap();
+    let tmp_db = tempfile::NamedTempFile::new().unwrap();
+
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", tmp_db.path().to_string_lossy().to_string())
+        .env("UECM_ZEN_RULES_PATH", &yaml)
+        .args([
+            "--json", "zen", "verify-rules",
+            "--ue-version", "5.7",
+            "--ue-install", "C:\\UE\\5.7",
+            "--run-editor",
+            "--machine", "999",
+            "--uproject-path", "C:\\proj\\p.uproject",
+            "--timeout-seconds", "1",
+        ])
+        .output()
+        .expect("spawn");
+    assert!(!out.status.success(), "unknown machine should fail");
+    // machine-not-found is InvalidInput (exit code 2).
+    assert_eq!(out.status.code(), Some(2));
+    // The error message must mention the missing machine id so the operator
+    // can spot the typo.
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(combined.contains("999"), "stderr/stdout: {combined}");
+}
+
+#[test]
+fn zen_verify_rules_resolve_only_unaffected_by_run_editor_addition() {
+    // Without --run-editor, the verify-rules output must include a
+    // `verify_outcome: null` field but otherwise match the T4.5 shape.
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = dir.path().join("zen-ini-rules.yaml");
+    std::fs::write(&yaml, T45_FIXTURE_YAML).unwrap();
+    let tmp_db = tempfile::NamedTempFile::new().unwrap();
+
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", tmp_db.path().to_string_lossy().to_string())
+        .env("UECM_ZEN_RULES_PATH", &yaml)
+        .args([
+            "--json", "zen", "verify-rules",
+            "--ue-version", "5.7",
+            "--ue-install", "C:\\UE\\5.7",
+        ])
+        .output()
+        .expect("spawn");
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let v: serde_json::Value =
+        serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim_end()).unwrap();
+    assert_eq!(v["ok"], serde_json::Value::Bool(true));
+    assert_eq!(v["verify_outcome"], serde_json::Value::Null);
+    // Existing fields are untouched.
+    assert_eq!(v["rules"]["enable_zen_shared"]["key"], "ZenShared");
+}
+
+// -------------------------------------------------------------------------
 // Plan 7 T3.6: `--backend` flag on ddc {generate, verify, distribute}
 // -------------------------------------------------------------------------
 
