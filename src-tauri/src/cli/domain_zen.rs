@@ -4153,4 +4153,114 @@ overrides: {}
             }
         }
     }
+
+    // --- T5.2: operations.log_text never contains raw secrets -------------
+
+    /// Read `operations.log_text` for `op_id` — small helper since
+    /// `data::operations` doesn't expose a getter (production code never
+    /// reads the column back; it's a forensic field for operators).
+    fn read_log_text(db: &Db, op_id: i64) -> String {
+        let conn = db.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT log_text FROM operations WHERE id = ?1")
+            .unwrap();
+        stmt.query_row(rusqlite::params![op_id], |row| {
+            Ok(row.get::<_, Option<String>>(0)?)
+        })
+        .unwrap()
+        .unwrap_or_default()
+    }
+
+    /// Verifies finalize_op stores the redacted invocation as-is when the
+    /// op succeeds. The caller wraps `invocation` through `redact()` before
+    /// passing it in, so by the time `finalize_op` writes the row the
+    /// scrubbed form is what should land in `operations.log_text`.
+    #[test]
+    fn finalize_op_persists_redacted_invocation_on_success() {
+        let ctx = fresh_ctx();
+        let db = ctx.db.unwrap();
+        let op_id =
+            crate::data::operations::start(&db, "zen.test.success", &[1]).unwrap();
+        let raw = "zen.exe service install --access-token sk_live_top_secret \
+                   --password p@ssw0rd --api-key apk_xyz";
+        let invocation = redact(raw);
+        finalize_op(&db, op_id, &Ok(serde_json::json!({"ok": true})), &invocation);
+        let log_text = read_log_text(&db, op_id);
+        for forbidden in ["sk_live_top_secret", "p@ssw0rd", "apk_xyz"] {
+            assert!(
+                !log_text.contains(forbidden),
+                "operations.log_text leaked secret {forbidden:?}: {log_text:?}"
+            );
+        }
+        assert!(log_text.contains("[REDACTED]"));
+    }
+
+    /// On error, finalize_op appends `\nerror: {redacted_err}` to the
+    /// invocation. Verify the error tail is scrubbed too — UE error
+    /// messages often quote the offending command line back, which is the
+    /// classic leak vector this redactor exists to prevent.
+    #[test]
+    fn finalize_op_persists_redacted_error_on_failure() {
+        let ctx = fresh_ctx();
+        let db = ctx.db.unwrap();
+        let op_id =
+            crate::data::operations::start(&db, "zen.test.failure", &[1]).unwrap();
+        let invocation = redact("zen.exe service install --password leaked_in_invocation");
+        // Simulate an error message that quotes the original command line
+        // back with the secret embedded — the canonical leak shape.
+        let err = UecmError::OperationFailed(
+            "zen.exe service install --password leaked_in_error failed (exit 1)".to_string(),
+        );
+        finalize_op(&db, op_id, &Err(err), &invocation);
+        let log_text = read_log_text(&db, op_id);
+        assert!(
+            !log_text.contains("leaked_in_invocation"),
+            "log_text leaked secret in invocation: {log_text:?}"
+        );
+        assert!(
+            !log_text.contains("leaked_in_error"),
+            "log_text leaked secret in error tail: {log_text:?}"
+        );
+        // Marker present in both halves.
+        assert_eq!(log_text.matches("[REDACTED]").count(), 2);
+    }
+
+    /// Stricter property check: regardless of which form the operator put
+    /// the secret into (= vs space, quoted vs unquoted), none of the
+    /// SENSITIVE_FLAGS values survive a round trip through finalize_op.
+    #[test]
+    fn finalize_op_redacts_all_sensitive_flag_forms() {
+        let ctx = fresh_ctx();
+        let db = ctx.db.unwrap();
+        let raw_forms = [
+            "cmd --access-token=secret_eq",
+            "cmd --access-token secret_ws",
+            "cmd --password=\"p w s\" tail",
+            "cmd --password 'sq value' tail",
+            "cmd --api-key=ApiSecretEq",
+            "cmd --api-key ApiSecretWs",
+        ];
+        for (i, raw) in raw_forms.iter().enumerate() {
+            let op_id =
+                crate::data::operations::start(&db, "zen.test.forms", &[1]).unwrap();
+            let inv = redact(raw);
+            finalize_op(&db, op_id, &Ok(serde_json::json!({"ok": true})), &inv);
+            let log_text = read_log_text(&db, op_id);
+            for needle in [
+                "secret_eq",
+                "secret_ws",
+                "p w s",
+                "sq value",
+                "ApiSecretEq",
+                "ApiSecretWs",
+            ] {
+                assert!(
+                    !log_text.contains(needle),
+                    "form {} leaked {:?}: {:?}",
+                    i, needle, log_text
+                );
+            }
+            assert!(log_text.contains("[REDACTED]"));
+        }
+    }
 }
