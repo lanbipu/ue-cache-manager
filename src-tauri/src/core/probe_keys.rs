@@ -18,33 +18,46 @@ pub struct ProbeSpec {
     /// branch should mark it `na`). L1Port is always `false`; L3Derived is always
     /// `false` (computed from local DB).
     pub requires_creds: bool,
+    /// `true` if the PowerShell health-probes.ps1 emits this key into the
+    /// `$results` hashtable. Most L2/L3 business probes are PS-emitted; a few
+    /// L3Business probes are augmented in Rust after the round-trip
+    /// (e.g. rs_service via core::renderstream_service). Drift test only
+    /// validates ps_emitted == true.
+    pub ps_emitted: bool,
 }
 
 pub const PROBE_REGISTRY: &[ProbeSpec] = &[
     // L1 — port reachability (Rust TCP, no creds)
-    ProbeSpec { key: "tcp_5985", layer: Layer::L1Port, requires_creds: false },
-    ProbeSpec { key: "tcp_445",  layer: Layer::L1Port, requires_creds: false },
-    ProbeSpec { key: "tcp_135",  layer: Layer::L1Port, requires_creds: false },
+    ProbeSpec { key: "tcp_5985", layer: Layer::L1Port, requires_creds: false, ps_emitted: false },
+    ProbeSpec { key: "tcp_445",  layer: Layer::L1Port, requires_creds: false, ps_emitted: false },
+    ProbeSpec { key: "tcp_135",  layer: Layer::L1Port, requires_creds: false, ps_emitted: false },
 
     // L2 — bootstrap configuration (PowerShell via WinRM)
-    ProbeSpec { key: "firewall_445",               layer: Layer::L2Bootstrap, requires_creds: true },
-    ProbeSpec { key: "local_account_token_filter", layer: Layer::L2Bootstrap, requires_creds: true },
-    ProbeSpec { key: "long_paths_enabled",         layer: Layer::L2Bootstrap, requires_creds: true },
-    ProbeSpec { key: "lanman_server",              layer: Layer::L2Bootstrap, requires_creds: true },
+    ProbeSpec { key: "firewall_445",               layer: Layer::L2Bootstrap, requires_creds: true, ps_emitted: true },
+    ProbeSpec { key: "local_account_token_filter", layer: Layer::L2Bootstrap, requires_creds: true, ps_emitted: true },
+    ProbeSpec { key: "long_paths_enabled",         layer: Layer::L2Bootstrap, requires_creds: true, ps_emitted: true },
+    ProbeSpec { key: "lanman_server",              layer: Layer::L2Bootstrap, requires_creds: true, ps_emitted: true },
 
     // L3 — business workflow (PowerShell via WinRM)
-    ProbeSpec { key: "share_reachable", layer: Layer::L3Business, requires_creds: true },
-    ProbeSpec { key: "ntfs_perm",       layer: Layer::L3Business, requires_creds: true },
-    ProbeSpec { key: "cred_user",       layer: Layer::L3Business, requires_creds: true },
-    ProbeSpec { key: "cred_system",     layer: Layer::L3Business, requires_creds: true },
-    ProbeSpec { key: "env_vars",        layer: Layer::L3Business, requires_creds: true },
-    ProbeSpec { key: "system_write",    layer: Layer::L3Business, requires_creds: true },
-    ProbeSpec { key: "winmgmt",         layer: Layer::L3Business, requires_creds: true },
+    ProbeSpec { key: "share_reachable", layer: Layer::L3Business, requires_creds: true, ps_emitted: true },
+    ProbeSpec { key: "ntfs_perm",       layer: Layer::L3Business, requires_creds: true, ps_emitted: true },
+    ProbeSpec { key: "cred_user",       layer: Layer::L3Business, requires_creds: true, ps_emitted: true },
+    ProbeSpec { key: "cred_system",     layer: Layer::L3Business, requires_creds: true, ps_emitted: true },
+    ProbeSpec { key: "env_vars",        layer: Layer::L3Business, requires_creds: true, ps_emitted: true },
+    ProbeSpec { key: "env_local",       layer: Layer::L3Business, requires_creds: true, ps_emitted: true },
+    ProbeSpec { key: "env_shared",      layer: Layer::L3Business, requires_creds: true, ps_emitted: true },
+    ProbeSpec { key: "system_write",    layer: Layer::L3Business, requires_creds: true, ps_emitted: true },
+    ProbeSpec { key: "winmgmt",         layer: Layer::L3Business, requires_creds: true, ps_emitted: true },
+    // rs_service: augmented in Rust post-roundtrip via core::renderstream_service::report().
+    // Marked as L3Business + requires_creds so the no-creds branch fills it with a placeholder
+    // and offline_probe_keys() includes it, but ps_emitted=false so the drift test
+    // does NOT require the PS script to emit it.
+    ProbeSpec { key: "rs_service",      layer: Layer::L3Business, requires_creds: true, ps_emitted: false },
 
     // L3 — derived (computed in Rust)
-    ProbeSpec { key: "ini_consistency", layer: Layer::L3Derived, requires_creds: false },
-    ProbeSpec { key: "pso_precaching",  layer: Layer::L3Derived, requires_creds: false },
-    ProbeSpec { key: "gpu_consistency", layer: Layer::L3Derived, requires_creds: false },
+    ProbeSpec { key: "ini_consistency", layer: Layer::L3Derived, requires_creds: false, ps_emitted: false },
+    ProbeSpec { key: "pso_precaching",  layer: Layer::L3Derived, requires_creds: false, ps_emitted: false },
+    ProbeSpec { key: "gpu_consistency", layer: Layer::L3Derived, requires_creds: false, ps_emitted: false },
 ];
 
 /// Keys that the offline / no-creds fallback should fill with placeholder outcomes
@@ -56,10 +69,12 @@ pub fn offline_probe_keys() -> Vec<&'static str> {
         .collect()
 }
 
-/// Keys the PowerShell script returns (L2 + L3-business, not L1, not derived).
+/// Keys the PowerShell script returns (L2 + L3-business that is actually PS-emitted,
+/// not Rust-augmented post-roundtrip).
 pub fn powershell_probe_keys() -> Vec<&'static str> {
     PROBE_REGISTRY.iter()
         .filter(|p| matches!(p.layer, Layer::L2Bootstrap | Layer::L3Business))
+        .filter(|p| p.ps_emitted)
         .map(|p| p.key)
         .collect()
 }
@@ -86,9 +101,9 @@ mod tests {
     }
 
     #[test]
-    fn registry_contains_seven_l3_business_probes_plus_three_derived() {
+    fn registry_contains_ten_l3_business_probes_plus_three_derived() {
         let l3: Vec<_> = PROBE_REGISTRY.iter().filter(|p| p.layer == Layer::L3Business).collect();
-        assert_eq!(l3.len(), 7, "expected 7 L3 business probes, got {:?}", l3);
+        assert_eq!(l3.len(), 10, "expected 10 L3 business probes (7 base + env_local + env_shared + rs_service), got {:?}", l3);
         let derived: Vec<_> = PROBE_REGISTRY.iter().filter(|p| p.layer == Layer::L3Derived).collect();
         assert_eq!(derived.len(), 3, "expected 3 L3 derived probes, got {:?}", derived);
     }
@@ -102,10 +117,20 @@ mod tests {
     }
 
     #[test]
-    fn powershell_probe_keys_returns_only_winrm_probes() {
+    fn powershell_probe_keys_returns_only_winrm_ps_emitted_probes() {
         let ps_keys = powershell_probe_keys();
-        assert_eq!(ps_keys.len(), 11, "expected 11 PS keys (4 L2 + 7 L3), got {:?}", ps_keys);
+        // 4 L2 + 9 L3Business (rs_service excluded because ps_emitted=false)
+        assert_eq!(ps_keys.len(), 13, "expected 13 PS-emitted keys (4 L2 + 9 L3Business), got {:?}", ps_keys);
         assert!(!ps_keys.iter().any(|k| k.starts_with("tcp_")), "PS keys must not include L1 TCP keys");
+        assert!(!ps_keys.iter().any(|k| *k == "rs_service"), "rs_service is Rust-augmented, not PS-emitted");
+    }
+
+    #[test]
+    fn offline_probe_keys_includes_rs_service_and_envs() {
+        let off = offline_probe_keys();
+        assert!(off.contains(&"env_local"), "offline keys must include env_local");
+        assert!(off.contains(&"env_shared"), "offline keys must include env_shared");
+        assert!(off.contains(&"rs_service"), "offline keys must include rs_service");
     }
 
     #[test]
@@ -113,8 +138,6 @@ mod tests {
         // Parse ps-scripts/health-probes.ps1 looking for the line
         //     <key> = (Probe-<Name>)
         // inside the $results hashtable. Build the key set, compare to powershell_probe_keys().
-        // NOTE: This test will FAIL until T5 rewrites the PS1 — that's the expected
-        // failure state, gating T5. After T5 this test must pass.
         let ps1_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent().unwrap()
             .join("ps-scripts").join("health-probes.ps1");

@@ -83,6 +83,21 @@ pub enum Domain {
         #[command(subcommand)]
         action: PsoAction,
     },
+    /// Verify what UE actually used by parsing LogDerivedDataCache startup output.
+    Log {
+        #[command(subcommand)]
+        action: LogAction,
+    },
+    /// Local DDC directory provisioning.
+    LocalCache {
+        #[command(subcommand)]
+        action: LocalCacheAction,
+    },
+    /// One-click DDC deployment workflow.
+    Deploy {
+        #[command(subcommand)]
+        action: DeployAction,
+    },
     /// Zen daemon inventory + probes + baselines (Plan 7 M1).
     Zen {
         #[command(subcommand)]
@@ -349,6 +364,84 @@ pub enum IniAction {
         #[arg(long)]
         project_id: i64,
     },
+    /// Read or write [DerivedDataBackendGraph] tuple nodes.
+    BackendGraph {
+        #[command(subcommand)]
+        action: BackendGraphAction,
+    },
+    /// Pause Shared DDC GC (DeleteUnused=false). Reversible with `gc-resume`.
+    GcPause {
+        #[command(flatten)]
+        target: crate::cli::host_args::HostArgs,
+        #[arg(long)]
+        project_id: i64,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Resume Shared DDC GC (DeleteUnused=true, UnusedFileAge configurable).
+    GcResume {
+        #[command(flatten)]
+        target: crate::cli::host_args::HostArgs,
+        #[arg(long)]
+        project_id: i64,
+        #[arg(long, default_value_t = 10)]
+        unused_file_age: u32,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum BackendGraphAction {
+    /// Get a single field value from a Shared/Boot/Local backend node.
+    Get {
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        file_path: String,
+        #[arg(long, default_value = "Shared")]
+        node: String,
+        #[arg(long)]
+        field: String,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Set a single field value.
+    Set {
+        #[command(flatten)]
+        target: crate::cli::host_args::HostArgs,
+        #[arg(long)]
+        file_path: String,
+        #[arg(long, default_value = "Shared")]
+        node: String,
+        #[arg(long)]
+        field: String,
+        #[arg(long)]
+        value: String,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Scan an INI file and emit all BackendGraph nodes as JSON.
+    Scan {
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        file_path: String,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
 }
 
 // ---------- share ----------
@@ -476,6 +569,15 @@ pub enum HealthAction {
         cidr: Option<String>,
         #[arg(long, conflicts_with_all = ["machine_ids", "cidr"])]
         all: bool,
+        /// Expected value for UE-LocalDataCachePath env var on each machine.
+        /// When supplied, the env_local probe does an exact-match comparison
+        /// instead of a presence-only check. Leave unset to keep presence-only.
+        #[arg(long, default_value = "")]
+        expected_local_path: String,
+        /// Expected value for UE-SharedDataCachePath env var on each machine.
+        /// Same semantics as --expected-local-path.
+        #[arg(long, default_value = "")]
+        expected_shared_path: String,
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
@@ -486,6 +588,48 @@ pub enum HealthAction {
     },
     /// List per-row health results for a scan run.
     Results { scan_run_id: i64 },
+    /// Snapshot N hosts and report cross-machine inconsistencies.
+    ConsistencyCheck {
+        #[arg(long, value_name = "H1,H2,...", value_delimiter = ',')]
+        hosts: Vec<String>,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Scan shortcuts/bat/services for -LocalDataCachePath / -SharedDataCachePath overrides.
+    ScanCommandLine {
+        #[arg(long)]
+        host: String,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Local vs Shared DDC file count + total size probe, with imbalance classifier.
+    FileStats {
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        local_path: String,
+        #[arg(long)]
+        shared_path: String,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Run log verification + file stats then emit symptom advisories (S001-S005).
+    AnalyzeAdvisories {
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        editor_exe: String,
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        local_path: String,
+        #[arg(long)]
+        shared_path: String,
+        #[arg(long, default_value_t = 180)]
+        timeout: u32,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
 }
 
 // ---------- gpu ----------
@@ -569,6 +713,63 @@ pub enum PsoAction {
         source_machine: i64,
         #[arg(long, value_name = "M1,M2,...", value_delimiter = ',')]
         targets: Vec<i64>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+}
+
+// ---------- log ----------
+#[derive(Subcommand, Debug)]
+pub enum LogAction {
+    /// Run UE in nullrhi mode and parse its DDC startup output.
+    VerifyStartup {
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        editor_exe: String,
+        #[arg(long)]
+        project: String,
+        #[arg(long, default_value_t = 180)]
+        timeout: u32,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+}
+
+// ---------- local-cache ----------
+#[derive(Subcommand, Debug)]
+pub enum LocalCacheAction {
+    /// Create the local DDC directory on one or more hosts.
+    Create {
+        #[command(flatten)]
+        target: crate::cli::host_args::HostArgs,
+        #[arg(long, default_value = r"D:\UE-DDC-Local")]
+        path: String,
+        #[arg(long)]
+        service_account: Option<String>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+}
+
+// ---------- deploy ----------
+#[derive(Subcommand, Debug)]
+pub enum DeployAction {
+    /// Run the full DDC deployment plan from a JSON file.
+    Ddc {
+        /// Path to a deploy-plan JSON file.
+        #[arg(long)]
+        plan: std::path::PathBuf,
+        #[arg(long)]
+        stop_on_failure: bool,
         #[arg(long)]
         yes: bool,
         #[arg(long)]
@@ -781,6 +982,205 @@ mod tests {
                 assert_eq!(target.hosts, Some(vec!["a".into(), "b".into(), "c".into()]));
                 assert_eq!(name, "X");
                 assert_eq!(value, "Y");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_ini_backend_graph_set() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "ini", "backend-graph", "set",
+            "--hosts", "R01,R02", "--file-path", r"D:\Proj\Config\DefaultEngine.ini",
+            "--node", "Shared", "--field", "ReadOnly", "--value", "false",
+            "--cred-alias", "admin", "--yes",
+        ]).unwrap();
+        match cli.command {
+            Domain::Ini { action: IniAction::BackendGraph { action: BackendGraphAction::Set { node, field, value, .. } } } => {
+                assert_eq!(node, "Shared");
+                assert_eq!(field, "ReadOnly");
+                assert_eq!(value, "false");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_local_cache_create_batch() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "local-cache", "create",
+            "--hosts", "RENDER-01,RENDER-02",
+            "--path", r"D:\UE-DDC-Local",
+            "--cred-alias", "admin",
+            "--yes",
+        ]).unwrap();
+        match cli.command {
+            Domain::LocalCache { action: LocalCacheAction::Create { path, yes, .. } } => {
+                assert_eq!(path, r"D:\UE-DDC-Local");
+                assert!(yes);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_log_verify_startup() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "log", "verify-startup",
+            "--host", "RENDER-01",
+            "--editor-exe", r"C:\UE\Engine\Binaries\Win64\UnrealEditor.exe",
+            "--project", r"D:\Projects\MyVP\MyVP.uproject",
+            "--timeout", "180",
+        ]).unwrap();
+        match cli.command {
+            Domain::Log { action: LogAction::VerifyStartup { host, editor_exe, project, timeout, .. } } => {
+                assert_eq!(host, "RENDER-01");
+                assert!(editor_exe.ends_with("UnrealEditor.exe"));
+                assert!(project.ends_with(".uproject"));
+                assert_eq!(timeout, 180);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_deploy_ddc() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "deploy", "ddc",
+            "--plan", "/tmp/plan.json",
+            "--stop-on-failure",
+            "--cred-alias", "admin",
+            "--yes",
+        ]).unwrap();
+        match cli.command {
+            Domain::Deploy { action: DeployAction::Ddc { plan, stop_on_failure, yes, .. } } => {
+                assert_eq!(plan.to_string_lossy(), "/tmp/plan.json");
+                assert!(stop_on_failure);
+                assert!(yes);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_ini_gc_pause() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "ini", "gc-pause",
+            "--hosts", "R01,R02",
+            "--project-id", "1",
+            "--cred-alias", "admin", "--yes",
+        ]).unwrap();
+        match cli.command {
+            Domain::Ini { action: IniAction::GcPause { project_id, yes, .. } } => {
+                assert_eq!(project_id, 1);
+                assert!(yes);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_ini_gc_resume_with_age() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "ini", "gc-resume",
+            "--hosts", "R01",
+            "--project-id", "1",
+            "--unused-file-age", "30",
+            "--cred-alias", "admin", "--yes",
+        ]).unwrap();
+        match cli.command {
+            Domain::Ini { action: IniAction::GcResume { unused_file_age, .. } } => {
+                assert_eq!(unused_file_age, 30);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_health_run_with_expected_paths() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "health", "run",
+            "--machine-ids", "1,2",
+            "--expected-local-path", r"D:\UE-DDC-Local",
+            "--expected-shared-path", r"\\NAS\DDC",
+            "--cred-alias", "admin",
+        ])
+        .unwrap();
+        match cli.command {
+            Domain::Health {
+                action: HealthAction::Run { expected_local_path, expected_shared_path, .. },
+            } => {
+                assert_eq!(expected_local_path, r"D:\UE-DDC-Local");
+                assert_eq!(expected_shared_path, r"\\NAS\DDC");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_health_run_without_expected_paths_defaults_to_empty() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "health", "run",
+            "--machine-ids", "1",
+        ])
+        .unwrap();
+        match cli.command {
+            Domain::Health {
+                action: HealthAction::Run { expected_local_path, expected_shared_path, .. },
+            } => {
+                assert_eq!(expected_local_path, "");
+                assert_eq!(expected_shared_path, "");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_health_scan_command_line() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "health", "scan-command-line",
+            "--host", "RENDER-01",
+            "--cred-alias", "admin",
+        ]).unwrap();
+        match cli.command {
+            Domain::Health { action: HealthAction::ScanCommandLine { host, .. } } => {
+                assert_eq!(host, "RENDER-01");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_health_file_stats() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "health", "file-stats",
+            "--host", "RENDER-01",
+            "--local-path", r"D:\UE-DDC-Local",
+            "--shared-path", r"\\NAS\DDC",
+            "--cred-alias", "admin",
+        ]).unwrap();
+        match cli.command {
+            Domain::Health { action: HealthAction::FileStats { host, .. } } => {
+                assert_eq!(host, "RENDER-01");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn parses_health_analyze_advisories() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "health", "analyze-advisories",
+            "--host", "RENDER-01",
+            "--editor-exe", r"C:\UE\UnrealEditor.exe",
+            "--project", r"D:\Proj\Foo.uproject",
+            "--local-path", r"D:\UE-DDC-Local",
+            "--shared-path", r"\\NAS\DDC",
+            "--cred-alias", "admin",
+        ]).unwrap();
+        match cli.command {
+            Domain::Health { action: HealthAction::AnalyzeAdvisories { host, .. } } => {
+                assert_eq!(host, "RENDER-01");
             }
             _ => panic!("wrong variant"),
         }

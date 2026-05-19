@@ -83,6 +83,26 @@ pub fn find_by_ip(db: &Db, ip: &str) -> UecmResult<Option<Machine>> {
     }
 }
 
+pub fn find_by_hostname(db: &Db, hostname: &str) -> UecmResult<Option<Machine>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT id, hostname, ip, role, status, last_seen_at FROM machines WHERE hostname = ?",
+    )?;
+    let mut rows = stmt.query(params![hostname])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(Machine {
+            id: Some(row.get(0)?),
+            hostname: row.get(1)?,
+            ip: row.get(2)?,
+            role: row.get(3)?,
+            status: row.get(4)?,
+            last_seen_at: row.get(5)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
 pub fn list_all(db: &Db) -> UecmResult<Vec<Machine>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(

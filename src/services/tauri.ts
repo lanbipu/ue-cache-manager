@@ -420,8 +420,11 @@ export const PROBE_LAYER_MAP = {
   cred_user: "l3_business",
   cred_system: "l3_business",
   env_vars: "l3_business",
+  env_local: "l3_business",
+  env_shared: "l3_business",
   system_write: "l3_business",
   winmgmt: "l3_business",
+  rs_service: "l3_business",
   ini_consistency: "l3_business",
   pso_precaching: "l3_business",
   gpu_consistency: "l3_business",
@@ -433,6 +436,10 @@ export interface RunHealthCheckRequest {
   machine_ids: number[];
   credential_alias: string;
   project_paths: string[];
+  /** Expected UE-LocalDataCachePath; empty/undefined => presence-only env_local probe. */
+  expected_local_path?: string;
+  /** Expected UE-SharedDataCachePath; empty/undefined => falls back to cluster share UNC. */
+  expected_shared_path?: string;
 }
 
 export interface RunHealthCheckResponse {

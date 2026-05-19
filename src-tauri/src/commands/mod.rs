@@ -1,6 +1,8 @@
 pub mod batch;
 pub mod bootstrap;
+pub mod consistency;
 pub mod credentials;
+pub mod deploy;
 pub mod ddc_pak;
 pub mod discovery;
 pub mod env_vars;
@@ -8,6 +10,7 @@ pub mod gpu_consistency;
 pub mod health_check;
 pub mod ini_editor;
 pub mod ini_scanner;
+pub mod log_verify;
 pub mod machines;
 pub mod projects;
 pub mod pso;
