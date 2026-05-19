@@ -133,9 +133,23 @@ pub async fn probe_tcp_ports(host: &str, timeout_ms: u64) -> HashMap<String, Che
 /// All four rows are always returned (never an empty map) so the UI can
 /// show a stable layout. Status values are `"healthy"` / `"warning"` /
 /// `"critical"` / `"unknown"`.
+/// Compute the 4 `zen_*` health rows for one machine.
+///
+/// `cluster_scope` restricts the cluster-majority calculation used by
+/// `zen_version_consistent` (R018-style). Pass `Some(&[..])` with the
+/// machine ids that are part of the CURRENT health run so a separate
+/// cluster's install rows don't pollute the majority. Pass `None` to
+/// use every install row in the DB (legacy behavior, kept for callers
+/// that don't have a scope — e.g. one-shot CLI invocations).
+///
+/// Codex round-21 P2: without scoping, scanning a 2-machine cluster on
+/// 5.8.10 while a separate 3-machine cluster on 5.8.9 sits in the same
+/// DB flagged the in-scan machines as outliers — the wrong majority
+/// won. `cluster_scope` makes the contract explicit at the call site.
 pub fn zen_health_for_machine(
     db: &Db,
     machine_id: i64,
+    cluster_scope: Option<&[i64]>,
 ) -> UecmResult<HashMap<String, CheckOutcome>> {
     let mut out = HashMap::new();
 
@@ -171,7 +185,7 @@ pub fn zen_health_for_machine(
     out.insert("zen_reachable".into(), check_zen_reachable(db, machine_id)?);
     out.insert(
         "zen_version_consistent".into(),
-        check_zen_version_consistent(db, machine_id)?,
+        check_zen_version_consistent(db, machine_id, cluster_scope)?,
     );
     out.insert(
         "zen_binary_intact".into(),
@@ -288,8 +302,20 @@ fn check_zen_reachable(db: &Db, machine_id: i64) -> UecmResult<CheckOutcome> {
 fn check_zen_version_consistent(
     db: &Db,
     machine_id: i64,
+    cluster_scope: Option<&[i64]>,
 ) -> UecmResult<CheckOutcome> {
-    let installs = machine_zen_install::list(db)?;
+    // Codex round-21 P2: filter to the in-scan cluster BEFORE computing
+    // majority. The current machine must always be included (else the
+    // "current" lookup below would fail spuriously); other machines are
+    // counted only if the caller's scope includes them. None = use all
+    // (legacy / unscoped).
+    let installs: Vec<_> = machine_zen_install::list(db)?
+        .into_iter()
+        .filter(|i| {
+            i.machine_id == machine_id
+                || cluster_scope.map_or(true, |s| s.contains(&i.machine_id))
+        })
+        .collect();
     let Some(current) = installs.iter().find(|i| i.machine_id == machine_id) else {
         return Ok(CheckOutcome {
             status: "unknown".into(),
@@ -751,7 +777,7 @@ mod tests {
         let eid = add_endpoint(&db, mid, 8558);
         let when = minutes_ago(&db, 1);
         zps::insert(&db, &make_probe(eid, &when, true)).unwrap();
-        let outcomes = zen_health_for_machine(&db, mid).unwrap();
+        let outcomes = zen_health_for_machine(&db, mid, None).unwrap();
         assert_eq!(outcomes.get("zen_reachable").unwrap().status, "healthy");
     }
 
@@ -762,7 +788,7 @@ mod tests {
         let eid = add_endpoint(&db, mid, 8558);
         let when = minutes_ago(&db, 30); // outside 5-minute window
         zps::insert(&db, &make_probe(eid, &when, true)).unwrap();
-        let outcomes = zen_health_for_machine(&db, mid).unwrap();
+        let outcomes = zen_health_for_machine(&db, mid, None).unwrap();
         let o = outcomes.get("zen_reachable").unwrap();
         assert_eq!(o.status, "critical");
         assert!(!o.remediation.is_empty());
@@ -773,10 +799,52 @@ mod tests {
         let db = zen_test_db();
         let mid = add_machine(&db, "RENDER-01", "192.168.10.21");
         add_endpoint(&db, mid, 8558);
-        let outcomes = zen_health_for_machine(&db, mid).unwrap();
+        let outcomes = zen_health_for_machine(&db, mid, None).unwrap();
         let o = outcomes.get("zen_reachable").unwrap();
         assert_eq!(o.status, "critical");
         assert!(o.message.to_lowercase().contains("no zen probes"));
+    }
+
+    // Codex round-21 P2: cluster_scope restricts the majority vote.
+    // Two clusters in the same DB:
+    //   - scoped cluster:  m1, m2 on 5.8.10
+    //   - other cluster:   m3, m4, m5 on 5.8.9
+    // Without scope, m1 would be flagged outlier (5.8.10 = 2 votes vs
+    // 5.8.9 = 3). With scope=[m1, m2], m1 stays healthy because the
+    // out-of-scan cluster's votes are filtered out.
+    #[test]
+    fn zen_health_cluster_scope_excludes_out_of_scan_machines() {
+        let db = zen_test_db();
+        let m1 = add_machine(&db, "C1-01", "10.0.1.1");
+        let m2 = add_machine(&db, "C1-02", "10.0.1.2");
+        let m3 = add_machine(&db, "C2-01", "10.0.2.1");
+        let m4 = add_machine(&db, "C2-02", "10.0.2.2");
+        let m5 = add_machine(&db, "C2-03", "10.0.2.3");
+        add_install(&db, m1, "5.8.10", "aa");
+        add_install(&db, m2, "5.8.10", "aa");
+        add_install(&db, m3, "5.8.9", "bb");
+        add_install(&db, m4, "5.8.9", "bb");
+        add_install(&db, m5, "5.8.9", "bb");
+        // m1 needs an endpoint to pass the new opted-in gate.
+        add_endpoint(&db, m1, 8558);
+
+        // Scoped: m1 and m2 only. m1 is in the strict majority (2/2).
+        let scope = [m1, m2];
+        let outcomes_scoped = zen_health_for_machine(&db, m1, Some(&scope)).unwrap();
+        assert_eq!(
+            outcomes_scoped.get("zen_version_consistent").unwrap().status,
+            "healthy",
+            "in-scope cluster of size 2 should be healthy (below threshold)"
+        );
+
+        // Unscoped: m1 would be outlier under the unrelated cluster's
+        // 3/5 majority. Confirm the new code path matters.
+        let outcomes_unscoped = zen_health_for_machine(&db, m1, None).unwrap();
+        assert_eq!(
+            outcomes_unscoped.get("zen_version_consistent").unwrap().status,
+            "warning",
+            "unscoped majority sees 5.8.9 (3 of 5) → m1 flagged outlier"
+        );
     }
 
     // Codex round-19 P2: machines without ANY registered endpoint
@@ -788,7 +856,7 @@ mod tests {
     fn zen_health_returns_na_when_no_endpoints_registered() {
         let db = zen_test_db();
         let mid = add_machine(&db, "RENDER-01", "192.168.10.21");
-        let outcomes = zen_health_for_machine(&db, mid).unwrap();
+        let outcomes = zen_health_for_machine(&db, mid, None).unwrap();
         for key in [
             "zen_reachable",
             "zen_version_consistent",
@@ -836,7 +904,7 @@ mod tests {
         add_install(&db, m2, "5.8.10", "aaaa");
         add_install(&db, m3, "5.8.10", "aaaa");
         add_endpoint(&db, m1, 8558);
-        let outcomes = zen_health_for_machine(&db, m1).unwrap();
+        let outcomes = zen_health_for_machine(&db, m1, None).unwrap();
         assert_eq!(outcomes.get("zen_version_consistent").unwrap().status, "healthy");
     }
 
@@ -851,13 +919,13 @@ mod tests {
         add_install(&db, m3, "5.8.9", "bbbb");
         add_endpoint(&db, m1, 8558);
         add_endpoint(&db, m3, 8559);
-        let outcomes = zen_health_for_machine(&db, m3).unwrap();
+        let outcomes = zen_health_for_machine(&db, m3, None).unwrap();
         let o = outcomes.get("zen_version_consistent").unwrap();
         assert_eq!(o.status, "warning");
         assert!(o.remediation.contains("5.8.10"));
 
         // Majority member stays healthy.
-        let majority = zen_health_for_machine(&db, m1).unwrap();
+        let majority = zen_health_for_machine(&db, m1, None).unwrap();
         assert_eq!(
             majority.get("zen_version_consistent").unwrap().status,
             "healthy"
@@ -872,7 +940,7 @@ mod tests {
         add_install(&db, m1, "5.8.10", "aaaa");
         add_install(&db, m2, "5.8.9", "bbbb");
         add_endpoint(&db, m1, 8558);
-        let outcomes = zen_health_for_machine(&db, m1).unwrap();
+        let outcomes = zen_health_for_machine(&db, m1, None).unwrap();
         assert_eq!(
             outcomes.get("zen_version_consistent").unwrap().status,
             "healthy"
@@ -896,7 +964,7 @@ mod tests {
             },
         )
         .unwrap();
-        let outcomes = zen_health_for_machine(&db, mid).unwrap();
+        let outcomes = zen_health_for_machine(&db, mid, None).unwrap();
         assert_eq!(outcomes.get("zen_binary_intact").unwrap().status, "healthy");
     }
 
@@ -917,7 +985,7 @@ mod tests {
             },
         )
         .unwrap();
-        let outcomes = zen_health_for_machine(&db, mid).unwrap();
+        let outcomes = zen_health_for_machine(&db, mid, None).unwrap();
         let o = outcomes.get("zen_binary_intact").unwrap();
         assert_eq!(o.status, "warning");
         assert!(o.remediation.to_lowercase().contains("re-sync"));
@@ -932,7 +1000,7 @@ mod tests {
         let mid = add_machine(&db, "R-01", "10.0.0.1");
         add_install(&db, mid, "5.8.10", "aaaa");
         add_endpoint(&db, mid, 8558);
-        let outcomes = zen_health_for_machine(&db, mid).unwrap();
+        let outcomes = zen_health_for_machine(&db, mid, None).unwrap();
         let o = outcomes.get("zen_binary_intact").unwrap();
         assert_eq!(o.status, "unknown");
         assert!(o.remediation.contains("baseline"));
@@ -964,7 +1032,7 @@ mod tests {
         // Use a current-time anchored sample so it's inside the freshness window.
         let now = minutes_ago(&db, 0);
         add_cache_stats(&db, eid, "/stats/z$", &now);
-        let outcomes = zen_health_for_machine(&db, mid).unwrap();
+        let outcomes = zen_health_for_machine(&db, mid, None).unwrap();
         assert_eq!(
             outcomes.get("zen_cache_provider_ready").unwrap().status,
             "healthy"
@@ -978,7 +1046,7 @@ mod tests {
         let eid = add_endpoint(&db, mid, 8558);
         let now = minutes_ago(&db, 0);
         add_cache_stats(&db, eid, "/stats/other", &now);
-        let outcomes = zen_health_for_machine(&db, mid).unwrap();
+        let outcomes = zen_health_for_machine(&db, mid, None).unwrap();
         let o = outcomes.get("zen_cache_provider_ready").unwrap();
         assert_eq!(o.status, "warning");
         assert!(!o.remediation.is_empty());
@@ -1013,7 +1081,7 @@ mod tests {
         // row as latest because `T` > ` `.
         add_cache_stats(&db, eid, "/stats/other", &one_minute_ago_iso);
         add_cache_stats(&db, eid, "/stats/z$", &now_space);
-        let outcomes = zen_health_for_machine(&db, mid).unwrap();
+        let outcomes = zen_health_for_machine(&db, mid, None).unwrap();
         // The actually-latest row is the space one with z$ → healthy.
         assert_eq!(
             outcomes.get("zen_cache_provider_ready").unwrap().status,
@@ -1045,7 +1113,7 @@ mod tests {
             next_port += 1;
         }
         for mid in [m1, m2, m3, m4] {
-            let outcomes = zen_health_for_machine(&db, mid).unwrap();
+            let outcomes = zen_health_for_machine(&db, mid, None).unwrap();
             assert_eq!(
                 outcomes.get("zen_version_consistent").unwrap().status,
                 "warning",
@@ -1075,7 +1143,7 @@ mod tests {
             .unwrap()
         };
         add_cache_stats(&db, eid, "/stats/z$", &stale);
-        let outcomes = zen_health_for_machine(&db, mid).unwrap();
+        let outcomes = zen_health_for_machine(&db, mid, None).unwrap();
         let o = outcomes.get("zen_cache_provider_ready").unwrap();
         assert_eq!(o.status, "warning");
         assert!(
@@ -1090,7 +1158,7 @@ mod tests {
         let db = zen_test_db();
         let mid = add_machine(&db, "R-01", "10.0.0.1");
         add_endpoint(&db, mid, 8558);
-        let outcomes = zen_health_for_machine(&db, mid).unwrap();
+        let outcomes = zen_health_for_machine(&db, mid, None).unwrap();
         assert_eq!(
             outcomes.get("zen_cache_provider_ready").unwrap().status,
             "warning"
@@ -1103,7 +1171,7 @@ mod tests {
         // a stable shape.
         let db = zen_test_db();
         let mid = add_machine(&db, "R-01", "10.0.0.1");
-        let outcomes = zen_health_for_machine(&db, mid).unwrap();
+        let outcomes = zen_health_for_machine(&db, mid, None).unwrap();
         for key in [
             "zen_reachable",
             "zen_version_consistent",

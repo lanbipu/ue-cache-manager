@@ -235,7 +235,7 @@ fn run_with_rt(
                         // the DB query errors, emit `unknown` for all 4
                         // keys instead of dropping them, so consumers
                         // never see gaps in the row schema.
-                        match crate::core::health_check::zen_health_for_machine(&db, mid) {
+                        match crate::core::health_check::zen_health_for_machine(&db, mid, Some(machine_ids)) {
                             Ok(zen_rows) => {
                                 for (k, v) in zen_rows {
                                     row.insert(k, v);
@@ -325,7 +325,7 @@ fn run_with_rt(
         // helper returns "unknown" rows when no zen install / endpoints /
         // probes exist — operators can distinguish "no data" from
         // "data says broken". A DB error doesn't nuke the whole run.
-        match crate::core::health_check::zen_health_for_machine(&db, mid) {
+        match crate::core::health_check::zen_health_for_machine(&db, mid, Some(machine_ids)) {
             Ok(zen_rows) => {
                 for (k, v) in zen_rows {
                     row.insert(k, v);

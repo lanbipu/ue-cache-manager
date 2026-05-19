@@ -149,7 +149,7 @@ pub fn run_health_check(
                 // and left ALL 4 keys missing — same stable-layout
                 // violation the online path already fixes. Emit
                 // `unknown` for the 4 keys in the error branch.
-                match zen_health_for_machine(&db, mid) {
+                match zen_health_for_machine(&db, mid, Some(&machine_ids)) {
                     Ok(zen_rows) => {
                         for (k, v) in zen_rows {
                             row.insert(k, v);
@@ -211,7 +211,7 @@ pub fn run_health_check(
         // machines that have no zen install / no endpoints / no probes —
         // that's by design so an operator can tell "no data yet" apart
         // from "data says it's broken".
-        match zen_health_for_machine(&db, mid) {
+        match zen_health_for_machine(&db, mid, Some(&machine_ids)) {
             Ok(zen_rows) => {
                 for (k, v) in zen_rows {
                     row.insert(k, v);
@@ -393,7 +393,7 @@ mod tests {
                 remediation: String::new(),
             },
         );
-        let zen_rows = zen_health_for_machine(&db, mid).unwrap();
+        let zen_rows = zen_health_for_machine(&db, mid, None).unwrap();
         for (k, v) in zen_rows {
             row.insert(k, v);
         }
@@ -441,7 +441,7 @@ mod tests {
                 remediation: String::new(),
             },
         );
-        let zen_rows = zen_health_for_machine(&db, mid).unwrap();
+        let zen_rows = zen_health_for_machine(&db, mid, None).unwrap();
         for (k, v) in zen_rows {
             row.insert(k, v);
         }

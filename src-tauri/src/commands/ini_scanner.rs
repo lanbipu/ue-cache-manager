@@ -125,6 +125,10 @@ fn scan_inis_summary(
             &db,
             mid,
             ue_version_hint.as_deref(),
+            // Codex round-21 P2: restrict R018's cluster majority to
+            // the scan's machine set so a separate cluster's installs
+            // in the same DB don't pollute the vote.
+            Some(&machine_ids),
         )?;
         let zen_ctx = zen_ctx_owned.as_ref().map(|o| o.as_ctx());
 

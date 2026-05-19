@@ -275,10 +275,16 @@ pub fn scan_machine(inputs: &ScanInputs) -> UecmResult<ScanOutcome> {
 /// failing the whole scan. The scan itself is the operator's primary
 /// signal — silent missing pieces are preferable to a hard failure that
 /// nukes the entire run.
+/// `cluster_scope` (Codex round-21 P2): if `Some(&[..])`, R018's
+/// `cluster_versions` is restricted to those machine ids so an unrelated
+/// cluster's installs in the same DB don't pollute the majority vote.
+/// Pass `None` to consider every install row in the DB (legacy default
+/// for single-cluster setups).
 pub fn build_zen_ctx_for_machine(
     db: &Db,
     machine_id: i64,
     ue_version_hint: Option<&str>,
+    cluster_scope: Option<&[i64]>,
 ) -> UecmResult<Option<ZenRuleContextOwned>> {
     let endpoints = zen_endpoints::list_for_machine(db, machine_id)?;
     if endpoints.is_empty() {
@@ -411,8 +417,16 @@ pub fn build_zen_ctx_for_machine(
     // R018 input: every machine's recorded zenserver build version. Skip
     // rows missing a version — R018's strict-majority math counts only
     // recorded versions.
+    //
+    // Codex round-21 P2: filter to the scan's `cluster_scope` so a
+    // separate cluster's machines in the same DB don't vote in R018's
+    // majority. The current machine is always included.
     let cluster_versions = machine_zen_install::list(db)?
         .into_iter()
+        .filter(|i| {
+            i.machine_id == machine_id
+                || cluster_scope.map_or(true, |s| s.contains(&i.machine_id))
+        })
         .filter_map(|i| {
             i.zenserver_build_version.map(|v| MachineZenVersion {
                 machine_id: i.machine_id,
@@ -619,7 +633,7 @@ mod tests {
         let db = wiring_db();
         let mid =
             machines_data::insert(&db, &crate::data::Machine::new("R-01", "10.0.0.1")).unwrap();
-        let out = build_zen_ctx_for_machine(&db, mid, Some("5.7")).unwrap();
+        let out = build_zen_ctx_for_machine(&db, mid, Some("5.7"), None).unwrap();
         assert!(out.is_none(), "expected None when no endpoint, got Some");
     }
 
@@ -646,7 +660,7 @@ mod tests {
         )
         .unwrap();
         // ue_version_hint=None → resolved stays None so R012-R015 skip.
-        let owned = build_zen_ctx_for_machine(&db, mid, None).unwrap().unwrap();
+        let owned = build_zen_ctx_for_machine(&db, mid, None, None).unwrap().unwrap();
         assert!(owned.endpoint_registered);
         // Codex P2 fix: one row per (hostname, ip) alias so R014's host
         // match accepts whichever form the operator put in ZenShared.Host.
@@ -712,7 +726,7 @@ mod tests {
 
         // Build the context as the production callers do. ue_version_hint
         // is required so `resolved` populates and R012 can fire.
-        let owned = build_zen_ctx_for_machine(&db, mid, Some("5.7")).unwrap().unwrap();
+        let owned = build_zen_ctx_for_machine(&db, mid, Some("5.7"), None).unwrap().unwrap();
         let ctx = owned.as_ctx();
         let inputs = ScanInputs {
             host: "localhost",

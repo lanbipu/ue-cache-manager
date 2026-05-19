@@ -562,6 +562,9 @@ fn scan_cluster(
                 &db,
                 mid,
                 ue_version_hint.as_deref(),
+                // Codex round-21 P2: restrict R018's cluster majority
+                // to the scan's machine set.
+                Some(machine_ids),
             )?;
             let zen_ctx = zen_ctx_owned.as_ref().map(|o| o.as_ctx());
 
