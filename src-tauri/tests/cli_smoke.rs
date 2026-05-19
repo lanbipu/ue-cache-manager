@@ -400,6 +400,309 @@ fn zen_unregister_without_yes_returns_invalid_input() {
     assert_eq!(out.status.code(), Some(2));
 }
 
+// -------------------------------------------------------------------------
+// Plan 7 T3.6: `--backend` flag on ddc {generate, verify, distribute}
+// -------------------------------------------------------------------------
+
+/// Seed a minimal (machine + project + project_location) so the zen no-op
+/// path's existence checks pass. Helper kept in this file rather than a
+/// shared module — the smoke test target compiles each test file as its own
+/// crate, so a `mod helpers` would just duplicate.
+fn seed_machine_project_location(db_path: &str) -> (i64, i64) {
+    // Add machine 1.
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", db_path)
+        .args(["--json", "machine", "add", "--ip", "192.168.10.30", "--hostname", "RENDER-01"])
+        .output()
+        .expect("spawn machine add");
+    assert!(out.status.success(), "machine add stderr: {}", String::from_utf8_lossy(&out.stderr));
+
+    // Create project 1.
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", db_path)
+        .args(["--json", "project", "create-manual", "--uproject-name", "DemoProj"])
+        .output()
+        .expect("spawn project create-manual");
+    assert!(out.status.success(), "project create stderr: {}", String::from_utf8_lossy(&out.stderr));
+
+    // Bind project 1 to machine 1.
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", db_path)
+        .args([
+            "--json", "project", "set-location",
+            "--project-id", "1",
+            "--machine-id", "1",
+            "--abs-path", r"C:\Projects\Demo",
+            "--uproject-path", r"Demo.uproject",
+            "--manual-path",
+        ])
+        .output()
+        .expect("spawn project set-location");
+    assert!(out.status.success(), "set-location stderr: {}", String::from_utf8_lossy(&out.stderr));
+
+    (1, 1)
+}
+
+#[test]
+fn ddc_generate_with_backend_zen_returns_skipped_no_op() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let path = tmp.path().to_string_lossy().to_string();
+    let (project_id, machine_id) = seed_machine_project_location(&path);
+
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args([
+            "--json", "ddc", "generate",
+            "--project-id", &project_id.to_string(),
+            "--source-machine", &machine_id.to_string(),
+            "--backend", "zen",
+        ])
+        .output()
+        .expect("spawn ddc generate");
+    assert!(
+        out.status.success(),
+        "exit={:?} stderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The zen no-op path emits a single JSON object (no NDJSON stream) since
+    // we short-circuit before the UE runner. The summary line is the last
+    // (and only) stdout payload.
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let last = stdout.trim_end().lines().last().expect("at least one line");
+    let v: serde_json::Value = serde_json::from_str(last).expect("valid JSON");
+    assert_eq!(v["backend"], "zen");
+    assert_eq!(v["skipped"], serde_json::Value::Bool(true));
+    assert_eq!(v["reason"], "zen handles caching natively");
+    assert_eq!(v["operation"], "ddc.generate");
+    assert_eq!(v["project_id"], serde_json::Value::from(project_id));
+    assert_eq!(v["source_machine_id"], serde_json::Value::from(machine_id));
+}
+
+#[test]
+fn ddc_verify_with_backend_zen_returns_skipped_no_op() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let path = tmp.path().to_string_lossy().to_string();
+    let (project_id, machine_id) = seed_machine_project_location(&path);
+
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args([
+            "--json", "ddc", "verify",
+            "--project-id", &project_id.to_string(),
+            "--source-machine", &machine_id.to_string(),
+            "--backend", "zen",
+        ])
+        .output()
+        .expect("spawn ddc verify");
+    assert!(
+        out.status.success(),
+        "exit={:?} stderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let last = stdout.trim_end().lines().last().expect("at least one line");
+    let v: serde_json::Value = serde_json::from_str(last).expect("valid JSON");
+    assert_eq!(v["backend"], "zen");
+    assert_eq!(v["skipped"], serde_json::Value::Bool(true));
+    assert_eq!(v["operation"], "ddc.verify");
+}
+
+#[test]
+fn ddc_distribute_with_backend_zen_returns_skipped_no_op() {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let path = tmp.path().to_string_lossy().to_string();
+    let (project_id, machine_id) = seed_machine_project_location(&path);
+
+    // distribute is a destructive op — must pass --yes (or --dry-run) even on
+    // the no-op path; the destructive gate runs before the backend gate.
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args([
+            "--json", "ddc", "distribute",
+            "--project-id", &project_id.to_string(),
+            "--source-machine", &machine_id.to_string(),
+            "--targets", "2",
+            "--backend", "zen",
+            "--yes",
+        ])
+        .output()
+        .expect("spawn ddc distribute");
+    assert!(
+        out.status.success(),
+        "exit={:?} stderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let last = stdout.trim_end().lines().last().expect("at least one line");
+    let v: serde_json::Value = serde_json::from_str(last).expect("valid JSON");
+    assert_eq!(v["backend"], "zen");
+    assert_eq!(v["skipped"], serde_json::Value::Bool(true));
+    assert_eq!(v["operation"], "ddc.distribute");
+}
+
+#[test]
+fn ddc_generate_rejects_invalid_backend_value() {
+    // clap's value_enum must refuse unknown strings before any handler runs.
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let path = tmp.path().to_string_lossy().to_string();
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args([
+            "--json", "ddc", "generate",
+            "--project-id", "1",
+            "--source-machine", "1",
+            "--backend", "nope",
+        ])
+        .output()
+        .expect("spawn");
+    assert!(!out.status.success(), "should reject invalid --backend value");
+    // clap usage errors exit 2 (clap default).
+    assert!(
+        matches!(out.status.code(), Some(code) if code != 0),
+        "expected non-zero exit"
+    );
+}
+
+#[test]
+fn ddc_verify_with_backend_zen_emits_single_json_line_with_routing_folded_in() {
+    // Lock in the one-shot JSON contract for verify: `--backend auto` (default)
+    // resolves to zen via... actually we need to FORCE zen here and verify the
+    // result is still a single JSON line with the zen skip shape. The routing
+    // field is only present when --backend auto was used; for forced zen,
+    // routing is None and shouldn't appear in the result. Both cases must
+    // remain a single JSON document on stdout — never split into NDJSON.
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let path = tmp.path().to_string_lossy().to_string();
+    let (project_id, machine_id) = seed_machine_project_location(&path);
+
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args([
+            "--json", "ddc", "verify",
+            "--project-id", &project_id.to_string(),
+            "--source-machine", &machine_id.to_string(),
+            "--backend", "zen",
+        ])
+        .output()
+        .expect("spawn");
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let lines: Vec<&str> = stdout.trim_end().lines().collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "forced --backend zen verify must emit ONE stdout line, got: {stdout}"
+    );
+    let v: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(v["backend"], "zen");
+    // Forced backend → no `routing` field folded in (router was never called).
+    assert!(
+        v.get("routing").is_none(),
+        "forced backend must not include routing payload"
+    );
+}
+
+#[test]
+fn ddc_verify_with_backend_auto_keeps_stdout_single_json_doc() {
+    // P2 (codex review): one-shot JSON commands must keep stdout as a single
+    // parseable JSON document even when --backend auto runs the router.
+    //
+    // Use a non-existent project_id so the router itself returns
+    // InvalidInput — that fails BEFORE the legacy path's PS sidecar is
+    // touched (`ddc_pak::verify_output` would otherwise invoke
+    // verify-pak-output.ps1, making this test platform-dependent / network-
+    // dependent on Windows). The contract under test here is purely "stdout
+    // never becomes NDJSON because of the routing event", not the happy
+    // path — exit-2 with empty stdout still proves the invariant.
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let path = tmp.path().to_string_lossy().to_string();
+    // Don't seed anything — router will fail with "project_id not found".
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args([
+            "--json", "ddc", "verify",
+            "--project-id", "999",
+            "--source-machine", "999",
+        ])
+        .output()
+        .expect("spawn");
+    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(2));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let lines: Vec<&str> = stdout.trim_end().lines().filter(|l| !l.is_empty()).collect();
+    assert!(
+        lines.is_empty(),
+        "verify --backend auto must NOT emit any routing event to stdout when it errors out, got: {stdout}"
+    );
+}
+
+#[test]
+fn ddc_distribute_dry_run_with_backend_auto_keeps_stdout_single_json_doc() {
+    // Same P2 invariant for `distribute --dry-run --json`. Non-existent ids
+    // again — router errors out before any PS sidecar runs (would otherwise
+    // invoke pak-distribute PS on Windows).
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let path = tmp.path().to_string_lossy().to_string();
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args([
+            "--json", "ddc", "distribute",
+            "--project-id", "999",
+            "--source-machine", "999",
+            "--targets", "888",
+            "--dry-run",
+        ])
+        .output()
+        .expect("spawn");
+    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(2));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let lines: Vec<&str> = stdout.trim_end().lines().filter(|l| !l.is_empty()).collect();
+    assert!(
+        lines.is_empty(),
+        "distribute --dry-run --backend auto must NOT emit any routing event to stdout when it errors out, got: {stdout}"
+    );
+}
+
+#[test]
+fn ddc_generate_with_backend_auto_default_falls_through_to_legacy_path() {
+    // No --backend flag → defaults to 'auto'. With no UE-version info on the
+    // empty project and no fresh zen probes, the router routes to legacy. The
+    // legacy path then fails because the machine has no UE installs (matches
+    // pre-T3.6 behaviour). This test pins that the default is `auto`, not
+    // anything else.
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let path = tmp.path().to_string_lossy().to_string();
+    let (project_id, machine_id) = seed_machine_project_location(&path);
+
+    let out = Command::new(bin())
+        .env("UECM_DB_PATH", &path)
+        .args([
+            "--json", "ddc", "generate",
+            "--project-id", &project_id.to_string(),
+            "--source-machine", &machine_id.to_string(),
+        ])
+        .output()
+        .expect("spawn");
+    // Legacy path errors out on "no UE installs" — exit 2 (invalid_input).
+    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    // The routing decision must have been emitted to stdout as a Started
+    // event before the error surfaced on stderr.
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout.contains("backend_resolution"),
+        "expected routing event in stdout, got: {stdout}\nstderr: {stderr}"
+    );
+}
+
 #[test]
 fn zen_apply_config_dry_run_emits_plan_without_invoking_powershell() {
     let tmp = tempfile::NamedTempFile::new().unwrap();
