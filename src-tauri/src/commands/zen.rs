@@ -1086,7 +1086,14 @@ pub fn zen_service_install(
             zen_exe_path: Some(zen_exe),
             data_dir: Some(ep.data_dir.clone()),
             service_user: service_user.clone(),
-            service_pass_supplied: Some(service_pass.is_some()),
+            // Empty `service_pass: ""` reported as not-supplied to keep
+            // the preview honest with the sidecar's IsNullOrEmpty check.
+            service_pass_supplied: Some(
+                service_pass
+                    .as_deref()
+                    .map(|p| !p.is_empty())
+                    .unwrap_or(false),
+            ),
         }));
     }
 

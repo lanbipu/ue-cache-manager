@@ -1315,7 +1315,13 @@ fn service_install(
                 "service_user": service_user,
                 // Don't echo the password into the dry-run plan and don't
                 // read stdin yet — preview should be side-effect free.
-                "service_pass_supplied": service_pass_inline.is_some() || service_pass_stdin,
+                // Empty `--service-pass ""` is reported as not-supplied
+                // (the sidecar's IsNullOrEmpty check would also treat it
+                // that way at apply time), so the preview stays honest.
+                "service_pass_supplied": service_pass_inline
+                    .map(|p| !p.is_empty())
+                    .unwrap_or(false)
+                    || service_pass_stdin,
             }),
         );
         return Ok(());
