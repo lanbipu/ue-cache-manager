@@ -894,6 +894,7 @@ mod tests {
                             line_number: i + 1,
                         })
                         .collect(),
+                    backend_nodes: Vec::new(),
                 })
                 .collect(),
         }

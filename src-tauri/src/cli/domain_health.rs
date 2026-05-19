@@ -40,11 +40,87 @@ impl Counters {
 
 pub fn handle(ctx: &mut Ctx<'_>, action: HealthAction) -> UecmResult<()> {
     match action {
-        HealthAction::Run { machine_ids, cidr, all, cred } => {
-            run_dispatch(ctx, machine_ids, cidr, all, &cred)
-        }
+        HealthAction::Run {
+            machine_ids,
+            cidr,
+            all,
+            expected_local_path,
+            expected_shared_path,
+            cred,
+        } => run_dispatch(
+            ctx,
+            machine_ids,
+            cidr,
+            all,
+            &expected_local_path,
+            &expected_shared_path,
+            &cred,
+        ),
         HealthAction::Runs { limit } => list_runs(ctx, limit),
         HealthAction::Results { scan_run_id } => list_results(ctx, scan_run_id),
+        HealthAction::ConsistencyCheck { hosts, cred } => {
+            let db = ctx.require_db()?;
+            let creds = cred.resolve(db)?;
+            let mut snaps = Vec::new();
+            for h in &hosts {
+                snaps.push(crate::core::consistency_check::snapshot(
+                    h,
+                    creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
+                )?);
+            }
+            let findings = crate::core::consistency_check::compare(&snaps);
+            ctx.emitter.emit_result(&serde_json::json!({
+                "snapshots": snaps,
+                "inconsistencies": findings
+            })).ok();
+            Ok(())
+        }
+        HealthAction::ScanCommandLine { host, cred } => {
+            let db = ctx.require_db()?;
+            let creds = cred.resolve(db)?;
+            let hits = crate::core::command_line_scanner::scan(
+                &host,
+                creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
+            )?;
+            ctx.emitter.emit_result(&hits).ok();
+            Ok(())
+        }
+        HealthAction::FileStats { host, local_path, shared_path, cred } => {
+            let db = ctx.require_db()?;
+            let creds = cred.resolve(db)?;
+            let stats = crate::core::ddc_file_stats::run(
+                &host,
+                &local_path,
+                &shared_path,
+                creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
+            )?;
+            let imbalance = crate::core::ddc_file_stats::classify_imbalance(&stats);
+            ctx.emitter.emit_result(&serde_json::json!({
+                "stats": stats,
+                "imbalance": imbalance,
+            })).ok();
+            Ok(())
+        }
+        HealthAction::AnalyzeAdvisories {
+            host, editor_exe, project, local_path, shared_path, timeout, cred,
+        } => {
+            let db = ctx.require_db()?;
+            let creds = cred.resolve(db)?;
+            let creds_ref = creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str()));
+            let verify = crate::core::ue_log_verify::run_for_host(
+                &host, &editor_exe, &project, timeout, creds_ref,
+            )?;
+            let stats = crate::core::ddc_file_stats::run(
+                &host, &local_path, &shared_path, creds_ref,
+            ).ok();
+            let advisories = crate::core::ddc_symptom_recognizer::analyze(&verify, stats.as_ref());
+            ctx.emitter.emit_result(&serde_json::json!({
+                "verify": verify,
+                "stats": stats,
+                "advisories": advisories,
+            })).ok();
+            Ok(())
+        }
     }
 }
 
@@ -53,6 +129,8 @@ fn run_dispatch(
     machine_ids: Vec<i64>,
     cidr: Option<String>,
     all: bool,
+    expected_local_path: &str,
+    expected_shared_path: &str,
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
     // clap conflicts_with_all enforces "no two at once" but not "exactly one of three".
@@ -80,9 +158,9 @@ fn run_dispatch(
                 "--all requested but inventory is empty (run `uecm-cli machine scan` first)".into(),
             ));
         }
-        return run_with_rt(ctx, &rt, &ids, cred);
+        return run_with_rt(ctx, &rt, &ids, expected_local_path, expected_shared_path, cred);
     }
-    run_with_rt(ctx, &rt, &machine_ids, cred)
+    run_with_rt(ctx, &rt, &machine_ids, expected_local_path, expected_shared_path, cred)
 }
 
 fn resolve_all_machine_ids(db: &crate::data::Db) -> UecmResult<Vec<i64>> {
@@ -96,6 +174,8 @@ fn run_with_rt(
     ctx: &mut Ctx<'_>,
     rt: &tokio::runtime::Runtime,
     machine_ids: &[i64],
+    expected_local_path: &str,
+    expected_shared_path: &str,
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
     let db = ctx.require_db()?.clone();
@@ -148,6 +228,14 @@ fn run_with_rt(
             .map(|c| c.username)
             .unwrap_or_else(|| "ddc-svc".to_string()),
         None => "ddc-svc".to_string(),
+    };
+
+    // env_shared probe arg: prefer operator-supplied --expected-shared-path; fall
+    // back to cluster share UNC (existing behaviour mirrors UI command).
+    let eff_expected_shared: &str = if expected_shared_path.is_empty() {
+        cluster_share_unc.as_str()
+    } else {
+        expected_shared_path
     };
 
     let scan_id = scan_runs::insert(&db, "health", machine_ids)?;
@@ -204,7 +292,8 @@ fn run_with_rt(
                     &machine.ip,
                     &cluster_share_unc,
                     &cluster_svc_username,
-                    &cluster_share_unc,
+                    eff_expected_shared,
+                    expected_local_path,
                     cred_opt,
                 ) {
                     Ok(map) => map,
@@ -356,6 +445,24 @@ fn run_with_rt(
                     );
                 }
             }
+        }
+
+        // Augment with rs_service from core::renderstream_service (ps_emitted=false
+        // in PROBE_REGISTRY, so the round-trip does not provide it). Probe failure
+        // leaves the slot untouched.
+        let cred_opt_for_rs = if resolved_cred.is_some() {
+            Some((op_user.as_str(), op_pass.as_str()))
+        } else {
+            None
+        };
+        if let Ok(rs_report) = crate::core::renderstream_service::report(
+            &machine.ip,
+            cred_opt_for_rs,
+        ) {
+            row.insert(
+                "rs_service".into(),
+                crate::core::renderstream_service::into_check_outcome(&rs_report),
+            );
         }
 
         let machine_checks = row.len() as i64;
@@ -629,9 +736,13 @@ mod tests {
     #[test]
     fn offline_probe_keys_derives_from_registry() {
         let keys = crate::core::probe_keys::offline_probe_keys();
-        assert_eq!(keys.len(), 11);
+        // 4 L2 + 10 L3Business (incl env_local, env_shared, rs_service) = 14
+        assert_eq!(keys.len(), 14);
         assert!(keys.contains(&"lanman_server"));
         assert!(keys.contains(&"firewall_445"));
+        assert!(keys.contains(&"env_local"));
+        assert!(keys.contains(&"env_shared"));
+        assert!(keys.contains(&"rs_service"));
         assert!(!keys.contains(&"tcp_5985"), "L1 must not be in offline keys");
         assert!(!keys.contains(&"ini_consistency"), "derived must not be in offline keys");
     }

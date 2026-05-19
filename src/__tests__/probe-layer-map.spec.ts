@@ -6,12 +6,13 @@ describe("PROBE_LAYER_MAP", () => {
   const expectedL2 = ["firewall_445", "local_account_token_filter", "long_paths_enabled", "lanman_server"];
   const expectedL3Business = [
     "share_reachable", "ntfs_perm", "cred_user", "cred_system",
-    "env_vars", "system_write", "winmgmt",
+    "env_vars", "env_local", "env_shared", "system_write", "winmgmt", "rs_service",
   ];
   const expectedL3Derived = ["ini_consistency", "pso_precaching", "gpu_consistency"];
 
-  it("has exactly 17 entries matching the Rust PROBE_REGISTRY", () => {
-    expect(Object.keys(PROBE_LAYER_MAP).length).toBe(17);
+  it("has exactly 20 entries matching the Rust PROBE_REGISTRY", () => {
+    // 3 L1 + 4 L2 + 10 L3Business (incl env_local, env_shared, rs_service) + 3 L3Derived = 20
+    expect(Object.keys(PROBE_LAYER_MAP).length).toBe(20);
   });
 
   it("L1 keys are correct", () => {

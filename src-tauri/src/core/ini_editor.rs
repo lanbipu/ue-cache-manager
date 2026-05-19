@@ -303,6 +303,68 @@ fn local_backup_path(file_path: &str) -> String {
     format!("{}.bak.{}", file_path, millis)
 }
 
+fn write_backend_field_local(
+    file_path: &str, section: &str, node_name: &str, field: &str, value: &str,
+) -> UecmResult<()> {
+    use std::fs;
+    let body = fs::read_to_string(file_path)
+        .map_err(|e| UecmError::OperationFailed(format!("read {}: {}", file_path, e)))?;
+    let mut out: Vec<String> = Vec::with_capacity(body.lines().count() + 1);
+    let mut in_section = false;
+    let mut handled = false;
+    for raw in body.lines() {
+        let trimmed = raw.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_section = trimmed[1..trimmed.len() - 1].eq_ignore_ascii_case(section);
+            out.push(raw.to_string()); continue;
+        }
+        if in_section && !handled {
+            if let Ok(mut node) = crate::core::ini_backend_graph::parse_node(raw, 0) {
+                if node.name.eq_ignore_ascii_case(node_name) {
+                    crate::core::ini_backend_graph::upsert_field(&mut node, field, value);
+                    out.push(crate::core::ini_backend_graph::write_node(&node));
+                    handled = true;
+                    continue;
+                }
+            }
+        }
+        out.push(raw.to_string());
+    }
+    if !handled {
+        return Err(UecmError::OperationFailed(format!(
+            "section [{}] node {} not found in {}", section, node_name, file_path)));
+    }
+    out.push(String::new());
+    fs::write(file_path, out.join("\n"))
+        .map_err(|e| UecmError::OperationFailed(format!("write {}: {}", file_path, e)))?;
+    Ok(())
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct BackendFieldResult { ok: bool, message: String }
+
+pub fn set_backend_field_with_credential(
+    host: &str, file_path: &str, section: &str, node_name: &str,
+    field: &str, value: &str, username: &str, password: &str,
+) -> UecmResult<String> {
+    if loopback::is_loopback_target(host) {
+        let _ = (username, password);
+        write_backend_field_local(file_path, section, node_name, field, value)?;
+        return Ok(format!("wrote {}.{} locally", node_name, field));
+    }
+    let r: BackendFieldResult = powershell::run_json(
+        &powershell::script_path("set-backend-field.ps1"),
+        &[
+            "-HostName", host, "-FilePath", file_path,
+            "-SectionName", section, "-NodeName", node_name,
+            "-FieldName", field, "-FieldValue", value,
+            "-Username", username, "-Password", password,
+        ],
+    )?;
+    if !r.ok { return Err(UecmError::OperationFailed(r.message)); }
+    Ok(r.message)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,5 +568,42 @@ mod tests {
         assert_eq!(path_lines.len(), 1, "expected exactly one Path row, got: {:?}", path_lines);
         assert!(updated.contains("Path=new"));
         assert!(!updated.contains("path=old"));
+    }
+
+    #[test]
+    fn set_backend_field_preserves_order_and_updates_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("DefaultEngine.ini");
+        std::fs::write(&path, "[DerivedDataBackendGraph]\nShared=(Type=FileSystem, ReadOnly=true, Path=\\\\NAS\\DDC)\n").unwrap();
+
+        write_backend_field_local(path.to_str().unwrap(), "DerivedDataBackendGraph", "Shared", "ReadOnly", "false").unwrap();
+        let body = std::fs::read_to_string(&path).unwrap();
+        let line = body.lines().find(|l| l.starts_with("Shared=")).unwrap();
+        let type_idx = line.find("Type=").unwrap();
+        let ro_idx = line.find("ReadOnly=").unwrap();
+        let path_idx = line.find("Path=").unwrap();
+        assert!(type_idx < ro_idx && ro_idx < path_idx);
+        assert!(body.contains("ReadOnly=false"));
+        assert!(!body.contains("ReadOnly=true"));
+    }
+
+    #[test]
+    fn set_backend_field_appends_missing_field_at_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("DefaultEngine.ini");
+        std::fs::write(&path, "[DerivedDataBackendGraph]\nShared=(Type=FileSystem)\n").unwrap();
+        write_backend_field_local(path.to_str().unwrap(), "DerivedDataBackendGraph", "Shared", "ReadOnly", "false").unwrap();
+        let body = std::fs::read_to_string(&path).unwrap();
+        let line = body.lines().find(|l| l.starts_with("Shared=")).unwrap();
+        assert!(line.find("Type=").unwrap() < line.find("ReadOnly=").unwrap());
+    }
+
+    #[test]
+    fn set_backend_field_errors_when_node_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("DefaultEngine.ini");
+        std::fs::write(&path, "[DerivedDataBackendGraph]\nBoot=(Type=Boot)\n").unwrap();
+        let r = write_backend_field_local(path.to_str().unwrap(), "DerivedDataBackendGraph", "Shared", "ReadOnly", "false");
+        assert!(matches!(r, Err(UecmError::OperationFailed(_))));
     }
 }

@@ -18,6 +18,9 @@ pub mod domain_health;
 pub mod domain_gpu;
 pub mod domain_ddc;
 pub mod domain_pso;
+pub mod domain_log;
+pub mod domain_local_cache;
+pub mod domain_deploy;
 pub mod domain_zen;
 
 // Re-export the emitter trait + the generic extension trait so domain handlers

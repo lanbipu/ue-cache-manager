@@ -1,0 +1,10 @@
+{
+  "project_id": 1,
+  "source_machine_id": 100,
+  "target_machine_ids": [200, 201],
+  "local_cache": { "path": "D:\\UE-DDC-Local", "service_account": null },
+  "shared_cache": { "server_machine_id": 300, "share_name": "DDC", "server_path": "D:\\DDC", "mode": "b", "unc_path": null },
+  "ddc_pak": { "enabled": true },
+  "pso": { "enabled": true, "resolution": "1920x1080", "max_minutes": 10 },
+  "verify": { "run_log_verify": true, "editor_exe": "C:\\Program Files\\Epic Games\\UE_5.5\\Engine\\Binaries\\Win64\\UnrealEditor.exe", "timeout_seconds": 180 }
+}

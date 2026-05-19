@@ -87,4 +87,12 @@ describe("BatchEnvVarModal", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("Will apply to 1 machine");
   });
+
+  it("custom var name input appears when __custom selected", async () => {
+    const wrapper = mount(BatchEnvVarModal, { props: { open: true, machineIds: [5] } });
+    await flushPromises();
+    expect(wrapper.find("[data-env-name-custom]").exists()).toBe(false);
+    await wrapper.find("[data-env-name]").setValue("__custom");
+    expect(wrapper.find("[data-env-name-custom]").exists()).toBe(true);
+  });
 });

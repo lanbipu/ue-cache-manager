@@ -1,12 +1,13 @@
-# Runs 11 health probes against a remote host in one Invoke-Command round-trip.
+# Runs 13 health probes against a remote host in one Invoke-Command round-trip.
 # Layer assignment lives in src-tauri/src/core/probe_keys.rs -- this file MUST
 # stay in sync (drift test: cargo test core::probe_keys::tests::powershell_script_results_hashtable_matches_registry).
 #
 # L2 (bootstrap):  firewall_445, local_account_token_filter, long_paths_enabled, lanman_server
-# L3 (business):   share_reachable, ntfs_perm, cred_user, cred_system, env_vars, system_write, winmgmt
+# L3 (business):   share_reachable, ntfs_perm, cred_user, cred_system, env_vars, env_local, env_shared, system_write, winmgmt
 #
 # L1 (port reachability) runs in Rust -- NOT here.
 # L3 derived (ini_consistency, pso_precaching, gpu_consistency) computed in Rust -- NOT here.
+# rs_service (L3Business) is augmented post round-trip in Rust via core::renderstream_service.
 #
 # Output: JSON { ok, results: { <key>: {status, message, sample, remediation}, ... }, message }
 
@@ -15,6 +16,7 @@ param(
     [string]$ShareUnc = "",
     [string]$SvcUsername = "",
     [string]$ExpectedSharedDataCachePath = "",
+    [string]$ExpectedLocalDataCachePath = "",
     [string]$Username,
     [string]$Password,
     [switch]$Local
@@ -36,7 +38,7 @@ function Build-CredentialOrNull {
 
 try {
     $script = {
-        param($ShareUnc, $SvcUsername, $ExpectedSharedDataCachePath)
+        param($ShareUnc, $SvcUsername, $ExpectedSharedDataCachePath, $ExpectedLocalDataCachePath)
 
         function Probe-Firewall445 {
             try {
@@ -192,6 +194,30 @@ try {
             }
         }
 
+        function Probe-EnvShared {
+            $value = [Environment]::GetEnvironmentVariable('UE-SharedDataCachePath', 'Machine')
+            if ([string]::IsNullOrEmpty($ExpectedSharedDataCachePath)) {
+                $status = if ($value) { 'healthy' } else { 'warning' }
+                return @{ status = $status; message = "UE-SharedDataCachePath = $value"; sample = "$value"; remediation = '' }
+            }
+            $match = $value -eq $ExpectedSharedDataCachePath
+            @{ status = ($(if ($match) {'healthy'} else {'critical'}));
+               message = "expected $ExpectedSharedDataCachePath, got $value"; sample = "$value";
+               remediation = ($(if ($match) {''} else {"Set system env: ``uecm-cli env set --name UE-SharedDataCachePath --value `"$ExpectedSharedDataCachePath`"``."})) }
+        }
+
+        function Probe-EnvLocal {
+            $value = [Environment]::GetEnvironmentVariable('UE-LocalDataCachePath', 'Machine')
+            if ([string]::IsNullOrEmpty($ExpectedLocalDataCachePath)) {
+                $status = if ($value) { 'healthy' } else { 'warning' }
+                return @{ status = $status; message = "UE-LocalDataCachePath = $value"; sample = "$value"; remediation = '' }
+            }
+            $match = $value -eq $ExpectedLocalDataCachePath
+            @{ status = ($(if ($match) {'healthy'} else {'critical'}));
+               message = "expected $ExpectedLocalDataCachePath, got $value"; sample = "$value";
+               remediation = ($(if ($match) {''} else {"Set system env: ``uecm-cli env set --name UE-LocalDataCachePath --value `"$ExpectedLocalDataCachePath`"``."})) }
+        }
+
         function Probe-SystemWrite {
             if ([string]::IsNullOrEmpty($ShareUnc)) {
                 return @{ status='na'; message='no share configured'; sample=''; remediation='' }
@@ -239,19 +265,21 @@ try {
             cred_user                  = (Probe-CredUser)
             cred_system                = (Probe-CredSystem)
             env_vars                   = (Probe-EnvVars)
+            env_local                  = (Probe-EnvLocal)
+            env_shared                 = (Probe-EnvShared)
             system_write               = (Probe-SystemWrite)
             winmgmt                    = (Probe-Winmgmt)
         }
         return $results
     }
     if ($Local) {
-        $r = & $script $ShareUnc $SvcUsername $ExpectedSharedDataCachePath
+        $r = & $script $ShareUnc $SvcUsername $ExpectedSharedDataCachePath $ExpectedLocalDataCachePath
     } else {
         $cred = Build-CredentialOrNull -User $Username -Pass $Password
         $invokeArgs = @{
             ComputerName = $HostName
             ScriptBlock  = $script
-            ArgumentList = @($ShareUnc, $SvcUsername, $ExpectedSharedDataCachePath)
+            ArgumentList = @($ShareUnc, $SvcUsername, $ExpectedSharedDataCachePath, $ExpectedLocalDataCachePath)
             ErrorAction  = 'Stop'
             Authentication = 'Negotiate'
         }

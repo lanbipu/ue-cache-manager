@@ -144,9 +144,10 @@ fn enumerate_local(project_dir: &str) -> UecmResult<Vec<EnumeratedFile>> {
     for entry in entries {
         let entry = entry.map_err(UecmError::Io)?;
         let path = entry.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("upipelinecache") {
-            continue;
-        }
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let lower = name.to_lowercase();
+        let is_target = lower.ends_with(".upipelinecache") || lower.ends_with(".stablepc.csv");
+        if !is_target { continue; }
         let metadata = entry.metadata().map_err(UecmError::Io)?;
         files.push(EnumeratedFile {
             file_path: path.to_string_lossy().to_string(),

@@ -117,6 +117,7 @@ pub fn read_file(
                 value: k.value,
                 line_number: k.line_number,
             }).collect(),
+            backend_nodes: vec![],
         }).collect(),
     }))
 }
@@ -154,6 +155,7 @@ fn parse_ini_contents(target: &TargetFile, contents: &str) -> ParsedFile {
             current = Some(ParsedSection {
                 name: trim[1..trim.len() - 1].to_string(),
                 keys: Vec::new(),
+                backend_nodes: Vec::new(),
             });
             continue;
         }
@@ -183,11 +185,32 @@ fn parse_ini_contents(target: &TargetFile, contents: &str) -> ParsedFile {
         sections.push(section);
     }
 
-    ParsedFile {
+    let mut parsed = ParsedFile {
         path: target.path.clone(),
         category: target.category,
         sections,
+    };
+
+    // Tuple-node post-pass. A key whose value starts with `(` and ends with `)`
+    // is re-parsed as a BackendNode. The key entry is preserved in `keys` so
+    // existing rules keep working; backend_nodes is additive.
+    for section in &mut parsed.sections {
+        for k in &section.keys {
+            if is_tuple_value(&k.value) {
+                let synthetic = format!("{}={}", k.name, k.value);
+                if let Ok(node) = crate::core::ini_backend_graph::parse_node(&synthetic, k.line_number as u32) {
+                    section.backend_nodes.push(node);
+                }
+            }
+        }
     }
+    parsed
+}
+
+/// Public wrapper for callers outside this module that need a parsed file.
+/// Used by CLI `ini backend-graph scan` (M1.5).
+pub fn parse_for_diagnostics(target: &TargetFile, contents: &str) -> ParsedFile {
+    parse_ini_contents(target, contents)
 }
 
 pub struct ScanInputs<'a> {
@@ -784,5 +807,63 @@ mod tests {
                 f.rule_id
             );
         }
+    }
+
+    #[test]
+    fn parse_extracts_backend_nodes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("DefaultEngine.ini");
+        std::fs::write(&path, "[DerivedDataBackendGraph]\nShared=(Type=FileSystem, Path=\\\\NAS\\DDC, ReadOnly=false)\nBoot=(Type=Boot, Filename=DDC)\n").unwrap();
+        let target = TargetFile {
+            path: path.to_string_lossy().to_string(),
+            category: crate::core::ini_diagnostics::Category::Project,
+        };
+        let body = std::fs::read_to_string(&path).unwrap();
+        let parsed = parse_ini_contents(&target, &body);
+        let bg = parsed.sections.iter().find(|s| s.name.eq_ignore_ascii_case("DerivedDataBackendGraph")).unwrap();
+        assert_eq!(bg.backend_nodes.len(), 2);
+        let shared = bg.backend_nodes.iter().find(|n| n.name == "Shared").unwrap();
+        assert_eq!(crate::core::ini_backend_graph::get_field(shared, "ReadOnly"), Some("false"));
+    }
+
+    #[test]
+    fn non_tuple_keys_stay_out_of_backend_nodes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("DefaultEngine.ini");
+        std::fs::write(&path, "[Foo]\nBar=baz\n").unwrap();
+        let target = TargetFile {
+            path: path.to_string_lossy().to_string(),
+            category: crate::core::ini_diagnostics::Category::Project,
+        };
+        let body = std::fs::read_to_string(&path).unwrap();
+        let parsed = parse_ini_contents(&target, &body);
+        assert!(parsed.sections.iter().all(|s| s.backend_nodes.is_empty()));
+    }
+}
+
+/// True if a raw value string looks like a `(K1=V1, K2=V2)` tuple.
+fn is_tuple_value(v: &str) -> bool {
+    let v = v.trim();
+    v.starts_with('(') && v.ends_with(')')
+}
+
+#[cfg(test)]
+mod tuple_detector_tests {
+    use super::is_tuple_value;
+
+    #[test]
+    fn detects_paren_wrapped() {
+        assert!(is_tuple_value("(Type=FileSystem)"));
+    }
+
+    #[test]
+    fn rejects_plain() {
+        assert!(!is_tuple_value("FileSystem"));
+    }
+
+    #[test]
+    fn rejects_half_open() {
+        assert!(!is_tuple_value("(Type=FileSystem"));
+        assert!(!is_tuple_value("Type=FileSystem)"));
     }
 }

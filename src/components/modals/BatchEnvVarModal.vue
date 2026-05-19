@@ -19,6 +19,7 @@ const credentials = useCredentialsStore();
 const machines = useMachinesStore();
 
 const name = ref("UE-SharedDataCachePath");
+const customName = ref("");
 const value = ref("");
 const credentialAlias = ref<string>("");
 const submitError = ref<string | null>(null);
@@ -28,6 +29,7 @@ watch(
   (val) => {
     if (val) {
       name.value = "UE-SharedDataCachePath";
+      customName.value = "";
       value.value = "";
       credentialAlias.value = "";
       submitError.value = null;
@@ -46,6 +48,7 @@ const canApply = computed(
   () =>
     !batch.isRunning &&
     name.value.trim() !== "" &&
+    (name.value !== "__custom" || customName.value.trim() !== "") &&
     credentialAlias.value !== "" &&
     props.machineIds.length > 0,
 );
@@ -59,8 +62,9 @@ const applyToLabel = computed(() => {
 
 async function onApply() {
   submitError.value = null;
+  const effectiveName = name.value === "__custom" ? customName.value.trim() : name.value;
   try {
-    await batch.runEnvVar(props.machineIds, name.value.trim(), value.value, credentialAlias.value);
+    await batch.runEnvVar(props.machineIds, effectiveName, value.value, credentialAlias.value);
   } catch (e) {
     submitError.value = (e as { message?: string }).message ?? t("modal.batchEnv.batchFailed");
   }
@@ -74,10 +78,21 @@ async function onApply() {
         {{ applyToLabel }}
       </p>
       <label class="block text-sm mb-1">{{ t("modal.batchEnv.varName") }}</label>
-      <input
+      <select
         data-env-name
         v-model="name"
+        class="mb-3 w-full rounded border border-input bg-transparent px-2 py-1 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <option value="UE-SharedDataCachePath">{{ t("modal.batchEnv.shared") }}</option>
+        <option value="UE-LocalDataCachePath">{{ t("modal.batchEnv.local") }}</option>
+        <option value="__custom">{{ t("modal.batchEnv.custom") }}</option>
+      </select>
+      <input
+        v-if="name === '__custom'"
+        data-env-name-custom
+        v-model="customName"
         class="mb-3 w-full rounded border border-input bg-transparent px-2 py-1 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        :placeholder="t('modal.batchEnv.customPlaceholder')"
       />
       <label class="block text-sm mb-1">{{ t("modal.batchEnv.value") }}</label>
       <input

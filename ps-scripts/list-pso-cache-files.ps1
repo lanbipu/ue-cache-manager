@@ -22,7 +22,7 @@ try {
         if (-not (Test-Path -LiteralPath $dir)) { return ,@() }
 
         $files = Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue | Where-Object {
-            $_.Extension -eq '.upipelinecache' -or $_.Extension -eq '.csv'
+            $_.Extension -eq '.upipelinecache' -or $_.Name -like '*.stablepc.csv'
         }
         $out = @()
         foreach ($f in $files) {

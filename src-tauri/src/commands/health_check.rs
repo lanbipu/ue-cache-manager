@@ -44,6 +44,14 @@ pub struct RunHealthCheckRequest {
     pub machine_ids: Vec<i64>,
     pub credential_alias: String,
     pub project_paths: Vec<String>,
+    /// Expected value for UE-LocalDataCachePath. When `None` or empty string,
+    /// the env_local probe only checks that the variable is set (presence-only).
+    #[serde(default)]
+    pub expected_local_path: Option<String>,
+    /// Expected value for UE-SharedDataCachePath. Same semantics as
+    /// `expected_local_path`. When unset, falls back to the cluster share UNC.
+    #[serde(default)]
+    pub expected_shared_path: Option<String>,
 }
 
 #[tauri::command]
@@ -54,6 +62,8 @@ pub fn run_health_check(
 ) -> UecmResult<HealthRunSummary> {
     let machine_ids = request.machine_ids;
     let credential_alias = request.credential_alias;
+    let expected_local_path = request.expected_local_path.unwrap_or_default();
+    let expected_shared_path = request.expected_shared_path.unwrap_or_default();
     let project_paths_per_machine: HashMap<i64, Vec<String>> = machine_ids
         .iter()
         .map(|machine_id| (*machine_id, request.project_paths.clone()))
@@ -114,8 +124,20 @@ pub fn run_health_check(
         let svc_username = cluster_svc_username.clone();
         let expected_shared = share_unc.clone();
 
+        // Use operator-supplied expected paths when provided; fall back to the
+        // cluster share UNC for env_shared (existing behaviour) and empty string
+        // for env_local (presence-only check).
+        let eff_expected_shared = if expected_shared_path.is_empty() {
+            expected_shared.as_str()
+        } else {
+            expected_shared_path.as_str()
+        };
         let probes = match health_probes::run(
-            &machine.ip, &share_unc, &svc_username, &expected_shared,
+            &machine.ip,
+            &share_unc,
+            &svc_username,
+            eff_expected_shared,
+            &expected_local_path,
             Some((&cred_row.username, &password)),
         ) {
             Ok(map) => map,
@@ -201,6 +223,21 @@ pub fn run_health_check(
         row.insert("ini_consistency".into(), ini_outcome);
         row.insert("pso_precaching".into(), pso_outcome);
         row.insert("gpu_consistency".into(), gpu_outcome);
+
+        // Augment the round-trip with rs_service from core::renderstream_service.
+        // The probe is L3Business but not PS-emitted (ps_emitted=false in
+        // PROBE_REGISTRY); it is computed here so we can detect both LocalSystem
+        // service installs AND local interactive users. Probe failure leaves
+        // any previous slot untouched.
+        if let Ok(rs_report) = crate::core::renderstream_service::report(
+            &machine.ip,
+            Some((cred_row.username.as_str(), password.as_str())),
+        ) {
+            row.insert(
+                "rs_service".into(),
+                crate::core::renderstream_service::into_check_outcome(&rs_report),
+            );
+        }
 
         // L1 ports — creds-independent, always run.
         let l1 = rt.block_on(probe_tcp_ports(&machine.ip, 1000));
