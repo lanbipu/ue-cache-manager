@@ -302,16 +302,29 @@ fn run_with_rt(
                 }
             }
             Err(e) => {
+                // Codex round-16 P2: keep the stable 4-key zen layout
+                // even on DB-error fallback (mirror of
+                // commands::health_check::run_health_check).
                 eprintln!("[health run] zen_health_for_machine({}) failed: {}", mid, e);
-                row.insert(
-                    "zen_reachable".into(),
-                    crate::core::health_check::CheckOutcome {
-                        status: "unknown".into(),
-                        message: format!("zen health query failed: {e}"),
-                        sample: "".into(),
-                        remediation: "Inspect tracing logs; re-run when DB is recovered.".into(),
-                    },
-                );
+                let msg = format!("zen health query failed: {e}");
+                let remediation =
+                    "Inspect tracing logs; re-run when DB is recovered.".to_string();
+                for key in [
+                    "zen_reachable",
+                    "zen_version_consistent",
+                    "zen_binary_intact",
+                    "zen_cache_provider_ready",
+                ] {
+                    row.insert(
+                        key.into(),
+                        crate::core::health_check::CheckOutcome {
+                            status: "unknown".into(),
+                            message: msg.clone(),
+                            sample: "".into(),
+                            remediation: remediation.clone(),
+                        },
+                    );
+                }
             }
         }
 

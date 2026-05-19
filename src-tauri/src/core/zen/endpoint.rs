@@ -340,13 +340,17 @@ fn validate_role_lifecycle(role: &str, lifecycle_mode: &str) -> UecmResult<()> {
 ///   AFTER `..`-segment collapse so `C:\Foo\..\Windows\Zen` is also
 ///   rejected.
 ///
-/// What's NOT rejected:
+/// What's rejected:
 /// - Drive-relative (`D:ZenCache`) or root-relative (`\ZenCache`) paths.
-///   `core::zen::endpoint` accepts these because they're the operator's
-///   intent at registration time; the resolution into a fully-qualified
-///   path happens in the PS sidecar against the remote host's CWD.
-///   The sidecar (`zen-service-install.ps1`) refuses them at apply time
-///   so the operator gets a clear error there, not silent misdirection.
+///   Codex round-16 P2: these survive register, persist through the DB,
+///   and later get rendered straight into `server.datadir` by
+///   `zen-write-lua-config.ps1` (which only validates `dest_path`).
+///   zen then resolves them against the editor / service process CWD,
+///   producing different data dirs depending on who launched the
+///   process. The strict `zen-service-install.ps1` guard catches the
+///   same path later, but `editor_owned` / `local` lifecycles never
+///   reach that guard. Refuse at register time so every code path
+///   sees a fully-qualified path.
 fn validate_data_dir(data_dir: &str) -> UecmResult<()> {
     let trimmed = data_dir.trim();
     if trimmed.is_empty() {
@@ -366,6 +370,25 @@ fn validate_data_dir(data_dir: &str) -> UecmResult<()> {
              (\\\\?\\ or \\\\.\\); these bypass path canonicalization and \
              would defeat the system-root safety check. Register without \
              the prefix."
+        )));
+    }
+    // Codex round-16 P2: require a fully-qualified absolute path. Two
+    // shapes accepted — drive-absolute (`X:\...`) and UNC (`\\host\...`).
+    // Anything else is ambiguous (drive-relative `D:ZenCache`,
+    // root-relative `\ZenCache`, bare `ZenCache`) and resolves against
+    // process CWD on Windows.
+    let bytes = normalized.as_bytes();
+    let is_drive_absolute = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && bytes[2] == b'\\';
+    let is_unc = normalized.starts_with(r"\\");
+    if !(is_drive_absolute || is_unc) {
+        return Err(UecmError::InvalidInput(format!(
+            "data_dir {data_dir:?} must be a fully-qualified absolute path \
+             (e.g. 'D:\\ZenCache' or '\\\\host\\share\\Zen'); drive-relative \
+             or root-relative paths resolve against process CWD on Windows \
+             and produce different data dirs depending on the launcher"
         )));
     }
     let canonical = collapse_path_segments(&normalized);
@@ -758,6 +781,40 @@ mod tests {
             let err = register(&db, &input).unwrap_err();
             assert_invalid_input(&err, "Win32 device namespace");
         }
+    }
+
+    // Codex round-16 P2: drive-relative and root-relative paths must be
+    // rejected at register time. Without this, `editor_owned` / `local`
+    // endpoints would persist an ambiguous data_dir and lua-config
+    // render would write it into `server.datadir` for zen to resolve
+    // against process CWD — different launchers see different data
+    // dirs. The strict `zen-service-install.ps1` guard catches the
+    // same shape but only on the service-install lifecycle.
+    #[test]
+    fn register_rejects_drive_relative_data_dir() {
+        let (db, m) = setup();
+        let mut input = valid_local(m, 8558);
+        input.data_dir = "D:ZenCache".into();
+        let err = register(&db, &input).unwrap_err();
+        assert_invalid_input(&err, "fully-qualified absolute path");
+    }
+
+    #[test]
+    fn register_rejects_root_relative_data_dir() {
+        let (db, m) = setup();
+        let mut input = valid_local(m, 8559);
+        input.data_dir = r"\ZenCache".into();
+        let err = register(&db, &input).unwrap_err();
+        assert_invalid_input(&err, "fully-qualified absolute path");
+    }
+
+    #[test]
+    fn register_rejects_bare_relative_data_dir() {
+        let (db, m) = setup();
+        let mut input = valid_local(m, 8560);
+        input.data_dir = "ZenCache".into();
+        let err = register(&db, &input).unwrap_err();
+        assert_invalid_input(&err, "fully-qualified absolute path");
     }
 
     #[test]

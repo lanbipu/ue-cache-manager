@@ -185,19 +185,34 @@ pub fn run_health_check(
                 }
             }
             Err(e) => {
-                // Best-effort: a DB error on the zen side shouldn't nuke
-                // the whole health run. Inject a single visible warning
-                // so the operator can see the failure mode in the UI.
+                // Codex round-16 P2: the zen health contract is that every
+                // row carries ALL FOUR `zen_*` keys with a stable layout,
+                // even when the source query failed. Previously this
+                // branch only emitted `zen_reachable`, leaving
+                // `zen_version_consistent` / `zen_binary_intact` /
+                // `zen_cache_provider_ready` missing — UI / CLI clients
+                // that read keys by name would silently render them as
+                // gaps instead of "unknown".
                 eprintln!("[health_check] zen_health_for_machine({}) failed: {}", mid, e);
-                row.insert(
-                    "zen_reachable".into(),
-                    CheckOutcome {
-                        status: "unknown".into(),
-                        message: format!("zen health probe failed: {}", e),
-                        sample: String::new(),
-                        remediation: "Inspect the UECM log; the underlying DB query for zen state failed.".into(),
-                    },
-                );
+                let msg = format!("zen health probe failed: {}", e);
+                let remediation =
+                    "Inspect the UECM log; the underlying DB query for zen state failed.".to_string();
+                for key in [
+                    "zen_reachable",
+                    "zen_version_consistent",
+                    "zen_binary_intact",
+                    "zen_cache_provider_ready",
+                ] {
+                    row.insert(
+                        key.into(),
+                        CheckOutcome {
+                            status: "unknown".into(),
+                            message: msg.clone(),
+                            sample: String::new(),
+                            remediation: remediation.clone(),
+                        },
+                    );
+                }
             }
         }
 
