@@ -230,11 +230,41 @@ fn run_with_rt(
                         // codex P2 from T4.1-T4.3 review wants stable layout
                         // regardless of WinRM reachability. Most rows will
                         // be "unknown" but the keys present.
-                        if let Ok(zen_rows) =
-                            crate::core::health_check::zen_health_for_machine(&db, mid)
-                        {
-                            for (k, v) in zen_rows {
-                                row.insert(k, v);
+                        //
+                        // Codex round-18 P3: same as online path — when
+                        // the DB query errors, emit `unknown` for all 4
+                        // keys instead of dropping them, so consumers
+                        // never see gaps in the row schema.
+                        match crate::core::health_check::zen_health_for_machine(&db, mid) {
+                            Ok(zen_rows) => {
+                                for (k, v) in zen_rows {
+                                    row.insert(k, v);
+                                }
+                            }
+                            Err(zen_err) => {
+                                eprintln!(
+                                    "[health run] offline zen_health_for_machine({}) failed: {}",
+                                    mid, zen_err
+                                );
+                                let msg = format!("zen health query failed: {zen_err}");
+                                let remediation =
+                                    "Inspect tracing logs; re-run when DB is recovered.".to_string();
+                                for key in [
+                                    "zen_reachable",
+                                    "zen_version_consistent",
+                                    "zen_binary_intact",
+                                    "zen_cache_provider_ready",
+                                ] {
+                                    row.insert(
+                                        key.into(),
+                                        crate::core::health_check::CheckOutcome {
+                                            status: "unknown".into(),
+                                            message: msg.clone(),
+                                            sample: "".into(),
+                                            remediation: remediation.clone(),
+                                        },
+                                    );
+                                }
                             }
                         }
                         health_check_runs::upsert(&db, scan_id, mid, &serde_json::to_value(&row).unwrap())?;

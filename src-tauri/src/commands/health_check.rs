@@ -143,9 +143,42 @@ pub fn run_health_check(
                 // "unknown" because they rely on probe / install data
                 // that's likely missing for an offline host, but having
                 // the keys present beats leaving holes in the schema.
-                if let Ok(zen_rows) = zen_health_for_machine(&db, mid) {
-                    for (k, v) in zen_rows {
-                        row.insert(k, v);
+                //
+                // Codex round-18 P3: when the underlying query itself
+                // fails, the previous `if let Ok` swallowed the error
+                // and left ALL 4 keys missing — same stable-layout
+                // violation the online path already fixes. Emit
+                // `unknown` for the 4 keys in the error branch.
+                match zen_health_for_machine(&db, mid) {
+                    Ok(zen_rows) => {
+                        for (k, v) in zen_rows {
+                            row.insert(k, v);
+                        }
+                    }
+                    Err(zen_err) => {
+                        eprintln!(
+                            "[health_check] offline zen_health_for_machine({}) failed: {}",
+                            mid, zen_err
+                        );
+                        let msg = format!("zen health probe failed: {}", zen_err);
+                        let remediation =
+                            "Inspect the UECM log; the underlying DB query for zen state failed.".to_string();
+                        for key in [
+                            "zen_reachable",
+                            "zen_version_consistent",
+                            "zen_binary_intact",
+                            "zen_cache_provider_ready",
+                        ] {
+                            row.insert(
+                                key.into(),
+                                CheckOutcome {
+                                    status: "unknown".into(),
+                                    message: msg.clone(),
+                                    sample: String::new(),
+                                    remediation: remediation.clone(),
+                                },
+                            );
+                        }
                     }
                 }
                 tally_summary(&mut summary, &row);

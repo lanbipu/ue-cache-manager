@@ -233,8 +233,12 @@ fn check_zen_reachable(db: &Db, machine_id: i64) -> UecmResult<CheckOutcome> {
             status: "critical".into(),
             message: "No zen probes have ever been recorded for this machine's endpoints".into(),
             sample: format!("{} endpoint(s)", endpoints.len()),
-            remediation: "Run `uecm-cli zen probe <endpoint>` to record a baseline probe."
-                .into(),
+            // Codex round-18 P3: `zen probe <endpoint>` doesn't exist —
+            // the CLI takes `--machine <ID>` or `--all`. Interpolate the
+            // current machine id so the operator can copy-paste.
+            remediation: format!(
+                "Run `uecm-cli zen probe --machine {machine_id}` to record a baseline probe."
+            ),
         });
     }
     Ok(CheckOutcome {
