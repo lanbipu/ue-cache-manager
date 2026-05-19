@@ -182,32 +182,54 @@ fn invoke_local(script_body: &str) -> UecmResult<String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
-    let mut child = Command::new("powershell.exe")
+    // T1.11 fix: `powershell.exe -Command -` reads stdin as a command
+    // string, but Windows PowerShell truncates / silently drops large
+    // multi-statement scripts piped via stdin (zen-detect-binary.ps1
+    // is ~10K of functions + try/catch — emits zero stdout on the
+    // stdin path even though `-File <tempfile>` runs it cleanly).
+    //
+    // Workaround: write the script to a temp .ps1 file and run via
+    // `-File <path>`. Same code path PowerShell uses internally for
+    // its own script execution, no stdin-buffer quirks.
+    let mut tmp_path = std::env::temp_dir();
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    tmp_path.push(format!("uecm-invoke-{pid}-{nanos}.ps1"));
+
+    {
+        let mut tmp = std::fs::File::create(&tmp_path).map_err(|e| {
+            UecmError::PowerShell(format!(
+                "failed to create temp script file {}: {}",
+                tmp_path.display(),
+                e
+            ))
+        })?;
+        tmp.write_all(
+            b"[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null\r\n",
+        )
+        .and_then(|_| tmp.write_all(script_body.as_bytes()))
+        .map_err(|e| UecmError::PowerShell(format!("failed to write temp script: {}", e)))?;
+    }
+
+    let result = Command::new("powershell.exe")
         .arg("-NoProfile")
         .arg("-ExecutionPolicy")
         .arg("Bypass")
-        .arg("-Command")
-        .arg("-")
-        .stdin(Stdio::piped())
+        .arg("-File")
+        .arg(&tmp_path)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
+        .output();
+
+    // Always remove the temp file, even on subprocess error.
+    let _ = std::fs::remove_file(&tmp_path);
+
+    let output = result
         .map_err(|e| UecmError::PowerShell(format!("failed to spawn powershell.exe: {}", e)))?;
-
-    {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| UecmError::PowerShell("failed to open stdin".to_string()))?;
-        stdin
-            .write_all(b"[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null\n")
-            .and_then(|_| stdin.write_all(script_body.as_bytes()))
-            .map_err(|e| UecmError::PowerShell(format!("failed to write stdin: {}", e)))?;
-    }
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| UecmError::PowerShell(format!("wait failed: {}", e)))?;
 
     if !output.status.success() {
         let stderr = powershell::decode_subprocess_output(&output.stderr);

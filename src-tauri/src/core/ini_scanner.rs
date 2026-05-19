@@ -334,7 +334,7 @@ pub fn build_zen_ctx_for_machine(
     let mut endpoint_reachability = Vec::with_capacity(endpoints.len() * 2);
     {
         let conn = db.lock().unwrap();
-        let mut probe_for = |endpoint_id: i64| -> UecmResult<bool> {
+        let probe_for = |endpoint_id: i64| -> UecmResult<bool> {
             let mut stmt = conn.prepare(
                 "SELECT reachable,
                         datetime(probed_at) > datetime('now', ?2) AS fresh
