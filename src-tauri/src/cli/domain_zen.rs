@@ -50,12 +50,14 @@ use crate::cli::output::Event;
 use crate::cli::run::Ctx;
 use crate::cli::EmitSerialize;
 use crate::core::zen::endpoint as zen_endpoint;
+use crate::core::zen::enable as zen_enable;
 use crate::core::zen::lua_config::{self, UpstreamInfo};
 use crate::core::zen::redaction::redact;
+use crate::core::zen::rules_loader as zen_rules;
 use crate::core::zen::{binary as zen_binary, cache_stats as zen_cache, probe as zen_probe};
 use crate::data::{
-    machine_zen_install, machines, operations, zen_binary_expected, zen_endpoints, zen_probes,
-    Db, Machine, ZenEndpoint,
+    machine_zen_install, machines, operations, project_locations, projects, zen_binary_expected,
+    zen_endpoints, zen_probes, Db, Machine, ZenEndpoint,
 };
 use crate::error::{UecmError, UecmResult};
 use serde::Serialize;
@@ -146,6 +148,27 @@ pub fn handle(ctx: &mut Ctx<'_>, action: ZenAction) -> UecmResult<()> {
                 urlacl_remove(ctx, endpoint_id, yes, dry_run, &cred)
             }
         },
+        ZenAction::Enable {
+            project_id,
+            machines,
+            upstream_endpoint_id,
+            namespace,
+            yes,
+            dry_run,
+            cred,
+        } => project_enable(
+            ctx,
+            project_id,
+            &machines,
+            upstream_endpoint_id,
+            &namespace,
+            yes,
+            dry_run,
+            &cred,
+        ),
+        ZenAction::Disable { project_id, machines, yes, dry_run, cred } => {
+            project_disable(ctx, project_id, &machines, yes, dry_run, &cred)
+        }
     }
 }
 
@@ -1905,6 +1928,655 @@ pub(crate) fn finalize_op(
 }
 
 // -----------------------------------------------------------------------------
+// project enable / disable (T3.7) — fan out across N machines
+// -----------------------------------------------------------------------------
+
+/// Per-machine record returned in the aggregate JSON. Mirrors the report
+/// captured by `EnableOutcome` / `DisableOutcome` plus the env-cleanup leg
+/// the orchestrator drives.
+#[derive(Debug, Clone, Serialize)]
+struct ProjectMachineResult {
+    machine_id: i64,
+    host: String,
+    /// `true` when this machine's INI was mutated (or would have been).
+    /// `false` for idempotent no-op runs (state already matches).
+    changed: bool,
+    ini_file: Option<String>,
+    keys_set: Vec<KeyApplyView>,
+    keys_removed: Vec<KeyApplyView>,
+    backups: Vec<String>,
+    env_cleanup_results: Vec<EnvCleanupResultView>,
+    warnings: Vec<String>,
+    /// Per-machine error message when this machine's leg failed. `None` on
+    /// success. Set when the INI mutation or env-cleanup PS sidecar errored;
+    /// other machines still get processed.
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct KeyApplyView {
+    section: String,
+    key: String,
+    action: String,
+    previous_value: Option<String>,
+    new_value: Option<String>,
+}
+
+impl From<&zen_enable::KeyApplyRecord> for KeyApplyView {
+    fn from(r: &zen_enable::KeyApplyRecord) -> Self {
+        Self {
+            section: r.section.clone(),
+            key: r.key.clone(),
+            action: r.action.clone(),
+            previous_value: r.previous_value.clone(),
+            new_value: r.new_value.clone(),
+        }
+    }
+}
+
+/// One PS-sidecar call result, captured as raw JSON for forward compatibility.
+/// `ok=true` mirrors `zen-env-cleanup.ps1`'s envelope; `error` is set when the
+/// call or response parse failed.
+#[derive(Debug, Clone, Serialize)]
+struct EnvCleanupResultView {
+    var: String,
+    scope: String,
+    ok: bool,
+    /// Raw response object from `zen-env-cleanup.ps1` on success.
+    remote: Option<serde_json::Value>,
+    error: Option<String>,
+}
+
+/// Resolve the `ue_version_major.minor` string the rules resolver expects.
+/// Both halves must be populated — a project with an unresolved EngineAssociation
+/// (e.g. raw GUID) has no version to gate rules on, so we refuse rather than
+/// guess. Operator can re-discover or set the version manually.
+fn project_ue_version_string(project: &crate::data::Project) -> UecmResult<String> {
+    match (project.ue_version_major, project.ue_version_minor) {
+        (Some(major), Some(minor)) => Ok(format!("{major}.{minor}")),
+        _ => Err(UecmError::InvalidInput(format!(
+            "project id={} has no resolved UE version (engine_association_kind={:?}); \
+             zen enable/disable needs major.minor to pick the rule set. Re-run project \
+             discovery or set the location with an EngineAssociation-bearing .uproject.",
+            project.id.unwrap_or(-1),
+            project.engine_association_kind,
+        ))),
+    }
+}
+
+/// Compose the absolute `DefaultEngine.ini` path on the target machine from a
+/// `project_locations` row. The convention matches `core::ini_apply` /
+/// `core::project_discovery` — both use `<abs_path>\Config\DefaultEngine.ini`.
+///
+/// Honors either Windows (`\`) or POSIX (`/`) abs_path separators since the
+/// `abs_path` field is freeform operator input. The remote sidecar normalizes
+/// either form, so we don't try to canonicalize here.
+fn project_ini_path(abs_path: &str) -> String {
+    let trimmed = abs_path.trim_end_matches(['\\', '/']);
+    // Stick to backslashes — `abs_path` is a remote Windows path and that's
+    // the convention every other UECM module uses (`core::ini_apply`,
+    // `core::project_discovery`).
+    format!("{trimmed}\\Config\\DefaultEngine.ini")
+}
+
+/// Build a `ClusterMaster` view from a `shared_upstream` endpoint id. The
+/// endpoint's host comes from its machine row (IP — canonical connect target
+/// in this CLI, mirroring `resolve_host` above). Refuses non-shared_upstream
+/// upstream selections so an operator can't point an enable at a local-role
+/// endpoint and end up writing a self-referential `ZenShared` value.
+fn resolve_cluster_master(
+    db: &Db,
+    upstream_endpoint_id: i64,
+    namespace: &str,
+) -> UecmResult<zen_enable::ClusterMaster> {
+    let ep = zen_endpoints::get(db, upstream_endpoint_id)?.ok_or_else(|| {
+        UecmError::InvalidInput(format!(
+            "upstream endpoint id={} not found",
+            upstream_endpoint_id
+        ))
+    })?;
+    if ep.role != zen_endpoint::ROLE_SHARED_UPSTREAM {
+        return Err(UecmError::InvalidInput(format!(
+            "upstream endpoint id={} has role={:?}; expected {:?}. \
+             Register or pick a shared_upstream endpoint as the cluster master.",
+            upstream_endpoint_id,
+            ep.role,
+            zen_endpoint::ROLE_SHARED_UPSTREAM,
+        )));
+    }
+    let machine = machines::find_by_id(db, ep.machine_id)?.ok_or_else(|| {
+        UecmError::OperationFailed(format!(
+            "upstream endpoint id={} references machine id={} which is missing",
+            upstream_endpoint_id, ep.machine_id,
+        ))
+    })?;
+    Ok(zen_enable::ClusterMaster {
+        host: machine.ip,
+        port: ep.declared_port,
+        namespace: namespace.to_string(),
+    })
+}
+
+/// Invoke `zen-env-cleanup.ps1` once for a single (var, scope) pair. Returns
+/// the parsed JSON envelope on success. Routes through the same WinRM bridge
+/// (`run_remote`) the rest of M2 uses, so loopback handling / credential
+/// handling stay uniform.
+fn invoke_env_cleanup(
+    host: &str,
+    var: &str,
+    scope: &str,
+    creds: Option<&(String, String)>,
+) -> UecmResult<serde_json::Value> {
+    let body = build_param_script(
+        "zen-env-cleanup.ps1",
+        &[("Name", var), ("Scopes", scope)],
+    )?;
+    let raw = run_remote(host, &body, creds)?;
+    let envelope = parse_envelope(&raw, "zen-env-cleanup")?;
+
+    // Codex P1: zen-env-cleanup.ps1 returns top-level ok=true even when an
+    // individual scope failed (e.g. Machine scope without admin). The
+    // failure surfaces inside `scopes[].error`. Walk every scope entry
+    // and bubble up the first error so the orchestrator counts this as
+    // a machine failure (otherwise `UE-SharedDataCachePath` could
+    // remain active while the CLI reports success).
+    if let Some(scopes) = envelope.get("scopes").and_then(|v| v.as_array()) {
+        for scope_entry in scopes {
+            if let Some(err) = scope_entry.get("error").and_then(|v| v.as_str()) {
+                let scope_name = scope_entry
+                    .get("scope")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("<unknown>");
+                return Err(UecmError::OperationFailed(format!(
+                    "zen-env-cleanup.ps1: scope {scope_name} for {var} failed: {err}"
+                )));
+            }
+        }
+    }
+    Ok(envelope)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_enable(
+    ctx: &mut Ctx<'_>,
+    project_id: i64,
+    machine_ids: &[i64],
+    upstream_endpoint_id: i64,
+    namespace: &str,
+    yes: bool,
+    dry_run: bool,
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
+    let outcome_gate = destructive::check(yes, dry_run, "zen.enable")?;
+    if machine_ids.is_empty() {
+        return Err(UecmError::InvalidInput(
+            "--machines must list at least one machine id".into(),
+        ));
+    }
+    let db = ctx.require_db()?.clone();
+    cred.preflight(&db)?;
+
+    // Resolve project + UE version up front so a bad project id / missing
+    // version fails before any per-machine I/O.
+    let project = projects::get(&db, project_id)?
+        .ok_or_else(|| UecmError::InvalidInput(format!("project id={} not found", project_id)))?;
+    let ue_version = project_ue_version_string(&project)?;
+
+    // Load + resolve rules (frozen — we never modify rules_loader from here).
+    let rules_raw = zen_rules::load_default()?;
+    let resolved = zen_rules::resolve(&rules_raw, &ue_version)?;
+    let master = resolve_cluster_master(&db, upstream_endpoint_id, namespace)?;
+
+    // Pre-collect machine → location pairs so a missing project_location for
+    // any target fails up-front (rather than after K-1 machines have been
+    // mutated).
+    let mut targets: Vec<(Machine, String)> = Vec::with_capacity(machine_ids.len());
+    for mid in machine_ids {
+        let m = machines::find_by_id(&db, *mid)?
+            .ok_or_else(|| UecmError::InvalidInput(format!("machine id={} not found", mid)))?;
+        let loc = project_locations::get_for_project_machine(&db, project_id, *mid)?
+            .ok_or_else(|| {
+                UecmError::InvalidInput(format!(
+                    "no project_location for project_id={} machine_id={}; bind the project to \
+                     this machine first via `uecm-cli project set-location`",
+                    project_id, mid
+                ))
+            })?;
+        let ini = project_ini_path(&loc.abs_path);
+        targets.push((m, ini));
+    }
+
+    // Dry-run path: emit a high-level plan and stop. Per task spec, we don't
+    // touch per-machine INI files — operators who need a fine-grained diff
+    // can run a real apply + revert. Keeps dry-run fully offline so it works
+    // on macOS, matches what other Plan 7 destructive commands do.
+    if outcome_gate == Outcome::DryRun {
+        let env_cleanup_vars: Vec<serde_json::Value> = resolved
+            .rules
+            .disable_legacy_smb_shared
+            .env_cleanup
+            .iter()
+            .map(|e| serde_json::json!({ "var": e.var, "scopes": e.scopes }))
+            .collect();
+        let planned_targets: Vec<serde_json::Value> = targets
+            .iter()
+            .map(|(m, ini)| {
+                serde_json::json!({
+                    "machine_id": m.id,
+                    "host": m.ip,
+                    "hostname": m.hostname,
+                    "ini_file": ini,
+                })
+            })
+            .collect();
+        destructive::emit_plan(
+            ctx.emitter.as_mut(),
+            "zen.enable",
+            serde_json::json!({
+                "project_id": project_id,
+                "ue_version": ue_version,
+                "matched_rule_version": resolved.matched_version,
+                "namespace": namespace,
+                "upstream_endpoint_id": upstream_endpoint_id,
+                "master_host": master.host,
+                "master_port": master.port,
+                "rule_section": resolved.rules.enable_zen_shared.section,
+                "rule_key": resolved.rules.enable_zen_shared.key,
+                "env_cleanup_plan": env_cleanup_vars,
+                "machines": planned_targets,
+                "rule_warnings": resolved.warnings,
+            }),
+        );
+        return Ok(());
+    }
+
+    // Real apply path. Resolve credentials once (potentially consuming stdin
+    // for --pass-stdin); subsequent helpers reuse the resulting tuple.
+    let creds = cred.resolve(&db)?;
+    let (user, pass) = match creds.as_ref() {
+        Some((u, p)) => (u.clone(), p.clone()),
+        None => {
+            // Without credentials we can't drive the per-key sidecars
+            // (`set_key_with_credential` / `remove_key_with_credential` both
+            // require user/pass). Fail loudly so operators don't think a
+            // silent no-op succeeded.
+            return Err(UecmError::InvalidInput(
+                "zen.enable requires credentials (pass --cred-alias or --user / --pass)".into(),
+            ));
+        }
+    };
+
+    let total = targets.len() as i64;
+    ctx.emitter
+        .emit_event(&Event::Started {
+            task_type: "zen_enable".into(),
+            task_id: None,
+            metadata: serde_json::json!({
+                "project_id": project_id,
+                "machines": total,
+                "matched_rule_version": resolved.matched_version,
+            }),
+        })
+        .ok();
+
+    let op_id = operations::start(&db, "zen.enable", machine_ids)?;
+    let invocation = redact(&format!(
+        "zen.enable project_id={project_id} machines={machine_ids:?} \
+         upstream_endpoint_id={upstream_endpoint_id} namespace={namespace}"
+    ));
+
+    let mut results: Vec<ProjectMachineResult> = Vec::with_capacity(targets.len());
+    let mut ok_count = 0i64;
+    let mut fail_count = 0i64;
+    let mut any_changed = false;
+
+    for (idx, (machine, ini_path)) in targets.iter().enumerate() {
+        let machine_id = machine.id.expect("machine in inventory always has id");
+        let host = machine.ip.as_str();
+        let leg = zen_enable::enable_project(host, &user, &pass, ini_path, &resolved, &master);
+        match leg {
+            Ok(out) => {
+                if out.changed {
+                    any_changed = true;
+                }
+                // Env-cleanup leg — Codex P2: drive from
+                // `env_cleanup_planned` regardless of `changed`. The PS
+                // sidecar is idempotent (`was_present=false → cleared=false`
+                // for absent vars), and gating on `changed` means an
+                // operator who fixes their cred / admin context after a
+                // partial failure can never retry: a second `zen enable`
+                // would return `changed=false` and silently skip the
+                // cleanup that failed the first time, leaving the legacy
+                // env var active forever.
+                let mut env_results: Vec<EnvCleanupResultView> = Vec::new();
+                let mut env_failed = false;
+                if !out.env_cleanup_planned.is_empty() {
+                    for req in &out.env_cleanup_planned {
+                        // The rule may list multiple scopes per var; the PS
+                        // script only handles one string list per call. We
+                        // fan out one call per scope so a per-scope failure
+                        // (e.g. non-admin session) is captured precisely.
+                        for scope in &req.scopes {
+                            match invoke_env_cleanup(host, &req.var, scope, creds.as_ref()) {
+                                Ok(remote) => {
+                                    env_results.push(EnvCleanupResultView {
+                                        var: req.var.clone(),
+                                        scope: scope.clone(),
+                                        ok: true,
+                                        remote: Some(remote),
+                                        error: None,
+                                    });
+                                }
+                                Err(e) => {
+                                    env_failed = true;
+                                    env_results.push(EnvCleanupResultView {
+                                        var: req.var.clone(),
+                                        scope: scope.clone(),
+                                        ok: false,
+                                        remote: None,
+                                        error: Some(e.to_string()),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                let machine_ok = !env_failed;
+                if machine_ok {
+                    ok_count += 1;
+                } else {
+                    fail_count += 1;
+                }
+                let result = ProjectMachineResult {
+                    machine_id,
+                    host: host.to_string(),
+                    changed: out.changed,
+                    ini_file: Some(out.ini_file.clone()),
+                    keys_set: out.keys_set.iter().map(KeyApplyView::from).collect(),
+                    keys_removed: out.keys_removed.iter().map(KeyApplyView::from).collect(),
+                    backups: out.backups.clone(),
+                    env_cleanup_results: env_results,
+                    warnings: out.warnings.clone(),
+                    error: if env_failed {
+                        Some("one or more env cleanup scopes failed; see env_cleanup_results".into())
+                    } else {
+                        None
+                    },
+                };
+                ctx.emitter
+                    .emit_event(&Event::ItemCompleted {
+                        item_id: format!("machine:{machine_id}"),
+                        index: idx as i64,
+                        ok: machine_ok,
+                        message: result.error.clone(),
+                    })
+                    .ok();
+                results.push(result);
+            }
+            Err(e) => {
+                fail_count += 1;
+                let result = ProjectMachineResult {
+                    machine_id,
+                    host: host.to_string(),
+                    changed: false,
+                    ini_file: Some(ini_path.clone()),
+                    keys_set: Vec::new(),
+                    keys_removed: Vec::new(),
+                    backups: Vec::new(),
+                    env_cleanup_results: Vec::new(),
+                    warnings: Vec::new(),
+                    error: Some(redact(&e.to_string())),
+                };
+                ctx.emitter
+                    .emit_event(&Event::ItemCompleted {
+                        item_id: format!("machine:{machine_id}"),
+                        index: idx as i64,
+                        ok: false,
+                        message: result.error.clone(),
+                    })
+                    .ok();
+                results.push(result);
+            }
+        }
+    }
+
+    let doc = serde_json::json!({
+        "ok": fail_count == 0,
+        "project_id": project_id,
+        "matched_rule_version": resolved.matched_version,
+        "namespace": namespace,
+        "upstream_endpoint_id": upstream_endpoint_id,
+        "master_host": master.host,
+        "master_port": master.port,
+        "machines": total,
+        "ok_count": ok_count,
+        "fail_count": fail_count,
+        "any_changed": any_changed,
+        "results": results,
+    });
+    ctx.emitter.emit_result(&doc).ok();
+    // Codex P2: streaming consumers wait for a terminal Completed event
+    // before they consider the run done. emit_result alone leaves
+    // `--json zen enable --yes` without that marker; emit Completed
+    // explicitly so the event stream matches other batch handlers.
+    ctx.emitter
+        .emit_event(&Event::Completed { summary: doc.clone() })
+        .ok();
+
+    let op_status = if fail_count == 0 { "ok" } else { "err" };
+    let _ = operations::finish(&db, op_id, op_status, Some(&invocation));
+
+    if fail_count == 0 {
+        Ok(())
+    } else if ok_count == 0 {
+        Err(UecmError::OperationFailed(format!(
+            "zen.enable: all {} machine(s) failed",
+            total
+        )))
+    } else {
+        Err(UecmError::OperationFailed(format!(
+            "zen.enable: {}/{} machine(s) failed",
+            fail_count, total
+        )))
+    }
+}
+
+fn project_disable(
+    ctx: &mut Ctx<'_>,
+    project_id: i64,
+    machine_ids: &[i64],
+    yes: bool,
+    dry_run: bool,
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
+    let outcome_gate = destructive::check(yes, dry_run, "zen.disable")?;
+    if machine_ids.is_empty() {
+        return Err(UecmError::InvalidInput(
+            "--machines must list at least one machine id".into(),
+        ));
+    }
+    let db = ctx.require_db()?.clone();
+    cred.preflight(&db)?;
+
+    let project = projects::get(&db, project_id)?
+        .ok_or_else(|| UecmError::InvalidInput(format!("project id={} not found", project_id)))?;
+    let ue_version = project_ue_version_string(&project)?;
+    let rules_raw = zen_rules::load_default()?;
+    let resolved = zen_rules::resolve(&rules_raw, &ue_version)?;
+
+    let mut targets: Vec<(Machine, String)> = Vec::with_capacity(machine_ids.len());
+    for mid in machine_ids {
+        let m = machines::find_by_id(&db, *mid)?
+            .ok_or_else(|| UecmError::InvalidInput(format!("machine id={} not found", mid)))?;
+        let loc = project_locations::get_for_project_machine(&db, project_id, *mid)?
+            .ok_or_else(|| {
+                UecmError::InvalidInput(format!(
+                    "no project_location for project_id={} machine_id={}; bind the project to \
+                     this machine first via `uecm-cli project set-location`",
+                    project_id, mid
+                ))
+            })?;
+        targets.push((m, project_ini_path(&loc.abs_path)));
+    }
+
+    if outcome_gate == Outcome::DryRun {
+        let planned_targets: Vec<serde_json::Value> = targets
+            .iter()
+            .map(|(m, ini)| {
+                serde_json::json!({
+                    "machine_id": m.id,
+                    "host": m.ip,
+                    "hostname": m.hostname,
+                    "ini_file": ini,
+                })
+            })
+            .collect();
+        destructive::emit_plan(
+            ctx.emitter.as_mut(),
+            "zen.disable",
+            serde_json::json!({
+                "project_id": project_id,
+                "ue_version": ue_version,
+                "matched_rule_version": resolved.matched_version,
+                "rule_section": resolved.rules.enable_zen_shared.section,
+                "rule_key": resolved.rules.enable_zen_shared.key,
+                "machines": planned_targets,
+                "note": "narrow disable: legacy Pak / CompressedPak / Shared keys are NOT auto-restored, \
+                        and machine env vars are NOT touched",
+            }),
+        );
+        return Ok(());
+    }
+
+    let creds = cred.resolve(&db)?;
+    let (user, pass) = match creds.as_ref() {
+        Some((u, p)) => (u.clone(), p.clone()),
+        None => {
+            return Err(UecmError::InvalidInput(
+                "zen.disable requires credentials (pass --cred-alias or --user / --pass)".into(),
+            ));
+        }
+    };
+
+    let total = targets.len() as i64;
+    ctx.emitter
+        .emit_event(&Event::Started {
+            task_type: "zen_disable".into(),
+            task_id: None,
+            metadata: serde_json::json!({
+                "project_id": project_id,
+                "machines": total,
+                "matched_rule_version": resolved.matched_version,
+            }),
+        })
+        .ok();
+
+    let op_id = operations::start(&db, "zen.disable", machine_ids)?;
+    let invocation = redact(&format!(
+        "zen.disable project_id={project_id} machines={machine_ids:?}"
+    ));
+
+    let mut results: Vec<ProjectMachineResult> = Vec::with_capacity(targets.len());
+    let mut ok_count = 0i64;
+    let mut fail_count = 0i64;
+    let mut any_changed = false;
+
+    for (idx, (machine, ini_path)) in targets.iter().enumerate() {
+        let machine_id = machine.id.expect("machine in inventory always has id");
+        let host = machine.ip.as_str();
+        match zen_enable::disable_project(host, &user, &pass, ini_path, &resolved) {
+            Ok(out) => {
+                if out.changed {
+                    any_changed = true;
+                }
+                ok_count += 1;
+                let result = ProjectMachineResult {
+                    machine_id,
+                    host: host.to_string(),
+                    changed: out.changed,
+                    ini_file: Some(out.ini_file.clone()),
+                    keys_set: Vec::new(),
+                    keys_removed: out.keys_removed.iter().map(KeyApplyView::from).collect(),
+                    backups: out.backups.clone(),
+                    env_cleanup_results: Vec::new(),
+                    warnings: out.warnings.clone(),
+                    error: None,
+                };
+                ctx.emitter
+                    .emit_event(&Event::ItemCompleted {
+                        item_id: format!("machine:{machine_id}"),
+                        index: idx as i64,
+                        ok: true,
+                        message: None,
+                    })
+                    .ok();
+                results.push(result);
+            }
+            Err(e) => {
+                fail_count += 1;
+                let result = ProjectMachineResult {
+                    machine_id,
+                    host: host.to_string(),
+                    changed: false,
+                    ini_file: Some(ini_path.clone()),
+                    keys_set: Vec::new(),
+                    keys_removed: Vec::new(),
+                    backups: Vec::new(),
+                    env_cleanup_results: Vec::new(),
+                    warnings: Vec::new(),
+                    error: Some(redact(&e.to_string())),
+                };
+                ctx.emitter
+                    .emit_event(&Event::ItemCompleted {
+                        item_id: format!("machine:{machine_id}"),
+                        index: idx as i64,
+                        ok: false,
+                        message: result.error.clone(),
+                    })
+                    .ok();
+                results.push(result);
+            }
+        }
+    }
+
+    let doc = serde_json::json!({
+        "ok": fail_count == 0,
+        "project_id": project_id,
+        "matched_rule_version": resolved.matched_version,
+        "machines": total,
+        "ok_count": ok_count,
+        "fail_count": fail_count,
+        "any_changed": any_changed,
+        "results": results,
+    });
+    ctx.emitter.emit_result(&doc).ok();
+    // Codex P2 (mirror of project_enable): streaming consumers expect a
+    // terminal Completed event after the per-machine ItemCompleted
+    // stream. emit_result alone is fine for one-shot JSON but the
+    // streamed-event pipeline needs the marker.
+    ctx.emitter
+        .emit_event(&Event::Completed { summary: doc.clone() })
+        .ok();
+
+    let op_status = if fail_count == 0 { "ok" } else { "err" };
+    let _ = operations::finish(&db, op_id, op_status, Some(&invocation));
+
+    if fail_count == 0 {
+        Ok(())
+    } else if ok_count == 0 {
+        Err(UecmError::OperationFailed(format!(
+            "zen.disable: all {} machine(s) failed",
+            total
+        )))
+    } else {
+        Err(UecmError::OperationFailed(format!(
+            "zen.disable: {}/{} machine(s) failed",
+            fail_count, total
+        )))
+    }
+}
+
+// -----------------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------------
 
@@ -2766,5 +3438,314 @@ mod tests {
         assert_eq!(rows.len(), 1, "no duplicate row should be created");
         assert_eq!(rows[0].data_dir, r"D:\ZenData");
         assert_eq!(rows[0].lifecycle_mode, "editor_owned");
+    }
+
+    // ---------- T3.7: enable / disable helpers ----------
+
+    #[test]
+    fn project_ini_path_appends_config_default_engine_ini() {
+        assert_eq!(
+            project_ini_path(r"C:\Projects\Demo"),
+            r"C:\Projects\Demo\Config\DefaultEngine.ini"
+        );
+    }
+
+    #[test]
+    fn project_ini_path_trims_trailing_separators() {
+        assert_eq!(
+            project_ini_path(r"C:\Projects\Demo\"),
+            r"C:\Projects\Demo\Config\DefaultEngine.ini"
+        );
+        assert_eq!(
+            project_ini_path("C:/Projects/Demo/"),
+            r"C:/Projects/Demo\Config\DefaultEngine.ini"
+        );
+    }
+
+    fn make_project_with_version(major: Option<i64>, minor: Option<i64>) -> crate::data::Project {
+        crate::data::Project {
+            id: Some(1),
+            uproject_name: "Demo.uproject".into(),
+            uproject_stem_lower: "demo".into(),
+            uproject_guid: None,
+            display_name: None,
+            first_seen_at: None,
+            last_seen_at: None,
+            ue_version_major: major,
+            ue_version_minor: minor,
+            engine_association_raw: Some("5.7".into()),
+            engine_association_kind: Some("version".into()),
+        }
+    }
+
+    #[test]
+    fn project_ue_version_string_renders_major_minor() {
+        let p = make_project_with_version(Some(5), Some(7));
+        assert_eq!(project_ue_version_string(&p).unwrap(), "5.7");
+    }
+
+    #[test]
+    fn project_ue_version_string_rejects_missing_components() {
+        let p = make_project_with_version(None, Some(7));
+        assert!(matches!(
+            project_ue_version_string(&p).unwrap_err(),
+            UecmError::InvalidInput(_)
+        ));
+        let p2 = make_project_with_version(Some(5), None);
+        assert!(matches!(
+            project_ue_version_string(&p2).unwrap_err(),
+            UecmError::InvalidInput(_)
+        ));
+        let p3 = make_project_with_version(None, None);
+        assert!(matches!(
+            project_ue_version_string(&p3).unwrap_err(),
+            UecmError::InvalidInput(_)
+        ));
+    }
+
+    #[test]
+    fn resolve_cluster_master_returns_master_view_for_shared_upstream() {
+        let db = open_in_memory().unwrap();
+        {
+            let mut conn = db.lock().unwrap();
+            crate::data::schema::migrate(&mut conn).unwrap();
+        }
+        let machine_id = machines::insert(&db, &Machine::new("ZEN-MASTER", "10.0.0.50")).unwrap();
+        let endpoint_id = crate::core::zen::endpoint::register(
+            &db,
+            &crate::core::zen::endpoint::EndpointInput {
+                machine_id,
+                declared_port: 8559,
+                scheme: "http".into(),
+                role: "shared_upstream".into(),
+                upstream_endpoint_id: None,
+                data_dir: r"D:\ZenMaster".into(),
+                httpserverclass: "asio".into(),
+                lifecycle_mode: "installed_service".into(),
+            },
+        )
+        .unwrap()
+        .id;
+        let master = resolve_cluster_master(&db, endpoint_id, "ue.ddc").unwrap();
+        assert_eq!(master.host, "10.0.0.50");
+        assert_eq!(master.port, 8559);
+        assert_eq!(master.namespace, "ue.ddc");
+    }
+
+    #[test]
+    fn resolve_cluster_master_refuses_non_shared_upstream_role() {
+        let db = open_in_memory().unwrap();
+        {
+            let mut conn = db.lock().unwrap();
+            crate::data::schema::migrate(&mut conn).unwrap();
+        }
+        let machine_id = machines::insert(&db, &Machine::new("ZEN-01", "10.0.0.30")).unwrap();
+        let endpoint_id = crate::core::zen::endpoint::register(
+            &db,
+            &crate::core::zen::endpoint::EndpointInput {
+                machine_id,
+                declared_port: 8558,
+                scheme: "http".into(),
+                role: "local".into(),
+                upstream_endpoint_id: None,
+                data_dir: r"D:\ZenData".into(),
+                httpserverclass: "asio".into(),
+                lifecycle_mode: "editor_owned".into(),
+            },
+        )
+        .unwrap()
+        .id;
+        let err = resolve_cluster_master(&db, endpoint_id, "ue.ddc").unwrap_err();
+        match err {
+            UecmError::InvalidInput(msg) => {
+                assert!(msg.contains("shared_upstream"), "msg={msg}");
+            }
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn resolve_cluster_master_rejects_unknown_endpoint_id() {
+        let db = open_in_memory().unwrap();
+        {
+            let mut conn = db.lock().unwrap();
+            crate::data::schema::migrate(&mut conn).unwrap();
+        }
+        let err = resolve_cluster_master(&db, 9999, "ue.ddc").unwrap_err();
+        assert!(matches!(err, UecmError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn project_enable_without_yes_or_dry_run_errors() {
+        let mut ctx = fresh_ctx();
+        let cred = CredentialArgs {
+            cred_alias: None,
+            user: None,
+            pass: None,
+            pass_stdin: false,
+        };
+        let err = project_enable(&mut ctx, 1, &[1], 1, "ue.ddc", false, false, &cred).unwrap_err();
+        assert!(matches!(err, UecmError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn project_enable_rejects_empty_machine_list() {
+        let mut ctx = fresh_ctx();
+        let cred = CredentialArgs::default_for_test();
+        let err = project_enable(&mut ctx, 1, &[], 1, "ue.ddc", true, false, &cred).unwrap_err();
+        match err {
+            UecmError::InvalidInput(msg) => assert!(msg.contains("--machines")),
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn project_disable_rejects_empty_machine_list() {
+        let mut ctx = fresh_ctx();
+        let cred = CredentialArgs::default_for_test();
+        let err = project_disable(&mut ctx, 1, &[], true, false, &cred).unwrap_err();
+        match err {
+            UecmError::InvalidInput(msg) => assert!(msg.contains("--machines")),
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn project_enable_dry_run_emits_plan_for_seeded_project_and_machine() {
+        let mut ctx = fresh_ctx();
+        let db = ctx.db.as_ref().unwrap().clone();
+        // Machine with project + location, plus a shared_upstream endpoint.
+        let m1 = machines::insert(&db, &Machine::new("RENDER-01", "10.0.0.10")).unwrap();
+        let master_machine =
+            machines::insert(&db, &Machine::new("ZEN-MASTER", "10.0.0.50")).unwrap();
+        let mut proj = make_project_with_version(Some(5), Some(7));
+        proj.id = None;
+        let project_id = crate::data::projects::upsert(&db, &proj).unwrap();
+        crate::data::project_locations::upsert(
+            &db,
+            &crate::data::ProjectLocation {
+                id: None,
+                project_id,
+                machine_id: m1,
+                abs_path: r"C:\Projects\Demo".into(),
+                uproject_path: r"Demo.uproject".into(),
+                discovery_status: crate::data::DiscoveryStatus::ManualPath,
+                discovered_at: None,
+            },
+        )
+        .unwrap();
+        let upstream_id = crate::core::zen::endpoint::register(
+            &db,
+            &crate::core::zen::endpoint::EndpointInput {
+                machine_id: master_machine,
+                declared_port: 8559,
+                scheme: "http".into(),
+                role: "shared_upstream".into(),
+                upstream_endpoint_id: None,
+                data_dir: r"D:\ZenMaster".into(),
+                httpserverclass: "asio".into(),
+                lifecycle_mode: "installed_service".into(),
+            },
+        )
+        .unwrap()
+        .id;
+        let cred = CredentialArgs::default_for_test();
+        // --dry-run path: no PS, no INI I/O, just plan emission.
+        project_enable(
+            &mut ctx,
+            project_id,
+            &[m1],
+            upstream_id,
+            "ue.ddc",
+            false,
+            true,
+            &cred,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn project_enable_dry_run_rejects_machine_without_location() {
+        let mut ctx = fresh_ctx();
+        let db = ctx.db.as_ref().unwrap().clone();
+        let m1 = machines::insert(&db, &Machine::new("RENDER-01", "10.0.0.10")).unwrap();
+        let master_machine =
+            machines::insert(&db, &Machine::new("ZEN-MASTER", "10.0.0.50")).unwrap();
+        let mut proj = make_project_with_version(Some(5), Some(7));
+        proj.id = None;
+        let project_id = crate::data::projects::upsert(&db, &proj).unwrap();
+        // Skip the project_locations row on purpose — should error out.
+        let upstream_id = crate::core::zen::endpoint::register(
+            &db,
+            &crate::core::zen::endpoint::EndpointInput {
+                machine_id: master_machine,
+                declared_port: 8559,
+                scheme: "http".into(),
+                role: "shared_upstream".into(),
+                upstream_endpoint_id: None,
+                data_dir: r"D:\ZenMaster".into(),
+                httpserverclass: "asio".into(),
+                lifecycle_mode: "installed_service".into(),
+            },
+        )
+        .unwrap()
+        .id;
+        let cred = CredentialArgs::default_for_test();
+        let err = project_enable(
+            &mut ctx,
+            project_id,
+            &[m1],
+            upstream_id,
+            "ue.ddc",
+            false,
+            true,
+            &cred,
+        )
+        .unwrap_err();
+        match err {
+            UecmError::InvalidInput(msg) => {
+                assert!(msg.contains("project_location"), "msg={msg}");
+            }
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn project_disable_dry_run_emits_plan_without_endpoint_lookup() {
+        // Disable doesn't need an upstream endpoint id, so dry-run only
+        // requires project + location.
+        let mut ctx = fresh_ctx();
+        let db = ctx.db.as_ref().unwrap().clone();
+        let m1 = machines::insert(&db, &Machine::new("RENDER-01", "10.0.0.10")).unwrap();
+        let mut proj = make_project_with_version(Some(5), Some(7));
+        proj.id = None;
+        let project_id = crate::data::projects::upsert(&db, &proj).unwrap();
+        crate::data::project_locations::upsert(
+            &db,
+            &crate::data::ProjectLocation {
+                id: None,
+                project_id,
+                machine_id: m1,
+                abs_path: r"C:\Projects\Demo".into(),
+                uproject_path: r"Demo.uproject".into(),
+                discovery_status: crate::data::DiscoveryStatus::ManualPath,
+                discovered_at: None,
+            },
+        )
+        .unwrap();
+        let cred = CredentialArgs::default_for_test();
+        project_disable(&mut ctx, project_id, &[m1], false, true, &cred).unwrap();
+    }
+
+    // Helper for tests: empty CredentialArgs.
+    impl CredentialArgs {
+        fn default_for_test() -> Self {
+            CredentialArgs {
+                cred_alias: None,
+                user: None,
+                pass: None,
+                pass_stdin: false,
+            }
+        }
     }
 }

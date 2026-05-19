@@ -740,6 +740,59 @@ pub enum ZenAction {
         #[command(subcommand)]
         action: ZenUrlaclAction,
     },
+    /// Enable ZenShared upstream on a project across N machines.
+    ///
+    /// Rewrites each target machine's `DefaultEngine.ini` (per the version-gated
+    /// rule set in `docs/research/zen-ini-rules.yaml`) to:
+    ///   * add the `ZenShared=(Type=Zen, Host=..., Port=..., Namespace=...)` line,
+    ///   * strip the legacy `Shared` / `Pak` / `CompressedPak` entries.
+    /// After each per-machine INI mutation succeeds, the legacy
+    /// `UE-SharedDataCachePath` env var (and any others the rule flagged) is
+    /// cleaned on Machine + User scope via `zen-env-cleanup.ps1`.
+    ///
+    /// Destructive: requires `--yes` or `--dry-run`.
+    Enable {
+        /// Project row id whose `DefaultEngine.ini` to mutate. The project's
+        /// `ue_version_major.minor` selects the rule overrides.
+        #[arg(long, value_name = "ID")]
+        project_id: i64,
+        /// Comma-separated machine row ids to act on. Each machine MUST have a
+        /// `project_locations` row for this project so we know where the INI is.
+        #[arg(long, value_name = "M1,M2,...", value_delimiter = ',')]
+        machines: Vec<i64>,
+        /// Endpoint id of the cluster master (`shared_upstream`). Its host +
+        /// declared_port go into the rendered `ZenShared` value.
+        #[arg(long, value_name = "ID")]
+        upstream_endpoint_id: i64,
+        /// DDC namespace string substituted into the value template
+        /// (Plan §1.1 default `ue.ddc`).
+        #[arg(long, default_value = "ue.ddc")]
+        namespace: String,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Reverse `zen enable`: remove the `ZenShared` upstream entry from each
+    /// machine's `DefaultEngine.ini`. **Narrow disable** (T3.3): legacy
+    /// `Pak` / `CompressedPak` / `Shared` keys that enable stripped are NOT
+    /// auto-restored, and the legacy env vars are NOT touched.
+    ///
+    /// Destructive: requires `--yes` or `--dry-run`.
+    Disable {
+        #[arg(long, value_name = "ID")]
+        project_id: i64,
+        #[arg(long, value_name = "M1,M2,...", value_delimiter = ',')]
+        machines: Vec<i64>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1112,6 +1165,76 @@ mod tests {
                 assert_eq!(backend, BackendChoice::Zen);
             }
             _ => panic!("expected Ddc::Distribute"),
+        }
+    }
+
+    // ---------- T3.7: zen enable / disable ----------
+
+    #[test]
+    fn zen_enable_parses_required_flags() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "zen", "enable",
+            "--project-id", "7",
+            "--machines", "1,2,3",
+            "--upstream-endpoint-id", "9",
+            "--cred-alias", "winrm-admin",
+            "--yes",
+        ]).unwrap();
+        match cli.command {
+            Domain::Zen { action: ZenAction::Enable {
+                project_id, machines, upstream_endpoint_id, namespace, yes, dry_run, cred,
+            } } => {
+                assert_eq!(project_id, 7);
+                assert_eq!(machines, vec![1, 2, 3]);
+                assert_eq!(upstream_endpoint_id, 9);
+                assert_eq!(namespace, "ue.ddc");
+                assert!(yes);
+                assert!(!dry_run);
+                assert_eq!(cred.cred_alias.as_deref(), Some("winrm-admin"));
+            }
+            _ => panic!("expected Zen::Enable"),
+        }
+    }
+
+    #[test]
+    fn zen_enable_accepts_custom_namespace_and_dry_run() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "zen", "enable",
+            "--project-id", "1",
+            "--machines", "5",
+            "--upstream-endpoint-id", "2",
+            "--namespace", "ue.shared",
+            "--dry-run",
+        ]).unwrap();
+        match cli.command {
+            Domain::Zen { action: ZenAction::Enable { namespace, dry_run, yes, machines, .. } } => {
+                assert_eq!(namespace, "ue.shared");
+                assert!(dry_run);
+                assert!(!yes);
+                assert_eq!(machines, vec![5]);
+            }
+            _ => panic!("expected Zen::Enable"),
+        }
+    }
+
+    #[test]
+    fn zen_disable_parses_required_flags() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "zen", "disable",
+            "--project-id", "1",
+            "--machines", "1,2",
+            "--yes",
+        ]).unwrap();
+        match cli.command {
+            Domain::Zen { action: ZenAction::Disable {
+                project_id, machines, yes, dry_run, ..
+            } } => {
+                assert_eq!(project_id, 1);
+                assert_eq!(machines, vec![1, 2]);
+                assert!(yes);
+                assert!(!dry_run);
+            }
+            _ => panic!("expected Zen::Disable"),
         }
     }
 
