@@ -510,12 +510,40 @@ fn rule_r015(
     }
     let zen_enable = &resolved.rules.enable_zen_shared;
 
+    // Codex P2 (round 14): R015 / R017 cleanup rules must NOT recommend
+    // `Remove` for the legacy `Shared=` / `Pak=` / `CompressedPak=` keys
+    // until `ZenShared` is actually wired in the same file. Without this
+    // gate, a freshly-registered endpoint with `zen enable` not yet run
+    // would see both R012 (missing ZenShared, Manual) AND R015/R017
+    // (remove legacy, auto-applyable) — auto-apply would tear out the
+    // only working DDC path before the zen replacement materializes.
+    let zen_shared_configured = find_section(file, &zen_enable.section)
+        .and_then(|s| find_key(s, &zen_enable.key))
+        .is_some();
+
     let mut out = Vec::new();
 
     // Arm 1: legacy `Shared=` key sits in the same backend section as
     // ZenShared. This is the historical R015 — operator-visible in the INI.
     if let Some(section) = find_section(file, &smb.section) {
         if let Some(k) = find_key(section, &smb.key) {
+            // Only recommend Remove once ZenShared is wired. Before that,
+            // mark it Manual so the operator sees the legacy key but
+            // auto-apply can't strip it prematurely.
+            let (action, snippet_after_extra) = if zen_shared_configured {
+                (
+                    RecommendedAction::Remove,
+                    format!("(remove `{}` from [{}])", smb.key, smb.section),
+                )
+            } else {
+                (
+                    RecommendedAction::Manual,
+                    format!(
+                        "(legacy `{}` will be removed once `zen enable` writes ZenShared into [{}])",
+                        smb.key, smb.section
+                    ),
+                )
+            };
             out.push(Finding {
                 rule_id: "R015".into(),
                 severity: Severity::Warning,
@@ -525,13 +553,20 @@ fn rule_r015(
                 key_name: Some(k.name.clone()),
                 line_number: Some(k.line_number as i64),
                 snippet_before: format!("{}={}", k.name, k.value),
-                snippet_after: Some(format!("(remove `{}` from [{}])", smb.key, smb.section)),
-                recommended_action: RecommendedAction::Remove,
+                snippet_after: Some(snippet_after_extra),
+                recommended_action: action,
                 recommended_value: None,
-                symptom: format!(
-                    "Legacy SMB `{}` key still present alongside ZenShared.",
-                    smb.key
-                ),
+                symptom: if zen_shared_configured {
+                    format!(
+                        "Legacy SMB `{}` key still present alongside ZenShared.",
+                        smb.key
+                    )
+                } else {
+                    format!(
+                        "Legacy SMB `{}` key present; ZenShared not yet wired — run `zen enable` first, then re-scan to remove.",
+                        smb.key
+                    )
+                },
                 rationale: "Both backends compete for the same DDC lookup; UE may pick either or fight, producing inconsistent cache hits across the cluster.".into(),
             });
         }
@@ -633,9 +668,41 @@ fn rule_r017(file: &ParsedFile, ctx: &ZenRuleContext<'_>) -> Vec<Finding> {
         return vec![];
     }
     let Some(section) = find_section(file, &pak.section) else { return vec![] };
+
+    // Codex P2 (round 14): same gate as R015 — only recommend Remove
+    // once ZenShared is configured. Pre-zen-enable, pak/CompressedPak
+    // are the project's only working DDC path; stripping them before
+    // the zen replacement exists kills cache entirely.
+    let zen_enable = &resolved.rules.enable_zen_shared;
+    let zen_shared_configured = find_section(file, &zen_enable.section)
+        .and_then(|s| find_key(s, &zen_enable.key))
+        .is_some();
+
     let mut out = Vec::new();
     for key_name in &pak.keys {
         if let Some(k) = find_key(section, key_name) {
+            let (action, snippet_after_extra, symptom) = if zen_shared_configured {
+                (
+                    RecommendedAction::Remove,
+                    format!("(remove `{}` from [{}])", k.name, section.name),
+                    format!(
+                        "Legacy Pak DDC key `{}` still present alongside ZenShared.",
+                        k.name
+                    ),
+                )
+            } else {
+                (
+                    RecommendedAction::Manual,
+                    format!(
+                        "(legacy `{}` will be removed once `zen enable` writes ZenShared into [{}])",
+                        k.name, section.name
+                    ),
+                    format!(
+                        "Legacy Pak DDC key `{}` present; ZenShared not yet wired — run `zen enable` first, then re-scan to remove.",
+                        k.name
+                    ),
+                )
+            };
             out.push(Finding {
                 rule_id: "R017".into(),
                 severity: Severity::Warning,
@@ -645,16 +712,10 @@ fn rule_r017(file: &ParsedFile, ctx: &ZenRuleContext<'_>) -> Vec<Finding> {
                 key_name: Some(k.name.clone()),
                 line_number: Some(k.line_number as i64),
                 snippet_before: format!("{}={}", k.name, k.value),
-                snippet_after: Some(format!(
-                    "(remove `{}` from [{}])",
-                    k.name, section.name
-                )),
-                recommended_action: RecommendedAction::Remove,
+                snippet_after: Some(snippet_after_extra),
+                recommended_action: action,
                 recommended_value: None,
-                symptom: format!(
-                    "Legacy Pak DDC key `{}` still present alongside ZenShared.",
-                    k.name
-                ),
+                symptom,
                 rationale: "UE will keep loading the .ddp pak file even when ZenShared is wired, masking cluster cache misses.".into(),
             });
         }
@@ -1246,6 +1307,94 @@ mod tests {
         let findings = run_zen_rules_for_file(&file, &EnvVarState::default(), &ctx);
         let r017s: Vec<_> = findings.iter().filter(|f| f.rule_id == "R017").collect();
         assert_eq!(r017s.len(), 2, "both pak keys should produce findings");
+    }
+
+    // Codex round-14 P2: cleanup rules must not recommend `Remove` until
+    // `ZenShared` is wired. Pre-zen-enable, the legacy keys are the only
+    // working DDC path — auto-applying Remove would tear them out before
+    // the zen replacement materializes.
+    #[test]
+    fn r015_recommends_manual_when_zen_shared_absent() {
+        let rules = make_rules();
+        let file = project_ini(&[(
+            "InstalledDerivedDataBackendGraph",
+            &[("Shared", "(Type=FileSystem, Path=\"\\\\HOST\\Share\")")],
+        )]);
+        let ctx = ctx_with(&rules);
+        let findings = run_zen_rules_for_file(&file, &EnvVarState::default(), &ctx);
+        let f = findings
+            .iter()
+            .find(|f| f.rule_id == "R015")
+            .expect("R015 should still fire");
+        assert_eq!(
+            f.recommended_action,
+            RecommendedAction::Manual,
+            "before ZenShared is wired, Remove would kill the legacy DDC path"
+        );
+    }
+
+    #[test]
+    fn r015_recommends_remove_when_zen_shared_configured() {
+        let rules = make_rules();
+        let file = project_ini(&[(
+            "InstalledDerivedDataBackendGraph",
+            &[
+                ("Shared", "(Type=FileSystem, Path=\"\\\\HOST\\Share\")"),
+                (
+                    "ZenShared",
+                    "(Type=Zen, Host=\"render-master\", Port=8558, Namespace=\"ue.ddc\")",
+                ),
+            ],
+        )]);
+        let ctx = ctx_with(&rules);
+        let findings = run_zen_rules_for_file(&file, &EnvVarState::default(), &ctx);
+        let f = findings
+            .iter()
+            .find(|f| f.rule_id == "R015" && f.key_name.as_deref() == Some("Shared"))
+            .expect("R015 arm 1 should fire on legacy `Shared` key");
+        assert_eq!(f.recommended_action, RecommendedAction::Remove);
+    }
+
+    #[test]
+    fn r017_recommends_manual_when_zen_shared_absent() {
+        let rules = make_rules();
+        let file = project_ini(&[(
+            "InstalledDerivedDataBackendGraph",
+            &[("Pak", "(Type=FileSystem, Path=\"DerivedDataCache/DDC.ddp\")")],
+        )]);
+        let ctx = ctx_with(&rules);
+        let findings = run_zen_rules_for_file(&file, &EnvVarState::default(), &ctx);
+        let f = findings
+            .iter()
+            .find(|f| f.rule_id == "R017")
+            .expect("R017 should still fire");
+        assert_eq!(
+            f.recommended_action,
+            RecommendedAction::Manual,
+            "before ZenShared is wired, the .ddp pak is the project's only DDC"
+        );
+    }
+
+    #[test]
+    fn r017_recommends_remove_when_zen_shared_configured() {
+        let rules = make_rules();
+        let file = project_ini(&[(
+            "InstalledDerivedDataBackendGraph",
+            &[
+                ("Pak", "(Type=FileSystem, Path=\"DerivedDataCache/DDC.ddp\")"),
+                (
+                    "ZenShared",
+                    "(Type=Zen, Host=\"render-master\", Port=8558, Namespace=\"ue.ddc\")",
+                ),
+            ],
+        )]);
+        let ctx = ctx_with(&rules);
+        let findings = run_zen_rules_for_file(&file, &EnvVarState::default(), &ctx);
+        let f = findings
+            .iter()
+            .find(|f| f.rule_id == "R017")
+            .expect("R017 should fire");
+        assert_eq!(f.recommended_action, RecommendedAction::Remove);
     }
 
     // ----- R018 ------------------------------------------------------------

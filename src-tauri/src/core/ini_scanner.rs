@@ -290,14 +290,17 @@ pub fn build_zen_ctx_for_machine(
     // shipped with this binary is the source of truth — passing `None`
     // leaves `resolved=None` so R012-R015 stay quiet for callers that
     // can't safely pick a version.
+    //
+    // Codex round-14 P2: use `resolve_for_diagnostics` (not the strict
+    // `resolve`) so an `unverified_policy: refuse` setting doesn't
+    // silently drop the entire ruleset for unverified UE major.minors.
+    // The scan is read-only and best-effort — even an unverified
+    // version's default rules tell the operator "this looks wrong";
+    // the destructive `zen enable` path still calls strict `resolve`.
     let resolved = match ue_version_hint {
         Some(v) => {
             let rules = zen_rules_loader::load_default()?;
-            // `resolve` returns warnings for unverified versions; for the
-            // scan we propagate the rules anyway because the scan is
-            // diagnostic, not enforcing — even an unverified version's
-            // best-guess rules tell the operator "this looks wrong".
-            zen_rules_loader::resolve(&rules, v).ok()
+            zen_rules_loader::resolve_for_diagnostics(&rules, v).ok()
         }
         None => None,
     };

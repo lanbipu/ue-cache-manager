@@ -359,6 +359,46 @@ pub fn disable_project(
 
 // --- Internals ------------------------------------------------------------
 
+/// Codex round-14 P2: validate `host` / `namespace` against a conservative
+/// grammar BEFORE substitution so a hostile or accidentally-malformed value
+/// (containing `"`, `,`, `)`, `(`, `;`, `=`, `\n`, `\r`, control chars,
+/// whitespace) can't break the resulting INI line. UE parses the ZenShared
+/// value as a parenthesized struct of `Key=Value` pairs with quoted strings;
+/// any of the above chars inside a substituted field would land outside the
+/// intended quotes and either fail the parse or alter the meaning.
+///
+/// Host charset: DNS / IP literal characters (letters, digits, `.`, `-`,
+/// `_`, `:` for IPv6, `[` `]` for bracketed IPv6).
+/// Namespace charset: project-id-style (letters, digits, `.`, `-`, `_`).
+fn validate_zen_field(name: &str, value: &str, allow_ip_literals: bool) -> UecmResult<()> {
+    if value.is_empty() {
+        return Err(UecmError::Configuration(format!(
+            "ZenShared `{name}` must be non-empty"
+        )));
+    }
+    for ch in value.chars() {
+        let ok = ch.is_ascii_alphanumeric()
+            || ch == '.'
+            || ch == '-'
+            || ch == '_'
+            || (allow_ip_literals && (ch == ':' || ch == '[' || ch == ']'));
+        if !ok {
+            return Err(UecmError::Configuration(format!(
+                "ZenShared `{name}` contains disallowed character {ch:?}; \
+                 only {}letters / digits / '.' / '-' / '_'{} are accepted to \
+                 keep the rendered INI line well-formed",
+                if allow_ip_literals { "" } else { "" },
+                if allow_ip_literals {
+                    " (plus ':' '[' ']' for IPv6 literals)"
+                } else {
+                    ""
+                }
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Substitute `{host}` / `{port}` / `{namespace}` in `template` using
 /// `master`. Any other `{...}` placeholder is rejected so a future YAML
 /// typo (`{name_space}`, `{server}`, …) fails loudly instead of leaving a
@@ -366,6 +406,9 @@ pub fn disable_project(
 ///
 /// Substitution is case-sensitive — `{Host}` is treated as unknown.
 fn apply_value_template(template: &str, master: &ClusterMaster) -> UecmResult<String> {
+    validate_zen_field("host", &master.host, true)?;
+    validate_zen_field("namespace", &master.namespace, false)?;
+
     // Scan for `{...}` segments; replace recognized names; bail on unknown.
     let mut out = String::with_capacity(template.len() + 32);
     let bytes = template.as_bytes();
@@ -592,6 +635,84 @@ mod tests {
         let m = sample_master();
         let out = apply_value_template("prefix{ suffix", &m).unwrap();
         assert_eq!(out, "prefix{ suffix");
+    }
+
+    // Codex round-14 P2: `host` / `namespace` must be validated before
+    // substitution so a `"`, `,`, `)`, or control char inside the value
+    // can't break the rendered INI line.
+    #[test]
+    fn apply_value_template_rejects_quote_in_host() {
+        let mut m = sample_master();
+        m.host = "bad\"host".into();
+        let err = apply_value_template(
+            "(Type=Zen, Host=\"{host}\", Port={port}, Namespace=\"{namespace}\")",
+            &m,
+        )
+        .unwrap_err();
+        assert!(matches!(err, UecmError::Configuration(_)));
+    }
+
+    #[test]
+    fn apply_value_template_rejects_paren_in_namespace() {
+        let mut m = sample_master();
+        m.namespace = "foo)bar".into();
+        let err = apply_value_template(
+            "(Type=Zen, Host=\"{host}\", Port={port}, Namespace=\"{namespace}\")",
+            &m,
+        )
+        .unwrap_err();
+        assert!(matches!(err, UecmError::Configuration(_)));
+    }
+
+    #[test]
+    fn apply_value_template_rejects_newline_in_host() {
+        let mut m = sample_master();
+        m.host = "host\nattack".into();
+        let err = apply_value_template(
+            "(Type=Zen, Host=\"{host}\", Port={port}, Namespace=\"{namespace}\")",
+            &m,
+        )
+        .unwrap_err();
+        assert!(matches!(err, UecmError::Configuration(_)));
+    }
+
+    #[test]
+    fn apply_value_template_accepts_ipv6_literal_host() {
+        // Bracketed IPv6 literal `[::1]` must still be accepted as a host.
+        let mut m = sample_master();
+        m.host = "[::1]".into();
+        let out = apply_value_template(
+            "(Type=Zen, Host=\"{host}\", Port={port}, Namespace=\"{namespace}\")",
+            &m,
+        )
+        .unwrap();
+        assert!(out.contains("Host=\"[::1]\""));
+    }
+
+    #[test]
+    fn apply_value_template_rejects_colon_in_namespace() {
+        // Namespaces are NOT IP literals — `:` should be rejected to keep
+        // the grammar tight.
+        let mut m = sample_master();
+        m.namespace = "a:b".into();
+        let err = apply_value_template(
+            "(Type=Zen, Host=\"{host}\", Port={port}, Namespace=\"{namespace}\")",
+            &m,
+        )
+        .unwrap_err();
+        assert!(matches!(err, UecmError::Configuration(_)));
+    }
+
+    #[test]
+    fn apply_value_template_rejects_empty_host() {
+        let mut m = sample_master();
+        m.host = "".into();
+        let err = apply_value_template(
+            "(Type=Zen, Host=\"{host}\", Port={port}, Namespace=\"{namespace}\")",
+            &m,
+        )
+        .unwrap_err();
+        assert!(matches!(err, UecmError::Configuration(_)));
     }
 
     // --- compute_enable_diff ---------------------------------------------

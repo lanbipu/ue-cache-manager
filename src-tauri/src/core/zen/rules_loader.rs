@@ -450,6 +450,22 @@ pub fn default_path() -> PathBuf {
     manifest_candidate
 }
 
+/// Best-effort variant of [`resolve`] for read-only diagnostic callers.
+///
+/// Diagnostic surfaces (e.g. `core::ini_scanner` → R012-R015) describe what
+/// they observe; they do not write changes. Applying `unverified_policy:
+/// refuse` to those callers means an unverified UE major.minor would silently
+/// drop ALL zen-rule findings — masking missing or malformed `ZenShared`
+/// entries on every 5.4 / 5.5 / 5.6 / 5.8+ project. This wrapper downgrades
+/// `refuse` → `warn` for the scope of the call so diagnostics still run,
+/// while [`resolve`] (used by destructive paths like `zen enable`) keeps
+/// the strict refuse semantics. Codex round-14 P2.
+pub fn resolve_for_diagnostics(rules: &ZenRules, ue_version: &str) -> UecmResult<ResolvedRules> {
+    let mut relaxed = rules.clone();
+    relaxed.unverified_policy = UnverifiedPolicy::Warn;
+    resolve(&relaxed, ue_version)
+}
+
 /// Compute the effective rules for `ue_version` (e.g. `"5.7"` or `"5.7.4"`).
 ///
 /// The patch component is discarded — overrides and verified-version lookups
@@ -826,6 +842,34 @@ overrides: {}
         assert_eq!(r.warnings.len(), 1);
         assert!(r.warnings[0].contains("5.8"));
         assert_eq!(r.rules, rules.default);
+    }
+
+    // Codex round-14 P2: read-only diagnostic callers must NOT be blocked
+    // by `unverified_policy: refuse`. The strict `resolve` refuses the
+    // unverified version but `resolve_for_diagnostics` downgrades to warn.
+    #[test]
+    fn resolve_for_diagnostics_bypasses_refuse_policy() {
+        let rules = sample();
+        // Sanity: strict `resolve` refuses the unverified 5.8.
+        assert!(resolve(&rules, "5.8").is_err());
+        // Diagnostic variant returns Ok with a warning so scanners still run.
+        let r = resolve_for_diagnostics(&rules, "5.8")
+            .expect("diagnostics path must not be blocked by refuse policy");
+        assert!(
+            r.warnings.iter().any(|w| w.contains("5.8")),
+            "warning should name the unverified version: {:?}",
+            r.warnings
+        );
+        assert_eq!(r.matched_version, "5.8");
+        assert_eq!(r.rules, rules.default);
+    }
+
+    #[test]
+    fn resolve_for_diagnostics_still_enforces_applies_to_floor() {
+        // The applies_to floor is structural — even diagnostics can't pull
+        // rules for a UE version that predates the rule set's coverage.
+        let rules = sample();
+        assert!(resolve_for_diagnostics(&rules, "4.27").is_err());
     }
 
     #[test]
