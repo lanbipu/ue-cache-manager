@@ -280,10 +280,18 @@ fn write_key_local(
     Ok(backup)
 }
 
+/// Codex round-15 P2: case-INSENSITIVE comparison to match UE's INI
+/// reader and the `write-ini-key.ps1` sidecar (both treat keys
+/// case-insensitively). The previous `==` left a path where the
+/// caller had matched an existing key via `eq_ignore_ascii_case`
+/// (e.g. `zenshared` vs canonical `ZenShared`) but the local-loopback
+/// writer here used `==`, leaving the existing row untouched while
+/// reporting `changed=true`. Aligning with the sidecar means both
+/// transport paths converge on the same disk state.
 fn key_matches(trimmed_line: &str, name: &str) -> bool {
     trimmed_line
         .find('=')
-        .map(|eq| trimmed_line[..eq].trim() == name)
+        .map(|eq| trimmed_line[..eq].trim().eq_ignore_ascii_case(name))
         .unwrap_or(false)
 }
 
@@ -433,5 +441,70 @@ mod tests {
         let updated = std::fs::read_to_string(&path).unwrap();
         assert!(!updated.contains("Path=Old"));
         assert!(updated.contains("Keep=1"));
+    }
+
+    // Codex round-15 P2: local-loopback writer must match keys
+    // case-insensitively, same as the remote PS sidecar and UE's
+    // INI reader. Without this a lowercase `zenshared` row would
+    // survive a `remove ZenShared` call while `changed=true` was
+    // reported.
+    #[test]
+    fn remove_key_with_credential_loopback_matches_existing_case_variant() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("DefaultEngine.ini");
+        // Existing row uses lowercase key; canonical caller asks to
+        // remove the camelCase form.
+        std::fs::write(
+            &path,
+            "[InstalledDerivedDataBackendGraph]\nzenshared=(Type=Zen, Host=\"x\", Port=1, Namespace=\"y\")\nKeep=1\n",
+        )
+        .unwrap();
+
+        remove_key_with_credential(
+            "localhost",
+            &path.to_string_lossy(),
+            "InstalledDerivedDataBackendGraph",
+            "ZenShared",
+            "ignored",
+            "ignored",
+        )
+        .unwrap();
+
+        let updated = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !updated.to_ascii_lowercase().contains("zenshared="),
+            "case-mismatched legacy key must be removed, got: {}",
+            updated
+        );
+        assert!(updated.contains("Keep=1"), "unrelated key must survive");
+    }
+
+    #[test]
+    fn set_key_with_credential_loopback_overwrites_existing_case_variant() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("DefaultEngine.ini");
+        std::fs::write(&path, "[DDC]\npath=old\n").unwrap();
+
+        set_key_with_credential(
+            "localhost",
+            &path.to_string_lossy(),
+            "DDC",
+            "Path",
+            "new",
+            "ignored",
+            "ignored",
+        )
+        .unwrap();
+
+        let updated = std::fs::read_to_string(&path).unwrap();
+        // The original `path=old` row should be gone, replaced by canonical
+        // `Path=new` — no duplicate row left behind.
+        let path_lines: Vec<_> = updated
+            .lines()
+            .filter(|l| l.to_ascii_lowercase().starts_with("path="))
+            .collect();
+        assert_eq!(path_lines.len(), 1, "expected exactly one Path row, got: {:?}", path_lines);
+        assert!(updated.contains("Path=new"));
+        assert!(!updated.contains("path=old"));
     }
 }
