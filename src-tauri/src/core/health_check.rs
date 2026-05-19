@@ -161,9 +161,16 @@ fn check_zen_reachable(db: &Db, machine_id: i64) -> UecmResult<CheckOutcome> {
             status: "critical".into(),
             message: "No zen endpoints registered for this machine".into(),
             sample: "no endpoints".into(),
-            remediation:
-                "Run `uecm-cli zen register --host <host> --port 8558` after installing zen on this machine."
-                    .into(),
+            // Codex round-17 P3: match the actual CLI surface
+            // (`--machine <ID>` / `--declared-port <PORT>`, not
+            // `--host` / `--port`). Also remind the operator they need
+            // `--role` and `--lifecycle`, otherwise `zen register`
+            // refuses.
+            remediation: format!(
+                "Run `uecm-cli zen register --machine {machine_id} --declared-port 8558 \
+                 --role local --lifecycle installed_service` after installing zen \
+                 on this machine."
+            ),
         });
     }
 
@@ -369,9 +376,16 @@ fn check_zen_binary_intact(db: &Db, machine_id: i64) -> UecmResult<CheckOutcome>
                 version
             ),
             sample: actual,
+            // Codex round-17 P3: there is no `zen baseline insert`.
+            // Baseline rows are recorded by `zen detect-binary` (which
+            // reads the actual zen.exe on the host and stores its
+            // sha256 against the reported build version). The CLI
+            // only exposes `baseline list / lock / unlock`, never an
+            // insert. Point operators at the right path.
             remediation: format!(
-                "Record a baseline: `uecm-cli zen baseline insert --build {} --kind zenserver --sha256 <hash>`.",
-                version
+                "Re-run `uecm-cli zen detect-binary --machine <machine-id>` to record a \
+                 baseline for build {version}. Use `uecm-cli zen baseline list \
+                 --zen-build-version {version}` to confirm the row landed."
             ),
         });
     };
