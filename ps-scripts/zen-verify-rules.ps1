@@ -103,8 +103,13 @@ function Get-LogTail {
         # caller wants for diagnostics.
         $tail = Get-Content -LiteralPath $Path -Tail $Lines -ErrorAction SilentlyContinue
         if ($null -eq $tail) { return @() }
-        # Normalize to array even when Get-Content returns a single string.
-        return @($tail)
+        # Normalize to array of plain strings. `Get-Content` attaches ETS
+        # noteproperties (PSPath, PSDrive, ...) that ConvertTo-Json will
+        # serialize on the returned strings, blowing up the envelope size
+        # or (worse) emitting `null` for the field. Cast each line to a
+        # bare System.String to strip the noteproperties before they reach
+        # the consumer.
+        return @($tail | ForEach-Object { [string]$_ })
     } catch {
         return @()
     }
@@ -172,11 +177,18 @@ $RegexZenInstancePort = 'Unreal\s+Zen\s+Storage\s+Server\s+HTTP\s+service\s+at\s
 # Codex P2: bind the port assertion to the matched ZenShared host. With
 # multiple LogZenServiceInstance lines (local zen + shared upstream both
 # starting), a blind "first match wins" would let unrelated services
-# inject the wrong port. Two-tier strategy:
+# inject the wrong port. Three-tier strategy:
 #   1. Parse port directly from `$MatchedHost` when it carries a port
 #      suffix (formats: `host:port`, `127.0.0.1:port`, `[::1]:port`).
-#   2. Fall back to LogZenServiceInstance lines whose host equals
-#      $MatchedHost.
+#   2. LogZenServiceInstance lines whose host equals `$MatchedHost`
+#      (exact match — handles the explicit case codex flagged).
+#   3. Fallback when no host-equal match was found: if the log has
+#      EXACTLY ONE LogZenServiceInstance line, use its port. This
+#      handles the common loopback-equivalence case where ZenShared
+#      reports `127.0.0.1` (IPv4) but the local instance is bound to
+#      `[::1]` (IPv6). The single-instance constraint preserves the
+#      codex P2 protection — if multiple instances exist and none
+#      match the host, ambiguity → return null.
 # Returns the matched port (int) or $null when nothing maps cleanly.
 function Find-MatchedPort {
     param(
@@ -194,14 +206,35 @@ function Find-MatchedPort {
     if ($MatchedHost -match '^[^:]+:(?<port>\d+)$') {
         return [int]$Matches['port']
     }
-    if ($null -ne $Lines) {
-        foreach ($line in $Lines) {
-            if ($line -match $RegexZenInstancePort) {
-                if ($Matches['host'] -eq $MatchedHost) {
-                    return [int]$Matches['port']
-                }
+    if ($null -eq $Lines) { return $null }
+    # Two-pass over the InstancePort lines. Collect UNIQUE (host, port)
+    # candidates — UE5 with `-log -stdout` writes each entry twice
+    # (once in `[time][frame]` format, once in `time:` format), and
+    # two identical-instance hits shouldn't count as "ambiguous". Then
+    # prefer host-equal matches, fall back to single-instance.
+    $seen = @{}
+    $candidates = New-Object System.Collections.ArrayList
+    foreach ($line in $Lines) {
+        if ($line -match $RegexZenInstancePort) {
+            $h = [string]$Matches['host']
+            $p = [int]$Matches['port']
+            $key = "$h|$p"
+            if (-not $seen.ContainsKey($key)) {
+                $seen[$key] = $true
+                [void]$candidates.Add(@{ Host = $h; Port = $p })
             }
         }
+    }
+    foreach ($c in $candidates) {
+        if ($c.Host -eq $MatchedHost) {
+            return $c.Port
+        }
+    }
+    # No host-equal match. Codex P2 protection still applies: only
+    # auto-pick when there is no ambiguity (exactly one DISTINCT
+    # InstancePort entry in the log).
+    if ($candidates.Count -eq 1) {
+        return $candidates[0].Port
     }
     return $null
 }
@@ -373,9 +406,15 @@ try {
             foreach ($line in $scanLines) {
                 if ($line -match $RegexZenShared) {
                     $matched = $true
-                    $matchLine = $line
-                    $matchedHost = $Matches['host']
-                    $matchedNamespace = $Matches['namespace']
+                    # `Get-Content` / `ReadAllLines` attach ETS
+                    # noteproperties (PSPath, PSDrive, ...) to each
+                    # returned string. Assigning the raw value lets
+                    # ConvertTo-Json serialize the noteproperties (or
+                    # silently emit `null`), so cast to a plain string
+                    # first.
+                    $matchLine = [string]$line
+                    $matchedHost = [string]$Matches['host']
+                    $matchedNamespace = [string]$Matches['namespace']
                     break
                 }
             }
@@ -428,9 +467,10 @@ try {
                 foreach ($line in $sliceLines) {
                     if ($line -match $RegexZenShared) {
                         $matched = $true
-                        $matchLine = $line
-                        $matchedHost = $Matches['host']
-                        $matchedNamespace = $Matches['namespace']
+                        # See note above on stripping ETS noteproperties.
+                        $matchLine = [string]$line
+                        $matchedHost = [string]$Matches['host']
+                        $matchedNamespace = [string]$Matches['namespace']
                         break
                     }
                 }
@@ -512,7 +552,7 @@ try {
         exit 0
     }
 
-    @{
+    $payload = @{
         ok = $true
         matched = $true
         match_line = $matchLine
@@ -523,7 +563,11 @@ try {
         editor_pid = $editorPid
         killed = $killed
         log_tail = $tail
-    } | ConvertTo-Json -Compress -Depth 6
+    }
+    if (-not [string]::IsNullOrEmpty($env:UECM_KEEP_VERIFY_LOG)) {
+        $payload.temp_log_path = $logFile
+    }
+    $payload | ConvertTo-Json -Compress -Depth 6
 }
 catch {
     # Best-effort cleanup. If we got partway through ProcessStart, kill the
@@ -543,10 +587,14 @@ catch {
     exit 0
 }
 finally {
-    # Tear down the event subscriptions and best-effort delete the temp log.
+    # Tear down the event subscriptions. Diagnostic-preserve the temp log when
+    # UECM_KEEP_VERIFY_LOG is set so operators can inspect why match_line /
+    # log_tail came back empty without re-running the editor.
     try { if ($null -ne $stdoutHandler) { Unregister-Event -SourceIdentifier $stdoutHandler.Name -ErrorAction SilentlyContinue } } catch { }
     try { if ($null -ne $stderrHandler) { Unregister-Event -SourceIdentifier $stderrHandler.Name -ErrorAction SilentlyContinue } } catch { }
     if ($null -ne $logFile -and (Test-Path -LiteralPath $logFile)) {
-        try { Remove-Item -LiteralPath $logFile -Force -ErrorAction SilentlyContinue } catch { }
+        if ([string]::IsNullOrEmpty($env:UECM_KEEP_VERIFY_LOG)) {
+            try { Remove-Item -LiteralPath $logFile -Force -ErrorAction SilentlyContinue } catch { }
+        }
     }
 }
