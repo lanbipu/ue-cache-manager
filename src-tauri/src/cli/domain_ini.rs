@@ -12,8 +12,7 @@ use crate::core::ini_scanner::{self, ScanInputs};
 use crate::core::ini_diagnostics::EnvVarState;
 use crate::core::env_vars;
 use crate::data::{
-    ini_findings, machine_ue_installs,
-    machines as data_machines, scan_runs, IniFinding,
+    ini_findings, machine_ue_installs, machines as data_machines, scan_runs, IniFinding,
 };
 use crate::error::{UecmError, UecmResult};
 use serde::Serialize;
@@ -673,6 +672,29 @@ fn scan_cluster(
                 &machine.ip, "UE-LocalDataCachePath", &username, &password,
             ).ok().flatten();
 
+            // Auto-enable zen rules when the machine has at least one
+            // registered endpoint. The builder returns Ok(None) for
+            // legacy clusters → zen rules silently skip.
+            //
+            // UE version pick: highest install on this machine. Machine-
+            // scoped scans don't know which project the operator is
+            // targeting, so the highest-version install is the closest
+            // proxy — that's what `core::cache_backend::resolve_for`
+            // already uses for the routing decision.
+            // Codex P2: numeric (major, minor) ordering — `String::max()`
+            // would order "5.9" > "5.10" lexicographically.
+            let ue_version_hint: Option<String> =
+                ini_scanner::pick_highest_ue_version(&installs);
+            let zen_ctx_owned = ini_scanner::build_zen_ctx_for_machine(
+                &db,
+                mid,
+                ue_version_hint.as_deref(),
+                // Codex round-21 P2: restrict R018's cluster majority
+                // to the scan's machine set.
+                Some(machine_ids),
+            )?;
+            let zen_ctx = zen_ctx_owned.as_ref().map(|o| o.as_ctx());
+
             let inputs = ScanInputs {
                 host: &machine.ip,
                 credential: Some((&username, &password)),
@@ -680,6 +702,7 @@ fn scan_cluster(
                 user_profile: "",
                 project_roots: &[],
                 env_state,
+                zen_ctx: zen_ctx.as_ref(),
             };
             let outcome = ini_scanner::scan_machine(&inputs)?;
             let read_count = outcome.read_count;

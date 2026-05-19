@@ -315,6 +315,47 @@ fn run_with_rt(
                         // L1 ports still probed — operator may have lost WinRM but kept TCP visibility.
                         let l1 = rt.block_on(crate::core::health_check::probe_tcp_ports(&machine.ip, 1000));
                         for (k, v) in l1 { row.insert(k, v); }
+                        // Merge zen health rows on the offline path too —
+                        // codex P2 from T4.1-T4.3 review wants stable layout
+                        // regardless of WinRM reachability. Most rows will
+                        // be "unknown" but the keys present.
+                        //
+                        // Codex round-18 P3: same as online path — when
+                        // the DB query errors, emit `unknown` for all 4
+                        // keys instead of dropping them, so consumers
+                        // never see gaps in the row schema.
+                        match crate::core::health_check::zen_health_for_machine(&db, mid, Some(machine_ids)) {
+                            Ok(zen_rows) => {
+                                for (k, v) in zen_rows {
+                                    row.insert(k, v);
+                                }
+                            }
+                            Err(zen_err) => {
+                                eprintln!(
+                                    "[health run] offline zen_health_for_machine({}) failed: {}",
+                                    mid, zen_err
+                                );
+                                let msg = format!("zen health query failed: {zen_err}");
+                                let remediation =
+                                    "Inspect tracing logs; re-run when DB is recovered.".to_string();
+                                for key in [
+                                    "zen_reachable",
+                                    "zen_version_consistent",
+                                    "zen_binary_intact",
+                                    "zen_cache_provider_ready",
+                                ] {
+                                    row.insert(
+                                        key.into(),
+                                        crate::core::health_check::CheckOutcome {
+                                            status: "unknown".into(),
+                                            message: msg.clone(),
+                                            sample: "".into(),
+                                            remediation: remediation.clone(),
+                                        },
+                                    );
+                                }
+                            }
+                        }
                         health_check_runs::upsert(&db, scan_id, mid, &serde_json::to_value(&row).unwrap())?;
                         let mut rc = Counters::default();
                         for v in row.values() { rc.tally(v); }
@@ -367,6 +408,44 @@ fn run_with_rt(
         row.insert("ini_consistency".into(), ini_outcome);
         row.insert("pso_precaching".into(), pso_outcome);
         row.insert("gpu_consistency".into(), gpu_outcome);
+
+        // T4.2 / T4.3 wiring (mirror commands::health_check::run_health_check):
+        // Always emit the 4 zen keys so the row has a stable layout. The
+        // helper returns "unknown" rows when no zen install / endpoints /
+        // probes exist — operators can distinguish "no data" from
+        // "data says broken". A DB error doesn't nuke the whole run.
+        match crate::core::health_check::zen_health_for_machine(&db, mid, Some(machine_ids)) {
+            Ok(zen_rows) => {
+                for (k, v) in zen_rows {
+                    row.insert(k, v);
+                }
+            }
+            Err(e) => {
+                // Codex round-16 P2: keep the stable 4-key zen layout
+                // even on DB-error fallback (mirror of
+                // commands::health_check::run_health_check).
+                eprintln!("[health run] zen_health_for_machine({}) failed: {}", mid, e);
+                let msg = format!("zen health query failed: {e}");
+                let remediation =
+                    "Inspect tracing logs; re-run when DB is recovered.".to_string();
+                for key in [
+                    "zen_reachable",
+                    "zen_version_consistent",
+                    "zen_binary_intact",
+                    "zen_cache_provider_ready",
+                ] {
+                    row.insert(
+                        key.into(),
+                        crate::core::health_check::CheckOutcome {
+                            status: "unknown".into(),
+                            message: msg.clone(),
+                            sample: "".into(),
+                            remediation: remediation.clone(),
+                        },
+                    );
+                }
+            }
+        }
 
         // Augment with rs_service from core::renderstream_service (ps_emitted=false
         // in PROBE_REGISTRY, so the round-trip does not provide it). Probe failure

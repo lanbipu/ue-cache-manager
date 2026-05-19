@@ -1,5 +1,6 @@
 pub mod batch;
 pub mod bootstrap;
+pub mod cache_backend;
 pub mod command_line_scanner;
 pub mod consistency_check;
 pub mod credentials;
@@ -16,6 +17,7 @@ pub mod health_probes;
 pub mod ini_apply;
 pub mod ini_backend_graph;
 pub mod ini_diagnostics;
+pub mod ini_diagnostics_zen;
 pub mod ini_editor;
 pub mod ini_scanner;
 pub mod local_cache;

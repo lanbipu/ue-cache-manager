@@ -1,7 +1,9 @@
 //! Tauri commands for the cluster health check.
 
 use crate::core::credentials as core_credentials;
-use crate::core::health_check::{aggregate_gpu_consistency, probe_tcp_ports, CheckOutcome};
+use crate::core::health_check::{
+    aggregate_gpu_consistency, probe_tcp_ports, zen_health_for_machine, CheckOutcome,
+};
 use crate::core::health_probes;
 use crate::core::ini_scanner;
 use crate::core::probe_keys;
@@ -157,6 +159,50 @@ pub fn run_health_check(
                 }
                 let l1 = rt.block_on(probe_tcp_ports(&machine.ip, 1000));
                 for (k, v) in l1 { row.insert(k, v); }
+                // Codex P2: merge Zen health rows on the offline path too
+                // so the UI gets the same stable layout regardless of
+                // WinRM reachability. Most Zen rows will land as
+                // "unknown" because they rely on probe / install data
+                // that's likely missing for an offline host, but having
+                // the keys present beats leaving holes in the schema.
+                //
+                // Codex round-18 P3: when the underlying query itself
+                // fails, the previous `if let Ok` swallowed the error
+                // and left ALL 4 keys missing — same stable-layout
+                // violation the online path already fixes. Emit
+                // `unknown` for the 4 keys in the error branch.
+                match zen_health_for_machine(&db, mid, Some(&machine_ids)) {
+                    Ok(zen_rows) => {
+                        for (k, v) in zen_rows {
+                            row.insert(k, v);
+                        }
+                    }
+                    Err(zen_err) => {
+                        eprintln!(
+                            "[health_check] offline zen_health_for_machine({}) failed: {}",
+                            mid, zen_err
+                        );
+                        let msg = format!("zen health probe failed: {}", zen_err);
+                        let remediation =
+                            "Inspect the UECM log; the underlying DB query for zen state failed.".to_string();
+                        for key in [
+                            "zen_reachable",
+                            "zen_version_consistent",
+                            "zen_binary_intact",
+                            "zen_cache_provider_ready",
+                        ] {
+                            row.insert(
+                                key.into(),
+                                CheckOutcome {
+                                    status: "unknown".into(),
+                                    message: msg.clone(),
+                                    sample: String::new(),
+                                    remediation: remediation.clone(),
+                                },
+                            );
+                        }
+                    }
+                }
                 tally_summary(&mut summary, &row);
                 health_check_runs::upsert(&db, scan_id, mid, &serde_json::to_value(&row).unwrap())?;
                 continue;
@@ -196,6 +242,49 @@ pub fn run_health_check(
         // L1 ports — creds-independent, always run.
         let l1 = rt.block_on(probe_tcp_ports(&machine.ip, 1000));
         for (k, v) in l1 { row.insert(k, v); }
+
+        // Zen health rows (T4.2 / T4.3): always emit the 4 keys so the UI
+        // sees a stable layout. The function returns "unknown" rows for
+        // machines that have no zen install / no endpoints / no probes —
+        // that's by design so an operator can tell "no data yet" apart
+        // from "data says it's broken".
+        match zen_health_for_machine(&db, mid, Some(&machine_ids)) {
+            Ok(zen_rows) => {
+                for (k, v) in zen_rows {
+                    row.insert(k, v);
+                }
+            }
+            Err(e) => {
+                // Codex round-16 P2: the zen health contract is that every
+                // row carries ALL FOUR `zen_*` keys with a stable layout,
+                // even when the source query failed. Previously this
+                // branch only emitted `zen_reachable`, leaving
+                // `zen_version_consistent` / `zen_binary_intact` /
+                // `zen_cache_provider_ready` missing — UI / CLI clients
+                // that read keys by name would silently render them as
+                // gaps instead of "unknown".
+                eprintln!("[health_check] zen_health_for_machine({}) failed: {}", mid, e);
+                let msg = format!("zen health probe failed: {}", e);
+                let remediation =
+                    "Inspect the UECM log; the underlying DB query for zen state failed.".to_string();
+                for key in [
+                    "zen_reachable",
+                    "zen_version_consistent",
+                    "zen_binary_intact",
+                    "zen_cache_provider_ready",
+                ] {
+                    row.insert(
+                        key.into(),
+                        CheckOutcome {
+                            status: "unknown".into(),
+                            message: msg.clone(),
+                            sample: String::new(),
+                            remediation: remediation.clone(),
+                        },
+                    );
+                }
+            }
+        }
 
         tally_summary(&mut summary, &row);
         health_check_runs::upsert(&db, scan_id, mid, &serde_json::to_value(&row).unwrap())?;
@@ -288,4 +377,116 @@ pub fn list_recent_health_runs(db: State<'_, Db>, limit: i64) -> UecmResult<Vec<
 #[tauri::command]
 pub fn list_health_results_for_run(db: State<'_, Db>, scan_run_id: i64) -> UecmResult<Vec<health_check_runs::HealthCheckRow>> {
     health_check_runs::list_for_run(&db, scan_run_id)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Smoke tests for the production wiring of `zen_health_for_machine`.
+    //!
+    //! `run_health_check` itself can't be invoked directly without a Tauri
+    //! `AppHandle` (it emits progress events). The wiring under test is the
+    //! merge step right before `health_check_runs::upsert`: take the 4-row
+    //! map from `zen_health_for_machine`, fold it into the existing per-
+    //! machine `row`, and persist via `upsert`. These tests exercise that
+    //! merge directly with the same DB seeding the production path uses.
+    use super::*;
+    use crate::data::{
+        machines::Machine, open_in_memory, scan_runs, schema,
+        machines as machines_data,
+    };
+
+    fn wiring_db() -> Db {
+        let db = open_in_memory().unwrap();
+        {
+            let mut conn = db.lock().unwrap();
+            schema::migrate(&mut conn).unwrap();
+        }
+        db
+    }
+
+    #[test]
+    fn zen_health_merge_persists_four_keys_in_health_check_runs_row() {
+        // Seed: one machine, no zen endpoints / probes / installs. The
+        // function returns the four canonical keys with "unknown" / "critical"
+        // outcomes for the missing-data cases — that's exactly the shape
+        // the UI expects so the layout stays stable.
+        let db = wiring_db();
+        let mid =
+            machines_data::insert(&db, &Machine::new("RENDER-01", "192.168.10.21")).unwrap();
+        let scan_id = scan_runs::insert(&db, "health", &[mid]).unwrap();
+
+        // Mimic the production merge: start from an existing per-machine row
+        // (here we use a stand-in "ini_consistency" outcome so the test
+        // proves the merge doesn't drop existing keys), call
+        // `zen_health_for_machine`, fold its 4 keys in, then upsert.
+        let mut row: std::collections::HashMap<String, CheckOutcome> =
+            std::collections::HashMap::new();
+        row.insert(
+            "ini_consistency".into(),
+            CheckOutcome {
+                status: "healthy".into(),
+                message: "no findings".into(),
+                sample: String::new(),
+                remediation: String::new(),
+            },
+        );
+        let zen_rows = zen_health_for_machine(&db, mid, None).unwrap();
+        for (k, v) in zen_rows {
+            row.insert(k, v);
+        }
+
+        health_check_runs::upsert(&db, scan_id, mid, &serde_json::to_value(&row).unwrap())
+            .unwrap();
+
+        // Read back through the same DB helper the Tauri command uses.
+        let rows = health_check_runs::list_for_run(&db, scan_id).unwrap();
+        assert_eq!(rows.len(), 1);
+        let merged = &rows[0].machine_results;
+        for key in [
+            "ini_consistency",
+            "zen_reachable",
+            "zen_version_consistent",
+            "zen_binary_intact",
+            "zen_cache_provider_ready",
+        ] {
+            assert!(
+                merged.get(key).is_some(),
+                "merged row missing key {} — wiring would have dropped a zen check; got keys: {:?}",
+                key,
+                merged.as_object().map(|o| o.keys().collect::<Vec<_>>())
+            );
+        }
+    }
+
+    #[test]
+    fn zen_health_merge_does_not_drop_existing_keys() {
+        // Production-side concern: if a future change ever made the zen-rows
+        // merge overwrite keys it shouldn't (e.g. "gpu_consistency" or
+        // "tcp_5985"), the UI would lose those rows silently. Pin the merge
+        // semantics: a key OUTSIDE the zen set must survive.
+        let db = wiring_db();
+        let mid =
+            machines_data::insert(&db, &Machine::new("RENDER-02", "192.168.10.22")).unwrap();
+        let mut row: std::collections::HashMap<String, CheckOutcome> =
+            std::collections::HashMap::new();
+        row.insert(
+            "gpu_consistency".into(),
+            CheckOutcome {
+                status: "healthy".into(),
+                message: "single GPU".into(),
+                sample: String::new(),
+                remediation: String::new(),
+            },
+        );
+        let zen_rows = zen_health_for_machine(&db, mid, None).unwrap();
+        for (k, v) in zen_rows {
+            row.insert(k, v);
+        }
+        assert_eq!(row.get("gpu_consistency").unwrap().status, "healthy");
+        // And all four zen keys also landed.
+        assert!(row.contains_key("zen_reachable"));
+        assert!(row.contains_key("zen_version_consistent"));
+        assert!(row.contains_key("zen_binary_intact"));
+        assert!(row.contains_key("zen_cache_provider_ready"));
+    }
 }

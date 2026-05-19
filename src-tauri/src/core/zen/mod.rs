@@ -8,9 +8,15 @@
 pub mod binary;
 pub mod cache_stats;
 pub mod cb_parser;
+pub mod enable;
+pub mod endpoint;
 pub mod lockfile;
+pub mod lua_config;
 pub mod probe;
+pub mod redaction;
+pub mod rules_loader;
 pub mod retention;
+pub mod verify;
 
 #[cfg(test)]
 pub mod test_http;

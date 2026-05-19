@@ -81,6 +81,24 @@ pub fn open_and_migrate_db(path: &Path) -> UecmResult<Db> {
         }
     }
 
+    // Plan 7 §8 M5 T5.3: mark any `status='running'` operation rows older
+    // than an hour as `interrupted`. Hard process crashes / SIGKILL leave
+    // phantom rows behind; without this sweep the operations table grows
+    // a steady tail of "in flight" entries that nothing ever finishes.
+    match crate::data::operations::sweep_running(&db, 3600) {
+        Ok(0) => {}
+        Ok(n) => {
+            tracing::info!(
+                target: "operations.sweep",
+                interrupted_rows = n,
+                "marked {n} stale operations row(s) as interrupted at startup"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(target: "operations.sweep", "startup sweep failed: {e}");
+        }
+    }
+
     Ok(db)
 }
 

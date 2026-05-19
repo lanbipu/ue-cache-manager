@@ -102,6 +102,20 @@ pub fn run() {
             commands::zen::zen_baseline_list,
             commands::zen::zen_baseline_lock,
             commands::zen::zen_baseline_unlock,
+            commands::zen::zen_register,
+            commands::zen::zen_unregister,
+            commands::zen::zen_change_role,
+            commands::zen::zen_apply_config,
+            commands::zen::zen_lua_preview,
+            commands::zen::zen_service_install,
+            commands::zen::zen_service_uninstall,
+            commands::zen::zen_service_start,
+            commands::zen::zen_service_stop,
+            commands::zen::zen_service_status,
+            commands::zen::zen_urlacl_add,
+            commands::zen::zen_urlacl_list,
+            commands::zen::zen_urlacl_remove,
+            commands::zen::zen_verify_rules,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

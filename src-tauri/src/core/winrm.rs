@@ -177,37 +177,96 @@ pub fn invoke_with_credential(
     ))
 }
 
+/// RAII guard that removes a path when dropped. Codex round-18 P2: the
+/// previous `let _ = remove_file` after the `Command::output()` call only
+/// fires on the success / clean-error path. If a panic / abort / OS-level
+/// kill landed between file creation and the explicit remove (or if `?` on
+/// the spawn-error short-circuited past it), the temp `.ps1` — which may
+/// contain `-ServicePassword <secret>` or similar inline-passed secrets —
+/// stayed on disk. A Drop guard guarantees cleanup on every unwind path.
+#[cfg(windows)]
+struct TempScriptGuard(std::path::PathBuf);
+
+#[cfg(windows)]
+impl Drop for TempScriptGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 #[cfg(windows)]
 fn invoke_local(script_body: &str) -> UecmResult<String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
-    let mut child = Command::new("powershell.exe")
+    // T1.11 fix: `powershell.exe -Command -` reads stdin as a command
+    // string, but Windows PowerShell truncates / silently drops large
+    // multi-statement scripts piped via stdin (zen-detect-binary.ps1
+    // is ~10K of functions + try/catch — emits zero stdout on the
+    // stdin path even though `-File <tempfile>` runs it cleanly).
+    //
+    // Workaround: write the script to a temp .ps1 file and run via
+    // `-File <path>`. Same code path PowerShell uses internally for
+    // its own script execution, no stdin-buffer quirks.
+    //
+    // Codex round-18 P2 note on the script body: callers like
+    // `zen_service_install` substitute secrets (e.g. `-ServicePassword
+    // <pwd>`) into `script_body` before reaching this function. The
+    // resulting temp `.ps1` therefore CAN contain plaintext secrets for
+    // the lifetime of the powershell.exe child process. The RAII guard
+    // below guarantees the file is removed on every exit path; the file
+    // path is per-process / per-nanosecond so it's not predictable, and
+    // %TEMP% defaults to the current user's profile (ACL'd to that
+    // user). For deeper hardening (e.g. moving secrets out of the
+    // script body into stdin / env), we'd need to rework every sidecar
+    // that consumes them — tracked as a Plan 8 follow-up.
+    let mut tmp_path = std::env::temp_dir();
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    tmp_path.push(format!("uecm-invoke-{pid}-{nanos}.ps1"));
+
+    // Bind the cleanup guard BEFORE creating the file so even
+    // `File::create` failure (which short-circuits via `?`) goes
+    // through the guard's Drop — `remove_file` on a path that doesn't
+    // exist is a no-op, so this is safe.
+    let _guard = TempScriptGuard(tmp_path.clone());
+
+    {
+        let mut tmp = std::fs::File::create(&tmp_path).map_err(|e| {
+            UecmError::PowerShell(format!(
+                "failed to create temp script file {}: {}",
+                tmp_path.display(),
+                e
+            ))
+        })?;
+        tmp.write_all(
+            b"[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null\r\n",
+        )
+        .and_then(|_| tmp.write_all(script_body.as_bytes()))
+        .map_err(|e| UecmError::PowerShell(format!("failed to write temp script: {}", e)))?;
+        // `tmp` (the File handle) drops at this `}` — file is flushed
+        // and closed before powershell.exe reads it via `-File`.
+    }
+
+    let result = Command::new("powershell.exe")
         .arg("-NoProfile")
         .arg("-ExecutionPolicy")
         .arg("Bypass")
-        .arg("-Command")
-        .arg("-")
-        .stdin(Stdio::piped())
+        .arg("-File")
+        .arg(&tmp_path)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
+        .output();
+
+    // Guard drops at end of function (or on panic / `?` unwind) and
+    // removes the temp file unconditionally.
+
+    let output = result
         .map_err(|e| UecmError::PowerShell(format!("failed to spawn powershell.exe: {}", e)))?;
-
-    {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| UecmError::PowerShell("failed to open stdin".to_string()))?;
-        stdin
-            .write_all(b"[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null\n")
-            .and_then(|_| stdin.write_all(script_body.as_bytes()))
-            .map_err(|e| UecmError::PowerShell(format!("failed to write stdin: {}", e)))?;
-    }
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| UecmError::PowerShell(format!("wait failed: {}", e)))?;
 
     if !output.status.success() {
         let stderr = powershell::decode_subprocess_output(&output.stderr);

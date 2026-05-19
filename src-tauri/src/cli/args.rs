@@ -2,6 +2,25 @@
 
 use clap::{Parser, Subcommand};
 
+/// Operator-facing override for the cache backend (T3.6).
+///
+/// `Auto`   — defer to `core::cache_backend::resolve_for` decision table.
+/// `Legacy` — force the legacy `.ddp` pak workflow (skip the router).
+/// `Zen`    — force the zen no-op path. zen handles caching natively, so
+///            `generate` / `verify` / `distribute` are no-ops that emit a
+///            structured "skipped" summary and exit 0.
+///
+/// Exposed at the CLI layer only — `core::ddc_pak` / `core::pak_distribute`
+/// are intentionally unaware of this gate so they can keep being unit-tested
+/// without the routing surface.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+#[clap(rename_all = "snake_case")]
+pub enum BackendChoice {
+    Auto,
+    Legacy,
+    Zen,
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "uecm-cli", version, about = "UECM command-line interface")]
 pub struct Cli {
@@ -648,6 +667,10 @@ pub enum DdcAction {
         project_id: i64,
         #[arg(long)]
         source_machine: i64,
+        /// Cache backend gate (T3.6). `auto` consults the routing table;
+        /// `legacy` forces the .ddp pak workflow; `zen` is a no-op.
+        #[arg(long, default_value = "auto", value_enum)]
+        backend: BackendChoice,
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
@@ -657,6 +680,9 @@ pub enum DdcAction {
         project_id: i64,
         #[arg(long)]
         source_machine: i64,
+        /// Cache backend gate (T3.6). See `ddc generate --help` for semantics.
+        #[arg(long, default_value = "auto", value_enum)]
+        backend: BackendChoice,
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
@@ -672,6 +698,9 @@ pub enum DdcAction {
         yes: bool,
         #[arg(long)]
         dry_run: bool,
+        /// Cache backend gate (T3.6). See `ddc generate --help` for semantics.
+        #[arg(long, default_value = "auto", value_enum)]
+        backend: BackendChoice,
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
@@ -834,6 +863,234 @@ pub enum ZenAction {
         #[command(subcommand)]
         action: ZenBaselineAction,
     },
+    /// Register a zen endpoint for a machine (idempotent on (machine, port)).
+    Register {
+        /// Machine row id this endpoint runs on.
+        #[arg(long, value_name = "ID")]
+        machine: i64,
+        /// Port the endpoint advertises (Plan §1.1 default 8558).
+        #[arg(long, value_name = "PORT", default_value_t = 8558)]
+        declared_port: i64,
+        /// URL scheme (plan §1.1 default `http`; HTTPS unsupported in M2).
+        #[arg(long, value_name = "SCHEME", default_value = "http")]
+        scheme: String,
+        /// Endpoint role: `local` (this machine's own zen) or `shared_upstream`
+        /// (cluster master other locals forward to).
+        #[arg(long, value_name = "ROLE")]
+        role: String,
+        /// Existing `shared_upstream` endpoint id this endpoint forwards to.
+        /// Required only when `--role local` should join a cluster.
+        #[arg(long, value_name = "ID")]
+        upstream_endpoint_id: Option<i64>,
+        /// Absolute zen data directory on the target machine. Defaults to
+        /// `D:\\UECM\\ZenData` if not given — operator should override per
+        /// machine to match the real disk layout.
+        #[arg(long, value_name = "PATH", default_value = r"D:\UECM\ZenData")]
+        data_dir: String,
+        /// zen HTTP server backend (asio default, httpsys for kernel-mode).
+        #[arg(long, value_name = "CLASS", default_value = "asio")]
+        httpserverclass: String,
+        /// Lifecycle mode. Defaults derived from role per Plan §1.1:
+        /// `shared_upstream` → `installed_service` (T2.1 enforces);
+        /// `local` → `editor_owned`. Pass `--lifecycle` to override.
+        #[arg(long, value_name = "MODE")]
+        lifecycle: Option<String>,
+    },
+    /// Delete a registered endpoint. Refuses if other endpoints reference it
+    /// as their upstream — un-point them first.
+    Unregister {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Switch an existing endpoint's role (`local` ↔ `shared_upstream`).
+    ///
+    /// Avoids the unregister + re-register dance when an operator only
+    /// needs to flip topology. All transitions enforced by
+    /// `core::zen::endpoint::change_role`:
+    /// - `local → shared_upstream`: caller MUST set `--upstream-endpoint-id None`
+    ///   (omit it). A master can't itself point upstream.
+    /// - `shared_upstream → local`: optionally set `--upstream-endpoint-id`
+    ///   to point at another master, otherwise the endpoint becomes
+    ///   standalone.
+    /// - `local → local`: rewires the upstream pointer.
+    /// - `shared_upstream → local` while dependents still reference this
+    ///   endpoint as their upstream → refused (operator un-points first).
+    ChangeRole {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        /// New role: `local` or `shared_upstream`.
+        #[arg(long, value_name = "ROLE")]
+        new_role: String,
+        /// Desired upstream pointer AFTER the transition. Omit for
+        /// `shared_upstream` (rejected if set) or for standalone `local`.
+        #[arg(long, value_name = "ID")]
+        upstream_endpoint_id: Option<i64>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Render zen.lua from the endpoint row + optional upstream and write it
+    /// to the target host. `--dry-run` previews without invoking PowerShell.
+    ApplyConfig {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        /// Absolute destination on the remote host (e.g.
+        /// `C:\Users\<svc>\AppData\Local\UnrealEngine\Common\Zen\Install\zen.lua`).
+        /// REQUIRED: T2.9 will derive this from the binary install dir; until
+        /// then the caller must supply the real path so we never silently
+        /// write to a placeholder while zen continues using a different file.
+        #[arg(long, value_name = "PATH")]
+        dest_path: String,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Render zen.lua to stdout (read-only). Same engine as apply-config
+    /// `--dry-run`, but no destination path is required.
+    LuaPreview {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+    },
+    /// Windows-service management for the endpoint's zenserver.
+    Service {
+        #[command(subcommand)]
+        action: ZenServiceAction,
+    },
+    /// URL ACL (`netsh http`) management for the endpoint.
+    Urlacl {
+        #[command(subcommand)]
+        action: ZenUrlaclAction,
+    },
+    /// Enable ZenShared upstream on a project across N machines.
+    ///
+    /// Rewrites each target machine's `DefaultEngine.ini` (per the version-gated
+    /// rule set in `docs/research/zen-ini-rules.yaml`) to:
+    ///   * add the `ZenShared=(Type=Zen, Host=..., Port=..., Namespace=...)` line,
+    ///   * strip the legacy `Shared` / `Pak` / `CompressedPak` entries.
+    /// After each per-machine INI mutation succeeds, the legacy
+    /// `UE-SharedDataCachePath` env var (and any others the rule flagged) is
+    /// cleaned on Machine + User scope via `zen-env-cleanup.ps1`.
+    ///
+    /// Destructive: requires `--yes` or `--dry-run`.
+    Enable {
+        /// Project row id whose `DefaultEngine.ini` to mutate. The project's
+        /// `ue_version_major.minor` selects the rule overrides.
+        #[arg(long, value_name = "ID")]
+        project_id: i64,
+        /// Comma-separated machine row ids to act on. Each machine MUST have a
+        /// `project_locations` row for this project so we know where the INI is.
+        #[arg(long, value_name = "M1,M2,...", value_delimiter = ',')]
+        machines: Vec<i64>,
+        /// Endpoint id of the cluster master (`shared_upstream`). Its host +
+        /// declared_port go into the rendered `ZenShared` value.
+        #[arg(long, value_name = "ID")]
+        upstream_endpoint_id: i64,
+        /// DDC namespace string substituted into the value template
+        /// (Plan §1.1 default `ue.ddc`).
+        #[arg(long, default_value = "ue.ddc")]
+        namespace: String,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Reverse `zen enable`: remove the `ZenShared` upstream entry from each
+    /// machine's `DefaultEngine.ini`. **Narrow disable** (T3.3): legacy
+    /// `Pak` / `CompressedPak` / `Shared` keys that enable stripped are NOT
+    /// auto-restored, and the legacy env vars are NOT touched.
+    ///
+    /// Destructive: requires `--yes` or `--dry-run`.
+    Disable {
+        #[arg(long, value_name = "ID")]
+        project_id: i64,
+        #[arg(long, value_name = "M1,M2,...", value_delimiter = ',')]
+        machines: Vec<i64>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Resolve the zen INI rule set for a given UE version (T4.5 resolve-only,
+    /// extended by T4.4 with `--run-editor`).
+    ///
+    /// Without `--run-editor` this is the original T4.5 behavior: parse
+    /// `zen-ini-rules.yaml`, resolve the effective rules for the supplied
+    /// `--ue-version`, and print the plan as JSON. With `--run-editor`, after
+    /// the resolve succeeds the command also drives a headless UE editor on
+    /// the target machine via the `zen-verify-rules.ps1` sidecar (T4.6) and
+    /// watches its log for the ZenShared OK line. See
+    /// `docs/research/zen-launch-mechanism.md` §8 for the matching line and
+    /// why the editor has to be killed instead of waited on.
+    ///
+    /// `--ue-install` is captured as metadata for the resolve-only path; it
+    /// IS used as the editor root (`Engine\Binaries\Win64\UnrealEditor-Cmd.exe`)
+    /// when `--run-editor` is set. `--write-verified` appends the major.minor
+    /// to `verified_versions` in the yaml on disk when the resolve succeeds
+    /// and the version isn't already listed. The yaml file path is the same
+    /// one `load_default()` picks (env override or on-disk candidate);
+    /// writing to the embedded fallback is refused.
+    VerifyRules {
+        /// UE version to resolve rules for (e.g. `5.7` or `5.7.4`). Patch
+        /// component is allowed but ignored — overrides and verified-version
+        /// lookup are keyed by major.minor only.
+        #[arg(long, value_name = "X.Y")]
+        ue_version: String,
+        /// Engine install path on the target host (used as `UeRoot` when
+        /// `--run-editor` is set; metadata-only otherwise).
+        #[arg(long, value_name = "PATH")]
+        ue_install: String,
+        /// On success, append the UE major.minor to `verified_versions` in the
+        /// yaml file. No-op if already verified.
+        #[arg(long)]
+        write_verified: bool,
+        /// When set, after the resolve runs the real T4.4 verifier against the
+        /// target machine via WinRM: launches `UnrealEditor-Cmd.exe` headless,
+        /// tails its log for the ZenShared OK line, kills the editor when the
+        /// regex matches. Requires `--uproject-path` and `--machine`.
+        #[arg(long)]
+        run_editor: bool,
+        /// Machine id (from inventory) to run the headless verifier on.
+        /// Required with `--run-editor`.
+        #[arg(long, value_name = "ID")]
+        machine: Option<i64>,
+        /// Absolute path on the target host to the `.uproject` to open.
+        /// Required with `--run-editor`. The project must already have zen
+        /// enabled (run `zen enable` first).
+        #[arg(long, value_name = "PATH")]
+        uproject_path: Option<String>,
+        /// Editor-log tail timeout in seconds. Default 300 — UE 5.7 typically
+        /// emits the ZenShared line within 20-60 s of starting; 300 is a
+        /// generous ceiling. Only valid with `--run-editor`; supplying this
+        /// without `--run-editor` is rejected so callers don't believe the
+        /// verifier ran when it didn't.
+        #[arg(long, value_name = "SECS")]
+        timeout_seconds: Option<u64>,
+        /// Optional: assert the matched line's host equals this. Mismatch
+        /// flips the run-editor outcome's `ok` to false.
+        #[arg(long, value_name = "HOST")]
+        expected_host: Option<String>,
+        /// Optional: assert the matched neighbour line's port equals this.
+        #[arg(long, value_name = "PORT")]
+        expected_port: Option<i64>,
+        /// Optional: assert the matched line's namespace equals this.
+        /// Default `ue.ddc` is applied by the sidecar when omitted.
+        #[arg(long, value_name = "NS")]
+        expected_namespace: Option<String>,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -869,6 +1126,119 @@ pub enum ZenBaselineAction {
         yes: bool,
         #[arg(long)]
         dry_run: bool,
+    },
+}
+
+// ---------- zen service ----------
+#[derive(Subcommand, Debug)]
+pub enum ZenServiceAction {
+    /// Install zenserver as a Windows service on the endpoint's host.
+    Install {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        /// Optional service account. Forwarded to `zen.exe service
+        /// install -u <user>`. Empty / omitted → zen default
+        /// (NT AUTHORITY\\LocalService). Common values:
+        /// `LocalSystem`, `.\\uecm-test`, `DOMAIN\\renderfarm-svc`.
+        #[arg(long, value_name = "USER")]
+        service_user: Option<String>,
+        /// Password for `--service-user`. Required for non-built-in
+        /// accounts (LocalSystem / LocalService / NetworkService have
+        /// no password). Visible briefly in zen.exe argv — use
+        /// `--service-pass-stdin` to read from stdin instead.
+        #[arg(long, value_name = "PASS", conflicts_with = "service_pass_stdin")]
+        service_pass: Option<String>,
+        /// Read service password from stdin (single line, trailing
+        /// CR/LF trimmed). Mutually exclusive with `--service-pass`.
+        #[arg(long)]
+        service_pass_stdin: bool,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Uninstall the zenserver Windows service.
+    Uninstall {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Start the zenserver Windows service (idempotent).
+    Start {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Stop the zenserver Windows service (idempotent). Destructive —
+    /// stopping a `shared_upstream` cuts the whole cluster off, so the
+    /// CLI requires `--yes` (or `--dry-run` to preview).
+    Stop {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Report Windows-service status for zenserver.
+    Status {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+}
+
+// ---------- zen urlacl ----------
+#[derive(Subcommand, Debug)]
+pub enum ZenUrlaclAction {
+    /// Reserve `<scheme>://+:<port>/` for the given user account.
+    Add {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        /// Principal that may bind the prefix (e.g. `NT SERVICE\ZenServer`).
+        /// Note: this is the URL ACL owner, NOT the WinRM auth user — clap
+        /// would refuse to register both as `--user` on the same subcommand
+        /// (`CredentialArgs` already owns that flag).
+        #[arg(long, value_name = "PRINCIPAL")]
+        principal: String,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// List zen-shaped URL reservations on a machine.
+    List {
+        #[arg(long, value_name = "ID")]
+        machine: i64,
+        /// Optional substring port filter (e.g. `8558`).
+        #[arg(long, value_name = "PORT")]
+        port_filter: Option<String>,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Remove the reservation for the endpoint's `<scheme>://+:<port>/`.
+    Remove {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
     },
 }
 
@@ -1242,5 +1612,243 @@ mod tests {
     fn rejects_all_and_cidr_together() {
         let r = Cli::try_parse_from(["uecm-cli", "health", "run", "--all", "--cidr", "10.0.0.0/24"]);
         assert!(r.is_err(), "should reject --all + --cidr");
+    }
+
+    // ---------- T3.6: ddc --backend flag ----------
+
+    #[test]
+    fn ddc_generate_backend_defaults_to_auto() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "ddc", "generate",
+            "--project-id", "1",
+            "--source-machine", "1",
+        ]).unwrap();
+        match cli.command {
+            Domain::Ddc { action: DdcAction::Generate { backend, .. } } => {
+                assert_eq!(backend, BackendChoice::Auto);
+            }
+            _ => panic!("expected Ddc::Generate"),
+        }
+    }
+
+    #[test]
+    fn ddc_generate_accepts_backend_zen() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "ddc", "generate",
+            "--project-id", "1",
+            "--source-machine", "1",
+            "--backend", "zen",
+        ]).unwrap();
+        match cli.command {
+            Domain::Ddc { action: DdcAction::Generate { backend, .. } } => {
+                assert_eq!(backend, BackendChoice::Zen);
+            }
+            _ => panic!("expected Ddc::Generate"),
+        }
+    }
+
+    #[test]
+    fn ddc_verify_accepts_backend_legacy() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "ddc", "verify",
+            "--project-id", "1",
+            "--source-machine", "1",
+            "--backend", "legacy",
+        ]).unwrap();
+        match cli.command {
+            Domain::Ddc { action: DdcAction::Verify { backend, .. } } => {
+                assert_eq!(backend, BackendChoice::Legacy);
+            }
+            _ => panic!("expected Ddc::Verify"),
+        }
+    }
+
+    #[test]
+    fn ddc_distribute_accepts_backend_zen() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "ddc", "distribute",
+            "--project-id", "1",
+            "--source-machine", "1",
+            "--targets", "2,3",
+            "--backend", "zen",
+            "--yes",
+        ]).unwrap();
+        match cli.command {
+            Domain::Ddc { action: DdcAction::Distribute { backend, .. } } => {
+                assert_eq!(backend, BackendChoice::Zen);
+            }
+            _ => panic!("expected Ddc::Distribute"),
+        }
+    }
+
+    // ---------- T3.7: zen enable / disable ----------
+
+    #[test]
+    fn zen_enable_parses_required_flags() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "zen", "enable",
+            "--project-id", "7",
+            "--machines", "1,2,3",
+            "--upstream-endpoint-id", "9",
+            "--cred-alias", "winrm-admin",
+            "--yes",
+        ]).unwrap();
+        match cli.command {
+            Domain::Zen { action: ZenAction::Enable {
+                project_id, machines, upstream_endpoint_id, namespace, yes, dry_run, cred,
+            } } => {
+                assert_eq!(project_id, 7);
+                assert_eq!(machines, vec![1, 2, 3]);
+                assert_eq!(upstream_endpoint_id, 9);
+                assert_eq!(namespace, "ue.ddc");
+                assert!(yes);
+                assert!(!dry_run);
+                assert_eq!(cred.cred_alias.as_deref(), Some("winrm-admin"));
+            }
+            _ => panic!("expected Zen::Enable"),
+        }
+    }
+
+    #[test]
+    fn zen_enable_accepts_custom_namespace_and_dry_run() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "zen", "enable",
+            "--project-id", "1",
+            "--machines", "5",
+            "--upstream-endpoint-id", "2",
+            "--namespace", "ue.shared",
+            "--dry-run",
+        ]).unwrap();
+        match cli.command {
+            Domain::Zen { action: ZenAction::Enable { namespace, dry_run, yes, machines, .. } } => {
+                assert_eq!(namespace, "ue.shared");
+                assert!(dry_run);
+                assert!(!yes);
+                assert_eq!(machines, vec![5]);
+            }
+            _ => panic!("expected Zen::Enable"),
+        }
+    }
+
+    #[test]
+    fn zen_disable_parses_required_flags() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "zen", "disable",
+            "--project-id", "1",
+            "--machines", "1,2",
+            "--yes",
+        ]).unwrap();
+        match cli.command {
+            Domain::Zen { action: ZenAction::Disable {
+                project_id, machines, yes, dry_run, ..
+            } } => {
+                assert_eq!(project_id, 1);
+                assert_eq!(machines, vec![1, 2]);
+                assert!(yes);
+                assert!(!dry_run);
+            }
+            _ => panic!("expected Zen::Disable"),
+        }
+    }
+
+    // ---------- T4.5: zen verify-rules ----------
+
+    #[test]
+    fn zen_verify_rules_parses_required_flags() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "zen", "verify-rules",
+            "--ue-version", "5.7",
+            "--ue-install", "C:\\UE\\5.7",
+        ]).unwrap();
+        match cli.command {
+            Domain::Zen { action: ZenAction::VerifyRules {
+                ue_version, ue_install, write_verified, run_editor,
+                machine, uproject_path, timeout_seconds, ..
+            } } => {
+                assert_eq!(ue_version, "5.7");
+                assert_eq!(ue_install, "C:\\UE\\5.7");
+                assert!(!write_verified);
+                assert!(!run_editor);
+                assert!(machine.is_none());
+                assert!(uproject_path.is_none());
+                // Default is no longer baked into clap — handler applies 300
+                // when --run-editor is set. The bare invocation parses None.
+                assert!(timeout_seconds.is_none());
+            }
+            _ => panic!("expected Zen::VerifyRules"),
+        }
+    }
+
+    #[test]
+    fn zen_verify_rules_accepts_write_verified() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "zen", "verify-rules",
+            "--ue-version", "5.8.0",
+            "--ue-install", "/Users/lan/UE",
+            "--write-verified",
+        ]).unwrap();
+        match cli.command {
+            Domain::Zen { action: ZenAction::VerifyRules { write_verified, ue_version, .. } } => {
+                assert!(write_verified);
+                assert_eq!(ue_version, "5.8.0");
+            }
+            _ => panic!("expected Zen::VerifyRules"),
+        }
+    }
+
+    // T4.4: --run-editor adds the headless verifier hop. We just assert
+    // the flags plumb through clap into ZenAction::VerifyRules; the actual
+    // dispatch lives in `cli::domain_zen::verify_rules`.
+    #[test]
+    fn zen_verify_rules_accepts_run_editor_flags() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "zen", "verify-rules",
+            "--ue-version", "5.7",
+            "--ue-install", "D:\\UE_5.7",
+            "--run-editor",
+            "--machine", "5",
+            "--uproject-path", "E:\\proj\\p.uproject",
+            "--timeout-seconds", "120",
+            "--expected-host", "127.0.0.1",
+            "--expected-port", "8558",
+            "--expected-namespace", "ue.ddc",
+            "--cred-alias", "render-svc",
+        ]).unwrap();
+        match cli.command {
+            Domain::Zen { action: ZenAction::VerifyRules {
+                run_editor, machine, uproject_path, timeout_seconds,
+                expected_host, expected_port, expected_namespace, cred, ..
+            } } => {
+                assert!(run_editor);
+                assert_eq!(machine, Some(5));
+                assert_eq!(uproject_path.as_deref(), Some("E:\\proj\\p.uproject"));
+                assert_eq!(timeout_seconds, Some(120));
+                assert_eq!(expected_host.as_deref(), Some("127.0.0.1"));
+                assert_eq!(expected_port, Some(8558));
+                assert_eq!(expected_namespace.as_deref(), Some("ue.ddc"));
+                assert_eq!(cred.cred_alias.as_deref(), Some("render-svc"));
+            }
+            _ => panic!("expected Zen::VerifyRules"),
+        }
+    }
+
+    #[test]
+    fn zen_verify_rules_rejects_missing_ue_version() {
+        let r = Cli::try_parse_from([
+            "uecm-cli", "zen", "verify-rules",
+            "--ue-install", "C:\\UE\\5.7",
+        ]);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn ddc_generate_rejects_unknown_backend_value() {
+        let r = Cli::try_parse_from([
+            "uecm-cli", "ddc", "generate",
+            "--project-id", "1",
+            "--source-machine", "1",
+            "--backend", "garbage",
+        ]);
+        assert!(r.is_err(), "clap must reject unknown --backend values");
     }
 }

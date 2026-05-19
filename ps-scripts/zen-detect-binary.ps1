@@ -170,7 +170,7 @@ try {
             # editor binary.
             $parts = $verName -split '\.'
             if ($parts.Length -lt 2) {
-                [void]$warnings.Add("registry key '$verName' under $keyPath: not a major.minor version, skipped")
+                [void]$warnings.Add("registry key '$verName' under ${keyPath}: not a major.minor version, skipped")
                 return
             }
             $major = 0; $minor = 0
