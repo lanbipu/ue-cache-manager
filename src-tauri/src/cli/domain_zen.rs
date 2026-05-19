@@ -1934,10 +1934,14 @@ pub(crate) fn validate_service_data_dir(p: &str) -> UecmResult<()> {
     validate_data_dir_safe(trimmed)
 }
 
-/// Same forbidden-system-root guard but applied to an endpoint's `data_dir`
-/// (rendered into `server.datadir`). Symmetric with `validate_dest_path`'s
-/// system-root check — once T2.8 lands a richer safety check, this becomes
-/// a delegating wrapper.
+/// Validate a `data_dir` value that is about to be rendered into
+/// `server.datadir` (lua-preview / apply-config / service-install all
+/// share this guard). Codex round-20 P2: previously this helper only
+/// blocked empty / Win32 device prefix / forbidden system roots, so a
+/// DB row that pre-dated the new register-time validator (or a future
+/// code path that bypassed `core::zen::endpoint::register`) could send
+/// `D:ZenCache` / `\ZenCache` / `ZenCache` straight into `zen.lua`,
+/// where Windows / zen would resolve against process CWD.
 pub(crate) fn validate_data_dir_safe(p: &str) -> UecmResult<()> {
     let trimmed = p.trim();
     if trimmed.is_empty() {
@@ -1956,6 +1960,25 @@ pub(crate) fn validate_data_dir_safe(p: &str) -> UecmResult<()> {
         return Err(UecmError::InvalidInput(format!(
             "endpoint data_dir {p:?} uses a Win32 device namespace prefix (\\\\?\\ / \\\\.\\); \
              re-register without the prefix"
+        )));
+    }
+    // Codex round-20 P2: require fully-qualified absolute path (drive-abs
+    // or UNC). Symmetric with `validate_service_data_dir` and the
+    // register-time `core::zen::endpoint::validate_data_dir`. Without this,
+    // a pre-existing relative `data_dir` row in the DB silently flows into
+    // `zen.lua` and resolves against the editor / service process CWD.
+    let bytes = trimmed.as_bytes();
+    let is_drive_abs = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/');
+    let is_unc = trimmed.starts_with(r"\\") || trimmed.starts_with("//");
+    if !(is_drive_abs || is_unc) {
+        return Err(UecmError::InvalidInput(format!(
+            "endpoint data_dir {p:?} must be a fully-qualified absolute path \
+             (e.g. 'D:\\ZenCache' or '\\\\host\\share\\Zen'); drive-relative / \
+             root-relative paths resolve against process CWD on Windows. \
+             Re-register the endpoint with an absolute path."
         )));
     }
     let normalized = trimmed.replace('/', r"\");
@@ -3771,6 +3794,30 @@ mod tests {
                 ),
                 "should reject {bad}"
             );
+        }
+    }
+
+    // Codex round-20 P2: lua-preview / apply-config must reject the same
+    // relative shapes the register-time guard now blocks. Without this,
+    // a pre-existing DB row (registered before the new validator landed)
+    // would silently flow into `server.datadir` and resolve against
+    // process CWD.
+    #[test]
+    fn validate_data_dir_safe_rejects_relative_paths() {
+        for bad in [
+            "D:ZenCache",   // drive-relative
+            r"\ZenCache",   // root-relative
+            "ZenCache",     // bare relative
+            r"sub\dir",
+        ] {
+            let err = validate_data_dir_safe(bad).unwrap_err();
+            match err {
+                UecmError::InvalidInput(msg) => assert!(
+                    msg.contains("fully-qualified absolute path"),
+                    "wrong error for {bad}: {msg}"
+                ),
+                other => panic!("expected InvalidInput for {bad}, got {other:?}"),
+            }
         }
     }
 

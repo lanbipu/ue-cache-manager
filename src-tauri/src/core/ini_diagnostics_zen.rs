@@ -626,7 +626,7 @@ fn rule_r015(
     out
 }
 
-fn rule_r016(_file: &ParsedFile, ctx: &ZenRuleContext<'_>) -> Vec<Finding> {
+fn rule_r016(file: &ParsedFile, ctx: &ZenRuleContext<'_>) -> Vec<Finding> {
     let Some(check) = &ctx.install_binary else { return vec![] };
     if check.actual_sha256.eq_ignore_ascii_case(&check.expected_sha256) {
         return vec![];
@@ -635,11 +635,18 @@ fn rule_r016(_file: &ParsedFile, ctx: &ZenRuleContext<'_>) -> Vec<Finding> {
     // artifact, not an INI key, but operators want it surfaced alongside
     // other zen findings. The Finding path / section fields are populated
     // with stable, non-empty markers so downstream renderers don't choke.
+    //
+    // Codex round-20 P2: use the synthetic per-machine marker from
+    // `evaluate_machine_zen` (e.g. `<machine:5>`) instead of the
+    // hard-coded `<machine:zenserver.exe>` string. Multi-machine scans
+    // now produce per-machine findings that the UI can group / dedupe
+    // by `file_path`, matching the R018 promise above and the
+    // `evaluate_machine_zen` doc.
     vec![Finding {
         rule_id: "R016".into(),
         severity: Severity::Warning,
         category: Category::Engine,
-        file_path: "<machine:zenserver.exe>".into(),
+        file_path: file.path.clone(),
         section: None,
         key_name: Some("zenserver.exe".into()),
         line_number: None,
@@ -1280,6 +1287,35 @@ mod tests {
         let findings = evaluate_machine_zen(&ctx);
         let r016s: Vec<_> = findings.iter().filter(|f| f.rule_id == "R016").collect();
         assert_eq!(r016s.len(), 1);
+    }
+
+    // Codex round-20 P2: R016 must carry the per-machine marker
+    // (`<machine:{id}>`) on its `file_path`, not a hard-coded
+    // `<machine:zenserver.exe>`. Without that, multi-machine scans
+    // produce indistinguishable findings the UI can't group or dedupe.
+    #[test]
+    fn r016_finding_carries_per_machine_marker() {
+        let rules = make_rules();
+        let mut ctx = ctx_with(&rules);
+        ctx.install_binary = Some(InstallBinaryCheck {
+            actual_sha256: "aaaa".into(),
+            expected_sha256: "bbbb".into(),
+            build_version: "5.8.10".into(),
+        });
+
+        ctx.current_machine_id = Some(5);
+        let findings_m5 = evaluate_machine_zen(&ctx);
+        let r016_m5 = findings_m5.iter().find(|f| f.rule_id == "R016").unwrap();
+        assert_eq!(r016_m5.file_path, "<machine:5>");
+
+        ctx.current_machine_id = Some(7);
+        let findings_m7 = evaluate_machine_zen(&ctx);
+        let r016_m7 = findings_m7.iter().find(|f| f.rule_id == "R016").unwrap();
+        assert_eq!(r016_m7.file_path, "<machine:7>");
+
+        // Sanity: two machines produce DIFFERENT file_paths so a UI
+        // grouping by (rule_id, file_path) sees two distinct rows.
+        assert_ne!(r016_m5.file_path, r016_m7.file_path);
     }
 
     // ----- R017 ------------------------------------------------------------
