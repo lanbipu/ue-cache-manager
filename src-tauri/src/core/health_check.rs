@@ -138,6 +138,36 @@ pub fn zen_health_for_machine(
     machine_id: i64,
 ) -> UecmResult<HashMap<String, CheckOutcome>> {
     let mut out = HashMap::new();
+
+    // Codex round-19 P2: machines without ANY zen endpoint registered
+    // haven't opted into zen. Flagging their `zen_reachable` as
+    // `critical` produces false alarms on legacy / non-zen / not-yet-
+    // configured hosts that share the same health-run inventory.
+    // Emit `na` for all 4 zen keys instead — `tally_summary` segregates
+    // `na` into `skipped` (does NOT count toward healthy / warning /
+    // critical), so the report stays clean. Operators who DO want
+    // these machines on zen still see the "no endpoint" hint in the
+    // `na` message; once they run `zen register`, the next health run
+    // produces real outcomes.
+    let endpoints = zen_endpoints::list_for_machine(db, machine_id)?;
+    if endpoints.is_empty() {
+        let na = || CheckOutcome {
+            status: "na".into(),
+            message: "machine has no registered zen endpoint — zen checks skipped".into(),
+            sample: String::new(),
+            remediation: format!(
+                "If this host should run zen, register an endpoint first: \
+                 `uecm-cli zen register --machine {machine_id} --declared-port 8558 \
+                 --role local --lifecycle installed_service`."
+            ),
+        };
+        out.insert("zen_reachable".into(), na());
+        out.insert("zen_version_consistent".into(), na());
+        out.insert("zen_binary_intact".into(), na());
+        out.insert("zen_cache_provider_ready".into(), na());
+        return Ok(out);
+    }
+
     out.insert("zen_reachable".into(), check_zen_reachable(db, machine_id)?);
     out.insert(
         "zen_version_consistent".into(),
@@ -155,17 +185,16 @@ pub fn zen_health_for_machine(
 }
 
 fn check_zen_reachable(db: &Db, machine_id: i64) -> UecmResult<CheckOutcome> {
+    // Endpoint presence was already checked at `zen_health_for_machine`
+    // entry; reaching this function means the machine has at least one.
+    // Keep the defensive `is_empty` branch so a future caller calling
+    // this directly still gets a sensible answer.
     let endpoints = zen_endpoints::list_for_machine(db, machine_id)?;
     if endpoints.is_empty() {
         return Ok(CheckOutcome {
-            status: "critical".into(),
-            message: "No zen endpoints registered for this machine".into(),
+            status: "na".into(),
+            message: "no zen endpoints registered for this machine".into(),
             sample: "no endpoints".into(),
-            // Codex round-17 P3: match the actual CLI surface
-            // (`--machine <ID>` / `--declared-port <PORT>`, not
-            // `--host` / `--port`). Also remind the operator they need
-            // `--role` and `--lifecycle`, otherwise `zen register`
-            // refuses.
             remediation: format!(
                 "Run `uecm-cli zen register --machine {machine_id} --declared-port 8558 \
                  --role local --lifecycle installed_service` after installing zen \
@@ -750,14 +779,30 @@ mod tests {
         assert!(o.message.to_lowercase().contains("no zen probes"));
     }
 
+    // Codex round-19 P2: machines without ANY registered endpoint
+    // are treated as "opted out of zen" — all 4 zen rows return `na`
+    // (skipped) instead of `critical`. The CLI / Tauri health runs
+    // inject zen rows unconditionally, and non-zen / legacy machines
+    // shouldn't drive false alarms.
     #[test]
-    fn zen_reachable_critical_when_no_endpoints_registered() {
+    fn zen_health_returns_na_when_no_endpoints_registered() {
         let db = zen_test_db();
         let mid = add_machine(&db, "RENDER-01", "192.168.10.21");
         let outcomes = zen_health_for_machine(&db, mid).unwrap();
-        let o = outcomes.get("zen_reachable").unwrap();
-        assert_eq!(o.status, "critical");
-        assert!(o.remediation.contains("register"));
+        for key in [
+            "zen_reachable",
+            "zen_version_consistent",
+            "zen_binary_intact",
+            "zen_cache_provider_ready",
+        ] {
+            let o = outcomes.get(key).unwrap_or_else(|| panic!("missing {key}"));
+            assert_eq!(o.status, "na", "expected na for {key}, got {}", o.status);
+        }
+        // The remediation on at least one row should still point at register
+        // so an operator who DID intend zen for this machine sees the hint.
+        assert!(outcomes
+            .values()
+            .any(|o| o.remediation.contains("zen register")));
     }
 
     fn add_install(db: &Db, machine_id: i64, version: &str, sha: &str) {
@@ -778,6 +823,9 @@ mod tests {
         .unwrap();
     }
 
+    // Codex round-19 P2: post-na-gating, these tests must also register
+    // an endpoint on the machine they call `zen_health_for_machine` for,
+    // otherwise the new endpoint gate short-circuits to all-`na`.
     #[test]
     fn zen_version_consistent_healthy_when_three_machines_agree() {
         let db = zen_test_db();
@@ -787,6 +835,7 @@ mod tests {
         add_install(&db, m1, "5.8.10", "aaaa");
         add_install(&db, m2, "5.8.10", "aaaa");
         add_install(&db, m3, "5.8.10", "aaaa");
+        add_endpoint(&db, m1, 8558);
         let outcomes = zen_health_for_machine(&db, m1).unwrap();
         assert_eq!(outcomes.get("zen_version_consistent").unwrap().status, "healthy");
     }
@@ -800,6 +849,8 @@ mod tests {
         add_install(&db, m1, "5.8.10", "aaaa");
         add_install(&db, m2, "5.8.10", "aaaa");
         add_install(&db, m3, "5.8.9", "bbbb");
+        add_endpoint(&db, m1, 8558);
+        add_endpoint(&db, m3, 8559);
         let outcomes = zen_health_for_machine(&db, m3).unwrap();
         let o = outcomes.get("zen_version_consistent").unwrap();
         assert_eq!(o.status, "warning");
@@ -820,6 +871,7 @@ mod tests {
         let m2 = add_machine(&db, "R-02", "10.0.0.2");
         add_install(&db, m1, "5.8.10", "aaaa");
         add_install(&db, m2, "5.8.9", "bbbb");
+        add_endpoint(&db, m1, 8558);
         let outcomes = zen_health_for_machine(&db, m1).unwrap();
         assert_eq!(
             outcomes.get("zen_version_consistent").unwrap().status,
@@ -832,6 +884,7 @@ mod tests {
         let db = zen_test_db();
         let mid = add_machine(&db, "R-01", "10.0.0.1");
         add_install(&db, mid, "5.8.10", "aaaa");
+        add_endpoint(&db, mid, 8558);
         zbe::insert_baseline(
             &db,
             &ZenBinaryExpected {
@@ -852,6 +905,7 @@ mod tests {
         let db = zen_test_db();
         let mid = add_machine(&db, "R-01", "10.0.0.1");
         add_install(&db, mid, "5.8.10", "DRIFTED");
+        add_endpoint(&db, mid, 8558);
         zbe::insert_baseline(
             &db,
             &ZenBinaryExpected {
@@ -877,6 +931,7 @@ mod tests {
         let db = zen_test_db();
         let mid = add_machine(&db, "R-01", "10.0.0.1");
         add_install(&db, mid, "5.8.10", "aaaa");
+        add_endpoint(&db, mid, 8558);
         let outcomes = zen_health_for_machine(&db, mid).unwrap();
         let o = outcomes.get("zen_binary_intact").unwrap();
         assert_eq!(o.status, "unknown");
@@ -981,6 +1036,14 @@ mod tests {
         add_install(&db, m2, "5.8.10", "aa");
         add_install(&db, m3, "5.8.9", "bb");
         add_install(&db, m4, "5.8.8", "cc");
+        // Codex round-19 P2: each machine needs an endpoint registered
+        // so the new "opted into zen" gate at `zen_health_for_machine`
+        // entry doesn't short-circuit to all-`na`.
+        let mut next_port = 8558;
+        for mid in [m1, m2, m3, m4] {
+            add_endpoint(&db, mid, next_port);
+            next_port += 1;
+        }
         for mid in [m1, m2, m3, m4] {
             let outcomes = zen_health_for_machine(&db, mid).unwrap();
             assert_eq!(
