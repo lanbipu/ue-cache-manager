@@ -132,20 +132,17 @@ pub async fn probe_tcp_ports(host: &str, timeout_ms: u64) -> HashMap<String, Che
 ///
 /// All four rows are always returned (never an empty map) so the UI can
 /// show a stable layout. Status values are `"healthy"` / `"warning"` /
-/// `"critical"` / `"unknown"`.
-/// Compute the 4 `zen_*` health rows for one machine.
+/// `"critical"` / `"unknown"` / `"na"` (the last when the machine isn't
+/// opted into zen — see the entry-gate logic).
 ///
-/// `cluster_scope` restricts the cluster-majority calculation used by
-/// `zen_version_consistent` (R018-style). Pass `Some(&[..])` with the
-/// machine ids that are part of the CURRENT health run so a separate
-/// cluster's install rows don't pollute the majority. Pass `None` to
-/// use every install row in the DB (legacy behavior, kept for callers
-/// that don't have a scope — e.g. one-shot CLI invocations).
-///
-/// Codex round-21 P2: without scoping, scanning a 2-machine cluster on
-/// 5.8.10 while a separate 3-machine cluster on 5.8.9 sits in the same
-/// DB flagged the in-scan machines as outliers — the wrong majority
-/// won. `cluster_scope` makes the contract explicit at the call site.
+/// `cluster_scope` (Codex round-21 P2) restricts the cluster-majority
+/// calculation used by `zen_version_consistent`. Pass `Some(&[..])` with
+/// the machine ids that are part of the CURRENT health run so a separate
+/// cluster's install rows in the same DB don't pollute the majority.
+/// Pass `None` to use every install row (legacy / single-cluster
+/// callers). Without scoping, scanning a 2-machine cluster on 5.8.10
+/// alongside an unrelated 3-machine cluster on 5.8.9 would flag the
+/// in-scan machines as outliers because the wrong majority won.
 pub fn zen_health_for_machine(
     db: &Db,
     machine_id: i64,
