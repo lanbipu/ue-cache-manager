@@ -10,6 +10,7 @@ pub mod health_check;
 pub mod health_probes;
 pub mod ini_apply;
 pub mod ini_diagnostics;
+pub mod ini_diagnostics_zen;
 pub mod ini_editor;
 pub mod ini_scanner;
 pub mod loopback;

@@ -113,6 +113,21 @@ fn scan_inis_summary(
             &machine.ip, "UE-LocalDataCachePath", &cred_row.username, &password,
         ).ok().flatten();
 
+        // Auto-enable zen rules when the machine has a registered endpoint.
+        // No flag — fewer surprises; the moment an operator runs
+        // `uecm-cli zen register` the next INI scan starts reporting
+        // R012-R018. UE version hint = highest install on this machine
+        // by NUMERIC (major, minor) order. Codex P2: lexicographic max
+        // would pick "5.9" over "5.10", routing R012-R015 through wrong
+        // overrides / verified-version policy.
+        let ue_version_hint: Option<String> = ini_scanner::pick_highest_ue_version(&installs);
+        let zen_ctx_owned = ini_scanner::build_zen_ctx_for_machine(
+            &db,
+            mid,
+            ue_version_hint.as_deref(),
+        )?;
+        let zen_ctx = zen_ctx_owned.as_ref().map(|o| o.as_ctx());
+
         let inputs = ScanInputs {
             host: &machine.ip,
             credential: Some((&cred_row.username, &password)),
@@ -120,6 +135,7 @@ fn scan_inis_summary(
             user_profile: &user_profile,
             project_roots: &project_roots,
             env_state,
+            zen_ctx: zen_ctx.as_ref(),
         };
 
         let outcome = ini_scanner::scan_machine(&inputs)?;
@@ -217,6 +233,7 @@ fn paths_for_machines(
         .map(|machine_id| (*machine_id, project_paths.to_vec()))
         .collect()
 }
+
 
 #[tauri::command]
 pub fn list_findings_for_run(db: State<'_, Db>, scan_run_id: i64) -> UecmResult<Vec<IniFinding>> {
