@@ -378,23 +378,45 @@ fn deep_scan(
 
     let mut scanned = 0usize;
     let mut skipped = 0usize;
+    let mut failed = 0usize;
     for id in &ids {
-        // Step 1: refresh. WinRM-unreachable -> skip the rest for this machine
-        // (per spec) and continue the batch.
-        if let Err(e) = refresh(ctx, *id, &sub_cred) {
-            skipped += 1;
-            ctx.emitter
-                .emit_event(&Event::Completed {
-                    summary: json!({
-                        "machine_id": id,
-                        "step": "deep_scan",
-                        "skipped": true,
-                        "reason": format!("refresh failed (WinRM unreachable?): {}", e),
-                        "hint": "run `uecm-cli machine authorize` to open WinRM first",
-                    }),
-                })
-                .ok();
-            continue;
+        // Step 1: refresh. Classify the error so we don't mislabel operator/input
+        // problems as a "WinRM closed" skip:
+        //   - InvalidInput (machine id not found, bad credential combo) = real
+        //     command failure → report as failed, no "run authorize" hint.
+        //   - anything else (WinRM probe/exec failure) = target likely not
+        //     authorized yet → skip + hint, batch continues.
+        match refresh(ctx, *id, &sub_cred) {
+            Ok(()) => {}
+            Err(e @ UecmError::InvalidInput(_)) => {
+                failed += 1;
+                ctx.emitter
+                    .emit_event(&Event::Completed {
+                        summary: json!({
+                            "machine_id": id,
+                            "step": "deep_scan",
+                            "failed": true,
+                            "error": e.to_string(),
+                        }),
+                    })
+                    .ok();
+                continue;
+            }
+            Err(e) => {
+                skipped += 1;
+                ctx.emitter
+                    .emit_event(&Event::Completed {
+                        summary: json!({
+                            "machine_id": id,
+                            "step": "deep_scan",
+                            "skipped": true,
+                            "reason": format!("WinRM probe/exec failed: {}", e),
+                            "hint": "run `uecm-cli machine authorize` to open WinRM first",
+                        }),
+                    })
+                    .ok();
+                continue;
+            }
         }
         // Step 2: INI scan. A sub-step error is recorded but MUST NOT abort the
         // batch — match-and-continue, never `?`.
@@ -431,7 +453,7 @@ fn deep_scan(
 
     ctx.emitter
         .emit_event(&Event::Completed {
-            summary: json!({ "machines": ids.len(), "scanned": scanned, "skipped": skipped }),
+            summary: json!({ "machines": ids.len(), "scanned": scanned, "skipped": skipped, "failed": failed }),
         })
         .ok();
     Ok(())
@@ -508,6 +530,23 @@ mod tests {
         let cred = crate::cli::credential_args::CredentialArgs::inline(None);
         let res = deep_scan(&mut ctx, vec![1, 2], false, &cred);
         assert!(res.is_ok(), "batch must complete even when every machine is skipped");
+    }
+
+    #[test]
+    fn deep_scan_nonexistent_id_is_failed_not_skipped_and_batch_continues() {
+        let (db, buf) = setup();
+        let emitter: Box<dyn Emitter> = Box::new(NdjsonEmitter::new(buf));
+        let mut ctx = Ctx {
+            db: Some(db),
+            db_path: PathBuf::from(":memory:"),
+            emitter,
+            json_mode: true,
+        };
+        // id 999 does not exist → refresh returns InvalidInput → classified as a
+        // failure (not a WinRM skip), but the batch still completes Ok.
+        let cred = crate::cli::credential_args::CredentialArgs::inline(None);
+        let res = deep_scan(&mut ctx, vec![999], false, &cred);
+        assert!(res.is_ok(), "batch completes; per-machine failure is reported in summary");
     }
 
     #[test]
