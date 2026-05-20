@@ -35,6 +35,7 @@ pub fn bootstrap_winrm(
         &credential.username,
         &password,
         enable_local_account_remote_admin,
+        false,
     )?;
 
     if result.winrm_ok {

@@ -23,7 +23,14 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$LocalScriptPath,
 
-    [switch]$EnableLocalAccountRemoteAdmin
+    [switch]$EnableLocalAccountRemoteAdmin,
+
+    # Full render-node provisioning switches, forwarded to the remote enable-winrm.ps1.
+    [switch]$EnableSmbServer,
+    [switch]$EnableWmi,
+    [switch]$EnableLongPaths,
+    [string]$SetExecutionPolicy,
+    [string]$PowerProfile
 )
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -122,6 +129,11 @@ try {
     if ($EnableLocalAccountRemoteAdmin) {
         $remoteArgs += '-EnableLocalAccountRemoteAdmin'
     }
+    if ($EnableSmbServer) { $remoteArgs += '-EnableSmbServer' }
+    if ($EnableWmi) { $remoteArgs += '-EnableWmi' }
+    if ($EnableLongPaths) { $remoteArgs += '-EnableLongPaths' }
+    if ($SetExecutionPolicy) { $remoteArgs += @('-SetExecutionPolicy', $SetExecutionPolicy) }
+    if ($PowerProfile) { $remoteArgs += @('-PowerProfile', $PowerProfile) }
 
     $output = (& $PsExecPath @remoteArgs 2>&1) -join "`n"
     $trustedHostsChange = Set-UecmOperatorTrustedHost -Target $HostName

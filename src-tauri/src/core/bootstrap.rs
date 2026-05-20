@@ -30,6 +30,7 @@ pub fn enable_winrm_with_psexec(
     username: &str,
     password: &str,
     enable_local_account_remote_admin: bool,
+    full_provision: bool,
 ) -> UecmResult<WinrmBootstrapResult> {
     let psexec = powershell::vendor_path("PsExec64.exe");
     let psexec_str = psexec.to_string_lossy().into_owned();
@@ -50,6 +51,18 @@ pub fn enable_winrm_with_psexec(
     ];
     if enable_local_account_remote_admin {
         args.push("-EnableLocalAccountRemoteAdmin");
+    }
+    // Full render-node provisioning (used by `machine authorize`): turn on the
+    // opt-in switches enable-winrm.ps1 leaves off by default so the node ends up
+    // DDC-ready (SMB share path, UE long paths, WMI for refresh, render power plan).
+    if full_provision {
+        args.push("-EnableSmbServer");
+        args.push("-EnableWmi");
+        args.push("-EnableLongPaths");
+        args.push("-SetExecutionPolicy");
+        args.push("RemoteSigned");
+        args.push("-PowerProfile");
+        args.push("HighPerformance");
     }
 
     let mut result: WinrmBootstrapResult =

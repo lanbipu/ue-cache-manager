@@ -53,9 +53,23 @@ fn save(
     pass_stdin: bool,
     kind: &str,
 ) -> UecmResult<()> {
+    let password = read_password(pass_inline, pass_stdin)?;
+    save_resolved(ctx, alias, user, &password, kind)
+}
+
+/// Persist an already-resolved `(user, password)` credential under `alias`
+/// (cmdkey + DPAPI + SQLite metadata). Shared by `cred save` and by
+/// `machine authorize --save-as` — the latter has the password in hand already
+/// and must not re-read stdin.
+pub(crate) fn save_resolved(
+    ctx: &mut Ctx<'_>,
+    alias: &str,
+    user: &str,
+    password: &str,
+    kind: &str,
+) -> UecmResult<()> {
     use crate::core::credentials as core_creds;
 
-    let password = read_password(pass_inline, pass_stdin)?;
     let username = core_creds::normalize_username_for_storage(user);
 
     // Validate --kind BEFORE any side effects (cmdkey / DPAPI). A typo here
@@ -63,10 +77,10 @@ fn save(
     let _validated_kind = parse_credential_kind(kind)?;
 
     // Step 2: cmdkey first. If this fails, nothing else gets written.
-    core_creds::store(alias, &username, &password)?;
+    core_creds::store(alias, &username, password)?;
 
     // Step 3: DPAPI. If it fails, roll back cmdkey before propagating.
-    if let Err(dpapi_err) = core_creds::store_password(alias, &password) {
+    if let Err(dpapi_err) = core_creds::store_password(alias, password) {
         if let Err(rollback_err) = core_creds::delete(alias) {
             tracing::warn!(
                 alias = %alias,
