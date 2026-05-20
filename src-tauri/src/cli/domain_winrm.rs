@@ -104,7 +104,9 @@ fn bootstrap_remote(
     pass: &str,
     enable_local_admin: bool,
 ) -> UecmResult<()> {
-    let result = bootstrap::enable_winrm_with_psexec(host, user, pass, enable_local_admin)?;
+    // `winrm bootstrap` keeps its existing scope (WinRM core only); full render-node
+    // provisioning is done via `machine authorize`.
+    let result = bootstrap::enable_winrm_with_psexec(host, user, pass, enable_local_admin, false)?;
     let bootstrap_ok = result.ok;
     let message = result.message.clone();
     ctx.emitter.emit_result(&result).ok();

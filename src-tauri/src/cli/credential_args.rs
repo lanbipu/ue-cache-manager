@@ -65,6 +65,27 @@ impl CredentialArgs {
         }
     }
 
+    /// Build a stdin-free `CredentialArgs` from an already-resolved credential.
+    /// Used by orchestration commands that resolve once then fan out to many
+    /// sub-handlers — calling `resolve` repeatedly would re-read `--pass-stdin`
+    /// (only readable once) or re-hit DPAPI per sub-call.
+    pub fn inline(resolved: Option<(String, String)>) -> Self {
+        match resolved {
+            Some((user, pass)) => CredentialArgs {
+                cred_alias: None,
+                user: Some(user),
+                pass: Some(pass),
+                pass_stdin: false,
+            },
+            None => CredentialArgs {
+                cred_alias: None,
+                user: None,
+                pass: None,
+                pass_stdin: false,
+            },
+        }
+    }
+
     /// Resolve to `(username, password)` if any credential was supplied;
     /// `None` means inherit the caller's Kerberos/NTLM context.
     pub fn resolve(&self, db: &Db) -> UecmResult<Option<(String, String)>> {
@@ -119,6 +140,17 @@ mod tests {
         };
         let db = fresh_db();
         assert!(args.resolve(&db).unwrap().is_none());
+    }
+
+    #[test]
+    fn inline_from_resolved_roundtrips_without_stdin() {
+        let reused = CredentialArgs::inline(Some(("alice".into(), "pw".into())));
+        let db = fresh_db();
+        // resolve must not read stdin nor hit DPAPI — it just returns the inline pair.
+        assert_eq!(reused.resolve(&db).unwrap(), Some(("alice".into(), "pw".into())));
+
+        let none = CredentialArgs::inline(None);
+        assert!(none.resolve(&db).unwrap().is_none());
     }
 
     #[test]

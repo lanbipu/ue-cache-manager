@@ -20,6 +20,10 @@ UECM ↔ Zen 全链路集成已合 main（PR #10，2026-05-20）。改 zen 相�
 
 不读直接动手大概率会写出违反约定的代码。
 
+## 引用 / 撰写 CLI 命令
+
+后续凡是要引用 uecm-cli 命令、或在文档 / 代码 / 回复里写任何 CLI 相关命令，都必须先查 `uecm-cli <域> --help`（或读 `src-tauri/src/cli/args.rs`）核对真实 flag，不能凭印象写。注意 `src-tauri/target/release` 里的二进制可能比源码旧，核对以 args.rs / 重新 build 出的 help 为准。
+
 <!-- DOCSMITH:KNOWLEDGE:BEGIN -->
 **任何新增功能从设计阶段就必须考虑 CLI 暴露**
 

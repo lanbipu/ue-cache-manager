@@ -188,6 +188,33 @@ pub enum MachineAction {
     },
     /// Rename a machine.
     Rename { id: i64, hostname: String },
+    /// Deep scan a set of machines: refresh (UE/GPU) + INI scan + health, per machine.
+    /// WinRM-unreachable machines are skipped (run `machine authorize` first) and the
+    /// batch continues.
+    DeepScan {
+        #[arg(long, value_name = "M1,M2,...", value_delimiter = ',', conflicts_with = "all")]
+        machine_ids: Vec<i64>,
+        /// Deep-scan every machine in inventory.
+        #[arg(long, conflicts_with = "machine_ids")]
+        all: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Authorize a set of machines for remote management: winrm preflight -> bootstrap
+    /// (Path B remote PsExec). Machines where Path B is not viable fall back to a USB
+    /// script hint. The batch continues past per-machine failures.
+    Authorize {
+        #[arg(long, value_name = "M1,M2,...", value_delimiter = ',', conflicts_with = "all")]
+        machine_ids: Vec<i64>,
+        /// Authorize every machine in inventory.
+        #[arg(long, conflicts_with = "machine_ids")]
+        all: bool,
+        /// Save the resolved --user/--pass-stdin credential as this DPAPI alias for reuse.
+        #[arg(long, value_name = "ALIAS")]
+        save_as: Option<String>,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
 }
 
 // ---------- winrm ----------
@@ -1258,6 +1285,37 @@ mod tests {
             _ => panic!("wrong variant"),
         }
         assert!(!cli.json);
+    }
+
+    #[test]
+    fn parses_machine_deep_scan() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "machine", "deep-scan", "--machine-ids", "3,4,5", "--cred-alias", "prod",
+        ])
+        .unwrap();
+        match cli.command {
+            Domain::Machine { action: MachineAction::DeepScan { machine_ids, all, .. } } => {
+                assert_eq!(machine_ids, vec![3, 4, 5]);
+                assert!(!all);
+            }
+            _ => panic!("expected DeepScan"),
+        }
+    }
+
+    #[test]
+    fn parses_machine_authorize_with_save_as() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "machine", "authorize", "--all", "--user", "Administrator", "--pass-stdin",
+            "--save-as", "prod",
+        ])
+        .unwrap();
+        match cli.command {
+            Domain::Machine { action: MachineAction::Authorize { all, save_as, .. } } => {
+                assert!(all);
+                assert_eq!(save_as.as_deref(), Some("prod"));
+            }
+            _ => panic!("expected Authorize"),
+        }
     }
 
     #[test]

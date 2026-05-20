@@ -23,13 +23,26 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$LocalScriptPath,
 
-    [switch]$EnableLocalAccountRemoteAdmin
+    [switch]$EnableLocalAccountRemoteAdmin,
+
+    # Full render-node provisioning switches, forwarded to the remote enable-winrm.ps1.
+    [switch]$EnableSmbServer,
+    [switch]$EnableWmi,
+    [switch]$EnableLongPaths,
+    [string]$SetExecutionPolicy,
+    [string]$PowerProfile
 )
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 try { chcp 65001 | Out-Null } catch {}
 
 $ErrorActionPreference = 'Stop'
+
+# Normalize username ONCE, identically to preflight-path-b.ps1: for workgroup /
+# local-admin auth, prefix bare usernames with <host>\ so both the ADMIN$ mount
+# and PsExec authenticate as a local account on the TARGET. Must match preflight
+# or a credential that passes preflight could fail bootstrap (different account).
+$UserResolved = if ($Username -match '[\\@]') { $Username } else { "$HostName\$Username" }
 
 function Test-UecmRemoteWsMan {
     param([string]$ComputerName)
@@ -93,7 +106,7 @@ try {
         throw "local bootstrap script not found at $LocalScriptPath"
     }
 
-    $credential = New-UecmCredential -User $Username -Pass $Password
+    $credential = New-UecmCredential -User $UserResolved -Pass $Password
     New-PSDrive `
         -Name $driveName `
         -PSProvider FileSystem `
@@ -105,7 +118,7 @@ try {
 
     $remoteArgs = @(
         "\\$HostName",
-        '-u', $Username,
+        '-u', $UserResolved,
         '-p', $Password,
         '-accepteula',
         '-nobanner',
@@ -122,6 +135,11 @@ try {
     if ($EnableLocalAccountRemoteAdmin) {
         $remoteArgs += '-EnableLocalAccountRemoteAdmin'
     }
+    if ($EnableSmbServer) { $remoteArgs += '-EnableSmbServer' }
+    if ($EnableWmi) { $remoteArgs += '-EnableWmi' }
+    if ($EnableLongPaths) { $remoteArgs += '-EnableLongPaths' }
+    if ($SetExecutionPolicy) { $remoteArgs += @('-SetExecutionPolicy', $SetExecutionPolicy) }
+    if ($PowerProfile) { $remoteArgs += @('-PowerProfile', $PowerProfile) }
 
     $output = (& $PsExecPath @remoteArgs 2>&1) -join "`n"
     $trustedHostsChange = Set-UecmOperatorTrustedHost -Target $HostName

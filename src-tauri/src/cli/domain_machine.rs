@@ -19,6 +19,10 @@ pub fn handle(ctx: &mut Ctx<'_>, action: MachineAction) -> UecmResult<()> {
         MachineAction::Detail { id } => detail(ctx, id),
         MachineAction::Delete { id, yes, dry_run } => delete(ctx, id, yes, dry_run),
         MachineAction::Rename { id, hostname } => rename(ctx, id, hostname),
+        MachineAction::DeepScan { machine_ids, all, cred } => deep_scan(ctx, machine_ids, all, &cred),
+        MachineAction::Authorize { machine_ids, all, save_as, cred } => {
+            authorize(ctx, machine_ids, all, save_as, &cred)
+        }
     }
 }
 
@@ -330,6 +334,304 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64, cred: &crate::cli::credential_args::Crede
     Ok(())
 }
 
+/// Expand a `--machine-ids` / `--all` selection into concrete machine ids.
+/// Shared by `deep_scan` and `authorize`.
+fn resolve_target_ids(db: &crate::data::Db, machine_ids: &[i64], all: bool) -> UecmResult<Vec<i64>> {
+    if all {
+        Ok(machines::list_all(db)?
+            .into_iter()
+            .filter_map(|m| m.id)
+            .collect())
+    } else if machine_ids.is_empty() {
+        Err(UecmError::InvalidInput(
+            "one of --machine-ids or --all is required".into(),
+        ))
+    } else {
+        Ok(machine_ids.to_vec())
+    }
+}
+
+fn deep_scan(
+    ctx: &mut Ctx<'_>,
+    machine_ids: Vec<i64>,
+    all: bool,
+    cred: &crate::cli::credential_args::CredentialArgs,
+) -> UecmResult<()> {
+    let ids = {
+        let db = ctx.require_db()?;
+        resolve_target_ids(db, &machine_ids, all)?
+    };
+    // Resolve credentials ONCE (stdin/DPAPI). `resolved` is reused for the
+    // explicit reachability probe; `sub_cred` (stdin-free) is reused for every
+    // sub-handler — `--pass-stdin` is only readable once.
+    let resolved = {
+        let db = ctx.require_db()?;
+        cred.resolve(db)?
+    };
+    let sub_cred = crate::cli::credential_args::CredentialArgs::inline(resolved.clone());
+
+    ctx.emitter
+        .emit_event(&Event::Started {
+            task_type: "machine_deep_scan".into(),
+            task_id: None,
+            metadata: json!({ "machines": ids.len() }),
+        })
+        .ok();
+
+    // Phase 1 (per machine): WinRM reachability probe + refresh (UE/GPU). UE/GPU
+    // detection is inherently per-machine, so it stays in the loop. Classify:
+    //   - machine id not found            -> failed
+    //   - WinRM probe unreachable         -> skip + "run authorize" hint
+    //   - probe OK but refresh later fails -> failed (NOT a skip — the box is
+    //     reachable, so don't mislead the operator into re-running authorize)
+    let mut reachable: Vec<i64> = Vec::new();
+    let mut skipped = 0usize;
+    let mut failed = 0usize;
+    for id in &ids {
+        let host = {
+            let db = ctx.require_db()?;
+            match machines::find_by_id(db, *id)? {
+                Some(m) => m.ip,
+                None => {
+                    failed += 1;
+                    ctx.emitter
+                        .emit_event(&Event::Completed {
+                            summary: json!({ "machine_id": id, "step": "deep_scan", "failed": true, "error": "machine not found" }),
+                        })
+                        .ok();
+                    continue;
+                }
+            }
+        };
+
+        // Explicit reachability probe so we can tell "WinRM closed" (skip) apart
+        // from "reachable but detection failed" (failure). `refresh` re-probes —
+        // the small double-probe is worth the accurate classification.
+        let probe_ok = match &resolved {
+            Some((u, p)) => crate::core::winrm::probe_with_credential(&host, u, p)
+                .map(|r| r.ok)
+                .unwrap_or(false),
+            None => crate::core::winrm::probe(&host).map(|r| r.ok).unwrap_or(false),
+        };
+        if !probe_ok {
+            skipped += 1;
+            ctx.emitter
+                .emit_event(&Event::Completed {
+                    summary: json!({
+                        "machine_id": id,
+                        "host": host,
+                        "step": "deep_scan",
+                        "skipped": true,
+                        "reason": "WinRM unreachable",
+                        "hint": "run `uecm-cli machine authorize` to open WinRM first",
+                    }),
+                })
+                .ok();
+            continue;
+        }
+
+        if let Err(e) = refresh(ctx, *id, &sub_cred) {
+            failed += 1;
+            ctx.emitter
+                .emit_event(&Event::Completed {
+                    summary: json!({
+                        "machine_id": id,
+                        "host": host,
+                        "step": "refresh",
+                        "failed": true,
+                        "error": format!("WinRM reachable but refresh failed: {}", e),
+                    }),
+                })
+                .ok();
+            continue;
+        }
+        reachable.push(*id);
+    }
+
+    // Phase 2 (batch over reachable set): INI scan + health run ONCE so the
+    // cross-machine consistency rules (zen / cluster-majority / gpu_consistency)
+    // see the whole set, not N single-machine clusters. Sub-step errors are
+    // recorded but never abort the command.
+    if !reachable.is_empty() {
+        if let Err(e) = crate::cli::domain_ini::handle(
+            ctx,
+            crate::cli::args::IniAction::Scan { machine_ids: reachable.clone(), cred: sub_cred.clone() },
+        ) {
+            ctx.emitter
+                .emit_event(&Event::Completed {
+                    summary: json!({ "step": "ini_scan", "error": e.to_string() }),
+                })
+                .ok();
+        }
+        if let Err(e) = crate::cli::domain_health::handle(
+            ctx,
+            crate::cli::args::HealthAction::Run {
+                machine_ids: reachable.clone(),
+                cidr: None,
+                all: false,
+                expected_local_path: String::new(),
+                expected_shared_path: String::new(),
+                cred: sub_cred.clone(),
+            },
+        ) {
+            ctx.emitter
+                .emit_event(&Event::Completed {
+                    summary: json!({ "step": "health_run", "error": e.to_string() }),
+                })
+                .ok();
+        }
+    }
+
+    ctx.emitter
+        .emit_event(&Event::Completed {
+            summary: json!({ "machines": ids.len(), "scanned": reachable.len(), "skipped": skipped, "failed": failed }),
+        })
+        .ok();
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum AuthorizeStep {
+    Bootstrap,
+    UsbFallback,
+}
+
+/// Pure mapping: Path B preflight verdict -> next action. `viable` / `likely_viable`
+/// proceed to bootstrap; everything else (`blocked` / `uncertain`) falls back to USB.
+pub(crate) fn authorize_decision(verdict: &str) -> AuthorizeStep {
+    match verdict {
+        "viable" | "likely_viable" => AuthorizeStep::Bootstrap,
+        _ => AuthorizeStep::UsbFallback,
+    }
+}
+
+fn authorize(
+    ctx: &mut Ctx<'_>,
+    machine_ids: Vec<i64>,
+    all: bool,
+    save_as: Option<String>,
+    cred: &crate::cli::credential_args::CredentialArgs,
+) -> UecmResult<()> {
+    // Credentials are REQUIRED — preflight + bootstrap need a local admin user/pass.
+    let (user, pass) = {
+        let db = ctx.require_db()?;
+        cred.resolve(db)?.ok_or_else(|| {
+            UecmError::InvalidInput(
+                "machine authorize requires credentials (--cred-alias or --user/--pass-stdin)".into(),
+            )
+        })?
+    };
+
+    // Optional: persist the resolved credential as an alias for later reuse
+    // (so the follow-up `machine deep-scan --cred-alias <alias>` can find it).
+    if let Some(alias) = save_as.as_deref() {
+        crate::cli::domain_cred::save_resolved(ctx, alias, &user, &pass, "winrm")?;
+    }
+
+    let ids = {
+        let db = ctx.require_db()?;
+        resolve_target_ids(db, &machine_ids, all)?
+    };
+
+    ctx.emitter
+        .emit_event(&Event::Started {
+            task_type: "machine_authorize".into(),
+            task_id: None,
+            metadata: json!({ "machines": ids.len() }),
+        })
+        .ok();
+
+    let mut authorized = 0usize;
+    let mut fallback = 0usize;
+    let mut failed = 0usize;
+    for id in &ids {
+        let host = {
+            let db = ctx.require_db()?;
+            match machines::find_by_id(db, *id)? {
+                Some(m) => m.ip,
+                None => {
+                    failed += 1;
+                    ctx.emitter
+                        .emit_event(&Event::Completed {
+                            summary: json!({ "machine_id": id, "error": "machine not found" }),
+                        })
+                        .ok();
+                    continue;
+                }
+            }
+        };
+
+        // Preflight (Shallow; no SCM probe) — classify the verdict.
+        let pf = match crate::core::preflight::preflight_path_b(&host, &user, &pass, false) {
+            Ok(r) => r,
+            Err(e) => {
+                failed += 1;
+                ctx.emitter
+                    .emit_event(&Event::Completed {
+                        summary: json!({ "machine_id": id, "host": host, "step": "preflight", "error": e.to_string() }),
+                    })
+                    .ok();
+                continue;
+            }
+        };
+
+        match authorize_decision(&pf.verdict) {
+            AuthorizeStep::Bootstrap => {
+                // Full render-node provisioning: local-admin token filter + SMB/WMI/
+                // LongPaths/ExecutionPolicy/HighPerformance.
+                match crate::core::bootstrap::enable_winrm_with_psexec(&host, &user, &pass, true, true) {
+                    Ok(b) if b.ok => {
+                        authorized += 1;
+                        ctx.emitter
+                            .emit_event(&Event::Completed {
+                                summary: json!({ "machine_id": id, "host": host, "authorized": true, "message": b.message }),
+                            })
+                            .ok();
+                    }
+                    Ok(b) => {
+                        failed += 1;
+                        ctx.emitter
+                            .emit_event(&Event::Completed {
+                                summary: json!({ "machine_id": id, "host": host, "authorized": false, "error": b.message }),
+                            })
+                            .ok();
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        ctx.emitter
+                            .emit_event(&Event::Completed {
+                                summary: json!({ "machine_id": id, "host": host, "step": "bootstrap", "error": e.to_string() }),
+                            })
+                            .ok();
+                    }
+                }
+            }
+            AuthorizeStep::UsbFallback => {
+                fallback += 1;
+                ctx.emitter
+                    .emit_event(&Event::Completed {
+                        summary: json!({
+                            "machine_id": id,
+                            "host": host,
+                            "path_b_unavailable": true,
+                            "verdict": pf.verdict,
+                            "reason": pf.reason,
+                            "hint": "Path B not viable — run `uecm-cli winrm bootstrap-script` and execute it on the machine via USB",
+                        }),
+                    })
+                    .ok();
+            }
+        }
+    }
+
+    ctx.emitter
+        .emit_event(&Event::Completed {
+            summary: json!({ "machines": ids.len(), "authorized": authorized, "usb_fallback": fallback, "failed": failed }),
+        })
+        .ok();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,6 +678,85 @@ mod tests {
 
         // Verify that we got past all operations
         // (output checking omitted as NdjsonEmitter writes to a moved buffer)
+    }
+
+    #[test]
+    fn deep_scan_skips_winrm_unreachable_and_completes_batch() {
+        let (db, buf) = setup();
+        let emitter: Box<dyn Emitter> = Box::new(NdjsonEmitter::new(buf));
+        let mut ctx = Ctx {
+            db: Some(db),
+            db_path: PathBuf::from(":memory:"),
+            emitter,
+            json_mode: true,
+        };
+
+        add(&mut ctx, "10.0.0.1".to_string(), Some("m1".to_string())).unwrap();
+        add(&mut ctx, "10.0.0.2".to_string(), Some("m2".to_string())).unwrap();
+
+        // No creds; on non-Windows the WinRM probe inside refresh fails, so both
+        // machines are skipped — but the batch must still complete with Ok.
+        let cred = crate::cli::credential_args::CredentialArgs::inline(None);
+        let res = deep_scan(&mut ctx, vec![1, 2], false, &cred);
+        assert!(res.is_ok(), "batch must complete even when every machine is skipped");
+    }
+
+    #[test]
+    fn deep_scan_nonexistent_id_is_failed_not_skipped_and_batch_continues() {
+        let (db, buf) = setup();
+        let emitter: Box<dyn Emitter> = Box::new(NdjsonEmitter::new(buf));
+        let mut ctx = Ctx {
+            db: Some(db),
+            db_path: PathBuf::from(":memory:"),
+            emitter,
+            json_mode: true,
+        };
+        // id 999 does not exist → refresh returns InvalidInput → classified as a
+        // failure (not a WinRM skip), but the batch still completes Ok.
+        let cred = crate::cli::credential_args::CredentialArgs::inline(None);
+        let res = deep_scan(&mut ctx, vec![999], false, &cred);
+        assert!(res.is_ok(), "batch completes; per-machine failure is reported in summary");
+    }
+
+    #[test]
+    fn authorize_decision_maps_verdict() {
+        assert_eq!(authorize_decision("viable"), AuthorizeStep::Bootstrap);
+        assert_eq!(authorize_decision("likely_viable"), AuthorizeStep::Bootstrap);
+        assert_eq!(authorize_decision("blocked"), AuthorizeStep::UsbFallback);
+        assert_eq!(authorize_decision("uncertain"), AuthorizeStep::UsbFallback);
+        assert_eq!(authorize_decision("anything-else"), AuthorizeStep::UsbFallback);
+    }
+
+    #[test]
+    fn authorize_requires_credentials() {
+        let (db, buf) = setup();
+        let emitter: Box<dyn Emitter> = Box::new(NdjsonEmitter::new(buf));
+        let mut ctx = Ctx {
+            db: Some(db),
+            db_path: PathBuf::from(":memory:"),
+            emitter,
+            json_mode: true,
+        };
+        add(&mut ctx, "10.0.0.1".to_string(), Some("m1".to_string())).unwrap();
+        // inline(None) resolves to no credentials → authorize must reject.
+        let cred = crate::cli::credential_args::CredentialArgs::inline(None);
+        let res = authorize(&mut ctx, vec![1], false, None, &cred);
+        assert!(matches!(res, Err(UecmError::InvalidInput(_))));
+    }
+
+    #[test]
+    fn deep_scan_requires_a_selector() {
+        let (db, buf) = setup();
+        let emitter: Box<dyn Emitter> = Box::new(NdjsonEmitter::new(buf));
+        let mut ctx = Ctx {
+            db: Some(db),
+            db_path: PathBuf::from(":memory:"),
+            emitter,
+            json_mode: true,
+        };
+        let cred = crate::cli::credential_args::CredentialArgs::inline(None);
+        let res = deep_scan(&mut ctx, vec![], false, &cred);
+        assert!(res.is_err(), "no --machine-ids and no --all must error");
     }
 
     #[test]

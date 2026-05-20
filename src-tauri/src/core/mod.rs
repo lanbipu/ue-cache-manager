@@ -78,7 +78,7 @@ mod bootstrap_contract_tests {
     #[test]
     fn psexec_bootstrap_returns_powershell_error_on_non_windows() {
         let result =
-            bootstrap::enable_winrm_with_psexec("192.168.10.173", "admin", "secret", false);
+            bootstrap::enable_winrm_with_psexec("192.168.10.173", "admin", "secret", false, false);
         assert!(matches!(result, Err(crate::error::UecmError::PowerShell(_))));
     }
 }
