@@ -19,6 +19,10 @@ pub fn handle(ctx: &mut Ctx<'_>, action: MachineAction) -> UecmResult<()> {
         MachineAction::Detail { id } => detail(ctx, id),
         MachineAction::Delete { id, yes, dry_run } => delete(ctx, id, yes, dry_run),
         MachineAction::Rename { id, hostname } => rename(ctx, id, hostname),
+        MachineAction::DeepScan { machine_ids, all, cred } => deep_scan(ctx, machine_ids, all, &cred),
+        MachineAction::Authorize { machine_ids, all, save_as, cred } => {
+            authorize(ctx, machine_ids, all, save_as, &cred)
+        }
     }
 }
 
@@ -328,6 +332,14 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64, cred: &crate::cli::credential_args::Crede
     });
     ctx.emitter.emit_event(&Event::Completed { summary }).ok();
     Ok(())
+}
+
+fn deep_scan(_ctx: &mut Ctx<'_>, _ids: Vec<i64>, _all: bool, _cred: &crate::cli::credential_args::CredentialArgs) -> UecmResult<()> {
+    Err(UecmError::OperationFailed("deep_scan not implemented".into()))
+}
+
+fn authorize(_ctx: &mut Ctx<'_>, _ids: Vec<i64>, _all: bool, _save_as: Option<String>, _cred: &crate::cli::credential_args::CredentialArgs) -> UecmResult<()> {
+    Err(UecmError::OperationFailed("authorize not implemented".into()))
 }
 
 #[cfg(test)]
