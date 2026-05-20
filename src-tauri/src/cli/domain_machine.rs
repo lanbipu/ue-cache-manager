@@ -334,8 +334,107 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64, cred: &crate::cli::credential_args::Crede
     Ok(())
 }
 
-fn deep_scan(_ctx: &mut Ctx<'_>, _ids: Vec<i64>, _all: bool, _cred: &crate::cli::credential_args::CredentialArgs) -> UecmResult<()> {
-    Err(UecmError::OperationFailed("deep_scan not implemented".into()))
+/// Expand a `--machine-ids` / `--all` selection into concrete machine ids.
+/// Shared by `deep_scan` and `authorize`.
+fn resolve_target_ids(db: &crate::data::Db, machine_ids: &[i64], all: bool) -> UecmResult<Vec<i64>> {
+    if all {
+        Ok(machines::list_all(db)?
+            .into_iter()
+            .filter_map(|m| m.id)
+            .collect())
+    } else if machine_ids.is_empty() {
+        Err(UecmError::InvalidInput(
+            "one of --machine-ids or --all is required".into(),
+        ))
+    } else {
+        Ok(machine_ids.to_vec())
+    }
+}
+
+fn deep_scan(
+    ctx: &mut Ctx<'_>,
+    machine_ids: Vec<i64>,
+    all: bool,
+    cred: &crate::cli::credential_args::CredentialArgs,
+) -> UecmResult<()> {
+    let ids = {
+        let db = ctx.require_db()?;
+        resolve_target_ids(db, &machine_ids, all)?
+    };
+    // Resolve credentials ONCE (stdin/DPAPI), then reuse inline across every
+    // sub-call — `--pass-stdin` is only readable once.
+    let sub_cred = {
+        let db = ctx.require_db()?;
+        crate::cli::credential_args::CredentialArgs::inline(cred.resolve(db)?)
+    };
+
+    ctx.emitter
+        .emit_event(&Event::Started {
+            task_type: "machine_deep_scan".into(),
+            task_id: None,
+            metadata: json!({ "machines": ids.len() }),
+        })
+        .ok();
+
+    let mut scanned = 0usize;
+    let mut skipped = 0usize;
+    for id in &ids {
+        // Step 1: refresh. WinRM-unreachable -> skip the rest for this machine
+        // (per spec) and continue the batch.
+        if let Err(e) = refresh(ctx, *id, &sub_cred) {
+            skipped += 1;
+            ctx.emitter
+                .emit_event(&Event::Completed {
+                    summary: json!({
+                        "machine_id": id,
+                        "step": "deep_scan",
+                        "skipped": true,
+                        "reason": format!("refresh failed (WinRM unreachable?): {}", e),
+                        "hint": "run `uecm-cli machine authorize` to open WinRM first",
+                    }),
+                })
+                .ok();
+            continue;
+        }
+        // Step 2: INI scan. A sub-step error is recorded but MUST NOT abort the
+        // batch — match-and-continue, never `?`.
+        if let Err(e) = crate::cli::domain_ini::handle(
+            ctx,
+            crate::cli::args::IniAction::Scan { machine_ids: vec![*id], cred: sub_cred.clone() },
+        ) {
+            ctx.emitter
+                .emit_event(&Event::Completed {
+                    summary: json!({ "machine_id": id, "step": "ini_scan", "error": e.to_string() }),
+                })
+                .ok();
+        }
+        // Step 3: health run.
+        if let Err(e) = crate::cli::domain_health::handle(
+            ctx,
+            crate::cli::args::HealthAction::Run {
+                machine_ids: vec![*id],
+                cidr: None,
+                all: false,
+                expected_local_path: String::new(),
+                expected_shared_path: String::new(),
+                cred: sub_cred.clone(),
+            },
+        ) {
+            ctx.emitter
+                .emit_event(&Event::Completed {
+                    summary: json!({ "machine_id": id, "step": "health_run", "error": e.to_string() }),
+                })
+                .ok();
+        }
+        scanned += 1;
+    }
+
+    ctx.emitter
+        .emit_event(&Event::Completed {
+            summary: json!({ "machines": ids.len(), "scanned": scanned, "skipped": skipped }),
+        })
+        .ok();
+    Ok(())
 }
 
 fn authorize(_ctx: &mut Ctx<'_>, _ids: Vec<i64>, _all: bool, _save_as: Option<String>, _cred: &crate::cli::credential_args::CredentialArgs) -> UecmResult<()> {
@@ -388,6 +487,42 @@ mod tests {
 
         // Verify that we got past all operations
         // (output checking omitted as NdjsonEmitter writes to a moved buffer)
+    }
+
+    #[test]
+    fn deep_scan_skips_winrm_unreachable_and_completes_batch() {
+        let (db, buf) = setup();
+        let emitter: Box<dyn Emitter> = Box::new(NdjsonEmitter::new(buf));
+        let mut ctx = Ctx {
+            db: Some(db),
+            db_path: PathBuf::from(":memory:"),
+            emitter,
+            json_mode: true,
+        };
+
+        add(&mut ctx, "10.0.0.1".to_string(), Some("m1".to_string())).unwrap();
+        add(&mut ctx, "10.0.0.2".to_string(), Some("m2".to_string())).unwrap();
+
+        // No creds; on non-Windows the WinRM probe inside refresh fails, so both
+        // machines are skipped — but the batch must still complete with Ok.
+        let cred = crate::cli::credential_args::CredentialArgs::inline(None);
+        let res = deep_scan(&mut ctx, vec![1, 2], false, &cred);
+        assert!(res.is_ok(), "batch must complete even when every machine is skipped");
+    }
+
+    #[test]
+    fn deep_scan_requires_a_selector() {
+        let (db, buf) = setup();
+        let emitter: Box<dyn Emitter> = Box::new(NdjsonEmitter::new(buf));
+        let mut ctx = Ctx {
+            db: Some(db),
+            db_path: PathBuf::from(":memory:"),
+            emitter,
+            json_mode: true,
+        };
+        let cred = crate::cli::credential_args::CredentialArgs::inline(None);
+        let res = deep_scan(&mut ctx, vec![], false, &cred);
+        assert!(res.is_err(), "no --machine-ids and no --all must error");
     }
 
     #[test]
