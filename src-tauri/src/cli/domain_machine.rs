@@ -361,12 +361,14 @@ fn deep_scan(
         let db = ctx.require_db()?;
         resolve_target_ids(db, &machine_ids, all)?
     };
-    // Resolve credentials ONCE (stdin/DPAPI), then reuse inline across every
-    // sub-call — `--pass-stdin` is only readable once.
-    let sub_cred = {
+    // Resolve credentials ONCE (stdin/DPAPI). `resolved` is reused for the
+    // explicit reachability probe; `sub_cred` (stdin-free) is reused for every
+    // sub-handler — `--pass-stdin` is only readable once.
+    let resolved = {
         let db = ctx.require_db()?;
-        crate::cli::credential_args::CredentialArgs::inline(cred.resolve(db)?)
+        cred.resolve(db)?
     };
+    let sub_cred = crate::cli::credential_args::CredentialArgs::inline(resolved.clone());
 
     ctx.emitter
         .emit_event(&Event::Started {
@@ -376,65 +378,95 @@ fn deep_scan(
         })
         .ok();
 
-    let mut scanned = 0usize;
+    // Phase 1 (per machine): WinRM reachability probe + refresh (UE/GPU). UE/GPU
+    // detection is inherently per-machine, so it stays in the loop. Classify:
+    //   - machine id not found            -> failed
+    //   - WinRM probe unreachable         -> skip + "run authorize" hint
+    //   - probe OK but refresh later fails -> failed (NOT a skip — the box is
+    //     reachable, so don't mislead the operator into re-running authorize)
+    let mut reachable: Vec<i64> = Vec::new();
     let mut skipped = 0usize;
     let mut failed = 0usize;
     for id in &ids {
-        // Step 1: refresh. Classify the error so we don't mislabel operator/input
-        // problems as a "WinRM closed" skip:
-        //   - InvalidInput (machine id not found, bad credential combo) = real
-        //     command failure → report as failed, no "run authorize" hint.
-        //   - anything else (WinRM probe/exec failure) = target likely not
-        //     authorized yet → skip + hint, batch continues.
-        match refresh(ctx, *id, &sub_cred) {
-            Ok(()) => {}
-            Err(e @ UecmError::InvalidInput(_)) => {
-                failed += 1;
-                ctx.emitter
-                    .emit_event(&Event::Completed {
-                        summary: json!({
-                            "machine_id": id,
-                            "step": "deep_scan",
-                            "failed": true,
-                            "error": e.to_string(),
-                        }),
-                    })
-                    .ok();
-                continue;
+        let host = {
+            let db = ctx.require_db()?;
+            match machines::find_by_id(db, *id)? {
+                Some(m) => m.ip,
+                None => {
+                    failed += 1;
+                    ctx.emitter
+                        .emit_event(&Event::Completed {
+                            summary: json!({ "machine_id": id, "step": "deep_scan", "failed": true, "error": "machine not found" }),
+                        })
+                        .ok();
+                    continue;
+                }
             }
-            Err(e) => {
-                skipped += 1;
-                ctx.emitter
-                    .emit_event(&Event::Completed {
-                        summary: json!({
-                            "machine_id": id,
-                            "step": "deep_scan",
-                            "skipped": true,
-                            "reason": format!("WinRM probe/exec failed: {}", e),
-                            "hint": "run `uecm-cli machine authorize` to open WinRM first",
-                        }),
-                    })
-                    .ok();
-                continue;
-            }
+        };
+
+        // Explicit reachability probe so we can tell "WinRM closed" (skip) apart
+        // from "reachable but detection failed" (failure). `refresh` re-probes —
+        // the small double-probe is worth the accurate classification.
+        let probe_ok = match &resolved {
+            Some((u, p)) => crate::core::winrm::probe_with_credential(&host, u, p)
+                .map(|r| r.ok)
+                .unwrap_or(false),
+            None => crate::core::winrm::probe(&host).map(|r| r.ok).unwrap_or(false),
+        };
+        if !probe_ok {
+            skipped += 1;
+            ctx.emitter
+                .emit_event(&Event::Completed {
+                    summary: json!({
+                        "machine_id": id,
+                        "host": host,
+                        "step": "deep_scan",
+                        "skipped": true,
+                        "reason": "WinRM unreachable",
+                        "hint": "run `uecm-cli machine authorize` to open WinRM first",
+                    }),
+                })
+                .ok();
+            continue;
         }
-        // Step 2: INI scan. A sub-step error is recorded but MUST NOT abort the
-        // batch — match-and-continue, never `?`.
+
+        if let Err(e) = refresh(ctx, *id, &sub_cred) {
+            failed += 1;
+            ctx.emitter
+                .emit_event(&Event::Completed {
+                    summary: json!({
+                        "machine_id": id,
+                        "host": host,
+                        "step": "refresh",
+                        "failed": true,
+                        "error": format!("WinRM reachable but refresh failed: {}", e),
+                    }),
+                })
+                .ok();
+            continue;
+        }
+        reachable.push(*id);
+    }
+
+    // Phase 2 (batch over reachable set): INI scan + health run ONCE so the
+    // cross-machine consistency rules (zen / cluster-majority / gpu_consistency)
+    // see the whole set, not N single-machine clusters. Sub-step errors are
+    // recorded but never abort the command.
+    if !reachable.is_empty() {
         if let Err(e) = crate::cli::domain_ini::handle(
             ctx,
-            crate::cli::args::IniAction::Scan { machine_ids: vec![*id], cred: sub_cred.clone() },
+            crate::cli::args::IniAction::Scan { machine_ids: reachable.clone(), cred: sub_cred.clone() },
         ) {
             ctx.emitter
                 .emit_event(&Event::Completed {
-                    summary: json!({ "machine_id": id, "step": "ini_scan", "error": e.to_string() }),
+                    summary: json!({ "step": "ini_scan", "error": e.to_string() }),
                 })
                 .ok();
         }
-        // Step 3: health run.
         if let Err(e) = crate::cli::domain_health::handle(
             ctx,
             crate::cli::args::HealthAction::Run {
-                machine_ids: vec![*id],
+                machine_ids: reachable.clone(),
                 cidr: None,
                 all: false,
                 expected_local_path: String::new(),
@@ -444,16 +476,15 @@ fn deep_scan(
         ) {
             ctx.emitter
                 .emit_event(&Event::Completed {
-                    summary: json!({ "machine_id": id, "step": "health_run", "error": e.to_string() }),
+                    summary: json!({ "step": "health_run", "error": e.to_string() }),
                 })
                 .ok();
         }
-        scanned += 1;
     }
 
     ctx.emitter
         .emit_event(&Event::Completed {
-            summary: json!({ "machines": ids.len(), "scanned": scanned, "skipped": skipped, "failed": failed }),
+            summary: json!({ "machines": ids.len(), "scanned": reachable.len(), "skipped": skipped, "failed": failed }),
         })
         .ok();
     Ok(())
