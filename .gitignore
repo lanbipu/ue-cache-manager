@@ -71,3 +71,5 @@ skills-lock.json
 .impeccable/
 
 .codex
+# Playwright MCP transient accessibility snapshots
+.playwright-mcp/

@@ -144,7 +144,7 @@
   .index .label { margin-bottom: 16px; display: block; }
   .index ol {
     list-style: none; margin: 0; padding: 0;
-    display: grid; grid-template-columns: repeat(5, 1fr);
+    display: grid; grid-template-columns: repeat(3, 1fr);
     border-top: 1px solid var(--border);
   }
   .index li { padding: 14px 0; border-bottom: 1px solid var(--border); padding-right: 16px; }
@@ -334,6 +334,21 @@
   .mode-note strong { color: var(--fg); font-weight: 700; }
   .mode-note code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; background: var(--muted-strong); padding: 1px 7px; border-radius: 4px; color: var(--fg); white-space: nowrap; }
 
+  /* Subsection head (inside a feature, e.g. 3a / 3b / 3c) */
+  .subsection {
+    display: flex; align-items: center; gap: 11px;
+    margin: 40px 0 16px;
+    font-family: "Manrope", sans-serif; font-weight: 800; font-size: 18px;
+    letter-spacing: -0.005em;
+  }
+  .subsection .tag {
+    font-family: ui-monospace, monospace; font-size: 12px; font-weight: 700;
+    color: var(--primary); background: var(--primary-soft);
+    border: 1px solid var(--primary-line);
+    padding: 3px 9px; border-radius: 9999px;
+    letter-spacing: 0;
+  }
+
   /* Callout (warning) */
   .callout {
     display: flex; gap: 12px;
@@ -439,14 +454,14 @@
     <h1>把 UE 工程在多机集群上的<br/><span class="accent">零编译启动、零卡顿运行</span>集中化、自动化、可视化。</h1>
     <p class="lead">
       面向 VP / XR 渲染集群的 TD 和 IT 运维：5–20 台 Windows render node，操作直接对接拍摄现场。
-      下面 5 个核心功能覆盖 UECM 的全部主路径；其余 system / winrm / cred / env / gpu / project / 单条 INI 编辑等域是底层支撑，不单独成核心。
+      下面 3 个核心功能按操作顺序覆盖 UECM 的主路径：① 状态刷新与集群诊断（先看清现状）→ ② 开通与授权（让机器可被远程管）→ ③ DDC 缓存工作流（含 PSO，缓存落地）。其余 system / winrm / cred / env / gpu / project / 单条 INI 编辑等域是底层支撑，不单独成核心。
     </p>
 
     <div class="tiers" role="list" aria-label="三层缓存">
       <div class="tier" role="listitem">
         <div class="layer">L1 · DDC</div>
         <h3 class="tname">Derived Data Cache</h3>
-        <p class="tdesc">消除 Shader 重编译，让所有机器开工程时直接读共享缓存。</p>
+        <p class="tdesc">消除 Shader 重编译。两条 backend：legacy <span class="mono">.ddp</span> pak（UE ≤ 5.3）与 zen daemon 原生缓存（UE 5.4+），由 <span class="mono">ddc --backend auto</span> 自动路由。</p>
       </div>
       <div class="tier" role="listitem">
         <div class="layer">L2 · PSO Precaching</div>
@@ -463,36 +478,24 @@
 
   <!-- Index -->
   <nav class="index" aria-label="功能索引">
-    <span class="label">5 个核心功能</span>
+    <span class="label">3 个核心功能</span>
     <ol>
       <li>
         <a href="#f1">
           <span class="ix-num">01</span>
-          <span class="ix-name">机器集群接入与状态刷新</span>
+          <span class="ix-name">状态刷新与集群诊断</span>
         </a>
       </li>
       <li>
         <a href="#f2">
           <span class="ix-num">02</span>
-          <span class="ix-name">SMB 共享配置</span>
+          <span class="ix-name">开通与授权</span>
         </a>
       </li>
       <li>
         <a href="#f3">
           <span class="ix-num">03</span>
-          <span class="ix-name">DDC Pak 工作流</span>
-        </a>
-      </li>
-      <li>
-        <a href="#f4">
-          <span class="ix-num">04</span>
-          <span class="ix-name">PSO Cache 工作流</span>
-        </a>
-      </li>
-      <li>
-        <a href="#f5">
-          <span class="ix-num">05</span>
-          <span class="ix-name">集群诊断（INI + Health）</span>
+          <span class="ix-name">DDC 缓存工作流（含 PSO）</span>
         </a>
       </li>
     </ol>
@@ -503,137 +506,104 @@
     <div class="mindmap-head">
       <div class="heading">
         <span class="label" id="mm-heading">能力全景</span>
-        <p class="sub">读图顺序：左侧根节点（UECM 三层缓存目标）→ 中段 5 个核心功能 → 右侧每项展开关键命令与参数。</p>
+        <p class="sub">读图顺序：左侧根节点（UECM 三层缓存目标）→ 中段 3 个核心功能（按操作顺序）→ 右侧每项展开关键命令与参数。</p>
       </div>
-      <span class="cross-note"><strong>05 诊断</strong>与其他四项是横切关系，可在任何时点跑。</span>
+      <span class="cross-note"><strong>① → ② → ③</strong> 按顺序推进；① 的诊断可在任何时点回跑复验。</span>
     </div>
 
     <div class="mindmap-frame">
-      <svg viewBox="0 0 1280 760" class="mindmap-svg" role="img" aria-labelledby="mm-title mm-desc" preserveAspectRatio="xMidYMid meet">
+      <svg viewBox="0 0 1280 620" class="mindmap-svg" role="img" aria-labelledby="mm-title mm-desc" preserveAspectRatio="xMidYMid meet">
         <title id="mm-title">UECM 核心功能思维导图</title>
-        <desc id="mm-desc">以 UECM 三层缓存目标为根，向右辐射出 5 个核心功能：01 机器接入与状态刷新、02 SMB 共享配置、03 DDC Pak 工作流、04 PSO Cache 工作流、05 集群诊断；每个功能再展开为对应的 CLI 命令与关键参数。</desc>
+        <desc id="mm-desc">以 UECM 三层缓存目标为根，向右辐射出 3 个按操作顺序排列的核心功能：01 状态刷新与集群诊断、02 开通与授权、03 DDC 缓存工作流（含 PSO，legacy pak / zen daemon 双 backend）；每个功能再展开为对应的 CLI 命令与关键参数。</desc>
 
         <!-- Edges: drawn first so node boxes sit on top -->
         <g aria-hidden="true">
           <!-- Root → Branch (spine) -->
-          <path class="mm-edge spine" d="M 280 380 C 340 380, 340 100, 400 100" />
-          <path class="mm-edge spine" d="M 280 380 C 340 380, 340 240, 400 240" />
-          <path class="mm-edge spine" d="M 280 380 L 400 380" />
-          <path class="mm-edge spine" d="M 280 380 C 340 380, 340 520, 400 520" />
-          <path class="mm-edge spine" d="M 280 380 C 340 380, 340 660, 400 660" />
+          <path class="mm-edge spine" d="M 280 294 C 340 294, 340 112, 400 112" />
+          <path class="mm-edge spine" d="M 280 294 L 400 294" />
+          <path class="mm-edge spine" d="M 280 294 C 340 294, 340 476, 400 476" />
 
           <!-- B1 → leaves -->
-          <path class="mm-edge" d="M 700 100 C 720 100, 720 58, 740 58" />
-          <path class="mm-edge" d="M 700 100 C 720 100, 720 86, 740 86" />
-          <path class="mm-edge" d="M 700 100 C 720 100, 720 114, 740 114" />
-          <path class="mm-edge" d="M 700 100 C 720 100, 720 142, 740 142" />
+          <path class="mm-edge" d="M 700 112 C 720 112, 720 56, 740 56" />
+          <path class="mm-edge" d="M 700 112 C 720 112, 720 84, 740 84" />
+          <path class="mm-edge" d="M 700 112 L 740 112" />
+          <path class="mm-edge" d="M 700 112 C 720 112, 720 140, 740 140" />
+          <path class="mm-edge" d="M 700 112 C 720 112, 720 168, 740 168" />
 
           <!-- B2 → leaves -->
-          <path class="mm-edge" d="M 700 240 C 720 240, 720 212, 740 212" />
-          <path class="mm-edge" d="M 700 240 L 740 240" />
-          <path class="mm-edge" d="M 700 240 C 720 240, 720 268, 740 268" />
+          <path class="mm-edge" d="M 700 294 C 720 294, 720 252, 740 252" />
+          <path class="mm-edge" d="M 700 294 C 720 294, 720 280, 740 280" />
+          <path class="mm-edge" d="M 700 294 C 720 294, 720 308, 740 308" />
+          <path class="mm-edge" d="M 700 294 C 720 294, 720 336, 740 336" />
 
           <!-- B3 → leaves -->
-          <path class="mm-edge" d="M 700 380 C 720 380, 720 352, 740 352" />
-          <path class="mm-edge" d="M 700 380 L 740 380" />
-          <path class="mm-edge" d="M 700 380 C 720 380, 720 408, 740 408" />
-
-          <!-- B4 → leaves -->
-          <path class="mm-edge" d="M 700 520 C 720 520, 720 492, 740 492" />
-          <path class="mm-edge" d="M 700 520 L 740 520" />
-          <path class="mm-edge" d="M 700 520 C 720 520, 720 548, 740 548" />
-
-          <!-- B5 → leaves -->
-          <path class="mm-edge" d="M 700 660 C 720 660, 720 618, 740 618" />
-          <path class="mm-edge" d="M 700 660 C 720 660, 720 646, 740 646" />
-          <path class="mm-edge" d="M 700 660 C 720 660, 720 674, 740 674" />
-          <path class="mm-edge" d="M 700 660 C 720 660, 720 702, 740 702" />
+          <path class="mm-edge" d="M 700 476 C 720 476, 720 420, 740 420" />
+          <path class="mm-edge" d="M 700 476 C 720 476, 720 448, 740 448" />
+          <path class="mm-edge" d="M 700 476 L 740 476" />
+          <path class="mm-edge" d="M 700 476 C 720 476, 720 504, 740 504" />
+          <path class="mm-edge" d="M 700 476 C 720 476, 720 532, 740 532" />
         </g>
 
         <!-- Root -->
         <g>
-          <rect class="mm-root-box" x="60" y="340" width="220" height="80" rx="14" />
-          <text class="mm-root-name" x="170" y="376" text-anchor="middle">UECM</text>
-          <text class="mm-root-sub" x="170" y="400" text-anchor="middle">三层缓存 · 操作员控制台</text>
+          <rect class="mm-root-box" x="60" y="254" width="220" height="80" rx="14" />
+          <text class="mm-root-name" x="170" y="290" text-anchor="middle">UECM</text>
+          <text class="mm-root-sub" x="170" y="314" text-anchor="middle">三层缓存 · 操作员控制台</text>
         </g>
 
         <!-- Branch 01 -->
         <g>
-          <rect class="mm-branch-box" x="400" y="70" width="300" height="60" rx="8" />
-          <text x="420" y="96"><tspan class="mm-branch-num">01</tspan><tspan class="mm-branch-name" dx="10">机器接入与状态刷新</tspan></text>
-          <text class="mm-branch-meta" x="420" y="116">machine · winrm · cred · bootstrap</text>
+          <rect class="mm-branch-box" x="400" y="82" width="300" height="60" rx="8" />
+          <text x="420" y="108"><tspan class="mm-branch-num">01</tspan><tspan class="mm-branch-name" dx="10">状态刷新与集群诊断</tspan></text>
+          <text class="mm-branch-meta" x="420" y="128">machine · ini · health · 看清集群现状</text>
         </g>
         <g>
-          <circle class="mm-leaf-dot" cx="740" cy="58" r="3" />
-          <text x="752" y="62"><tspan class="mm-leaf-cmd">machine scan</tspan><tspan class="mm-leaf-note" dx="6">· 探 5985 / 445 / 135 三端口</tspan></text>
-          <circle class="mm-leaf-dot" cx="740" cy="86" r="3" />
-          <text x="752" y="90"><tspan class="mm-leaf-cmd">winrm preflight</tspan><tspan class="mm-leaf-note" dx="6">· Shallow / Deep，verdict 决定走 Path B</tspan></text>
-          <circle class="mm-leaf-dot" cx="740" cy="114" r="3" />
-          <text x="752" y="118"><tspan class="mm-leaf-cmd">winrm bootstrap</tspan><tspan class="mm-leaf-note" dx="6">· Path A · USB 一键  |  Path B · 远程 PsExec</tspan></text>
-          <circle class="mm-leaf-dot" cx="740" cy="142" r="3" />
-          <text x="752" y="146"><tspan class="mm-leaf-cmd">machine refresh</tspan><tspan class="mm-leaf-note" dx="6">· UE 版本（注册表）+ GPU（WMI）</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="56" r="3" />
+          <text x="752" y="60"><tspan class="mm-leaf-cmd">machine scan</tspan><tspan class="mm-leaf-note" dx="6">· 探 5985 / 445 / 135 发现机器</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="84" r="3" />
+          <text x="752" y="88"><tspan class="mm-leaf-cmd">machine refresh</tspan><tspan class="mm-leaf-note" dx="6">· 读 UE 版本（注册表）+ GPU（WMI）</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="112" r="3" />
+          <text x="752" y="116"><tspan class="mm-leaf-cmd">ini scan</tspan><tspan class="mm-leaf-note" dx="6">· base R001–R025 + zen R012–R018</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="140" r="3" />
+          <text x="752" y="144"><tspan class="mm-leaf-cmd">health run</tspan><tspan class="mm-leaf-note" dx="6">· 24 项矩阵 L1+L2+L3+derived+zen</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="168" r="3" />
+          <text x="752" y="172"><tspan class="mm-leaf-cmd">health results</tspan><tspan class="mm-leaf-note" dx="6">· 输出 N 机 × 24 行矩阵 + 修复建议</tspan></text>
         </g>
 
         <!-- Branch 02 -->
         <g>
-          <rect class="mm-branch-box" x="400" y="210" width="300" height="60" rx="8" />
-          <text x="420" y="236"><tspan class="mm-branch-num">02</tspan><tspan class="mm-branch-name" dx="10">SMB 共享配置</tspan></text>
-          <text class="mm-branch-meta" x="420" y="256">share · 缓存分发的物理基础</text>
+          <rect class="mm-branch-box" x="400" y="264" width="300" height="60" rx="8" />
+          <text x="420" y="290"><tspan class="mm-branch-num">02</tspan><tspan class="mm-branch-name" dx="10">开通与授权</tspan></text>
+          <text class="mm-branch-meta" x="420" y="310">winrm · cred · bootstrap · 让机器可远程管</text>
         </g>
         <g>
-          <circle class="mm-leaf-dot" cx="740" cy="212" r="3" />
-          <text x="752" y="216"><tspan class="mm-leaf-cmd">share create</tspan><tspan class="mm-leaf-note" dx="6">· Mode A · 开 Guest + Everyone : Full</tspan></text>
-          <circle class="mm-leaf-dot" cx="740" cy="240" r="3" />
-          <text x="752" y="244"><tspan class="mm-leaf-cmd">share inject-system-cred</tspan><tspan class="mm-leaf-note" dx="6">· Mode B · ddc-svc + SYSTEM 凭据空间</tspan></text>
-          <circle class="mm-leaf-dot" cx="740" cy="268" r="3" />
-          <text x="752" y="272"><tspan class="mm-leaf-cmd">share list</tspan><tspan class="mm-leaf-note" dx="6">· 全集群当前共享枚举</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="252" r="3" />
+          <text x="752" y="256"><tspan class="mm-leaf-cmd">winrm preflight</tspan><tspan class="mm-leaf-note" dx="6">· Shallow / Deep，verdict 决定走 Path B</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="280" r="3" />
+          <text x="752" y="284"><tspan class="mm-leaf-cmd">winrm bootstrap</tspan><tspan class="mm-leaf-note" dx="6">· Path A · USB 一键  |  Path B · 远程 PsExec</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="308" r="3" />
+          <text x="752" y="312"><tspan class="mm-leaf-cmd">enable-winrm.ps1</tspan><tspan class="mm-leaf-note" dx="6">· 一次开通 WinRM + SMB 服务 + 445 + 注册表</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="336" r="3" />
+          <text x="752" y="340"><tspan class="mm-leaf-cmd">cred · DPAPI</tspan><tspan class="mm-leaf-note" dx="6">· 凭据存本机，TD 不记明文密码</tspan></text>
         </g>
 
         <!-- Branch 03 -->
         <g>
-          <rect class="mm-branch-box" x="400" y="350" width="300" height="60" rx="8" />
-          <text x="420" y="376"><tspan class="mm-branch-num">03</tspan><tspan class="mm-branch-name" dx="10">DDC Pak 工作流</tspan></text>
-          <text class="mm-branch-meta" x="420" y="396">ddc · L1 缓存 · 消除 Shader 重编译</text>
+          <rect class="mm-branch-box" x="400" y="446" width="300" height="60" rx="8" />
+          <text x="420" y="472"><tspan class="mm-branch-num">03</tspan><tspan class="mm-branch-name" dx="10">DDC 缓存工作流（含 PSO）</tspan></text>
+          <text class="mm-branch-meta" x="420" y="492">ddc · zen · pso · share · 三层缓存落地</text>
         </g>
         <g>
-          <circle class="mm-leaf-dot" cx="740" cy="352" r="3" />
-          <text x="752" y="356"><tspan class="mm-leaf-cmd">ddc generate</tspan><tspan class="mm-leaf-note" dx="6">· 调 UE runner 生成 .ddp pak</tspan></text>
-          <circle class="mm-leaf-dot" cx="740" cy="380" r="3" />
-          <text x="752" y="384"><tspan class="mm-leaf-cmd">ddc verify</tspan><tspan class="mm-leaf-note" dx="6">· 文件完整性校验</tspan></text>
-          <circle class="mm-leaf-dot" cx="740" cy="408" r="3" />
-          <text x="752" y="412"><tspan class="mm-leaf-cmd">ddc distribute</tspan><tspan class="mm-leaf-note" dx="6">· Robocopy 扇出到全集群</tspan></text>
-        </g>
-
-        <!-- Branch 04 -->
-        <g>
-          <rect class="mm-branch-box" x="400" y="490" width="300" height="60" rx="8" />
-          <text x="420" y="516"><tspan class="mm-branch-num">04</tspan><tspan class="mm-branch-name" dx="10">PSO Cache 工作流</tspan></text>
-          <text class="mm-branch-meta" x="420" y="536">pso · L2 + L3 缓存 · 切场零卡顿</text>
-        </g>
-        <g>
-          <circle class="mm-leaf-dot" cx="740" cy="492" r="3" />
-          <text x="752" y="496"><tspan class="mm-leaf-cmd">pso verify</tspan><tspan class="mm-leaf-note" dx="6">· 检 R008 / R009 / R010 precaching CVar</tspan></text>
-          <circle class="mm-leaf-dot" cx="740" cy="520" r="3" />
-          <text x="752" y="524"><tspan class="mm-leaf-cmd">pso collect</tspan><tspan class="mm-leaf-note" dx="6">· UE -game 跑采集，写 .upipelinecache</tspan></text>
-          <circle class="mm-leaf-dot" cx="740" cy="548" r="3" />
-          <text x="752" y="552"><tspan class="mm-leaf-cmd">pso distribute</tspan><tspan class="mm-leaf-note" dx="6">· GPU 一致性检测后才扇出</tspan></text>
-        </g>
-
-        <!-- Branch 05 -->
-        <g>
-          <rect class="mm-branch-box" x="400" y="630" width="300" height="60" rx="8" />
-          <text x="420" y="656"><tspan class="mm-branch-num">05</tspan><tspan class="mm-branch-name" dx="10">集群诊断</tspan></text>
-          <text class="mm-branch-meta" x="420" y="676">ini · health · 横切验证</text>
-        </g>
-        <g>
-          <circle class="mm-leaf-dot" cx="740" cy="618" r="3" />
-          <text x="752" y="622"><tspan class="mm-leaf-cmd">ini scan</tspan><tspan class="mm-leaf-note" dx="6">· 7 条规则 R001 / R007，三级 INI</tspan></text>
-          <circle class="mm-leaf-dot" cx="740" cy="646" r="3" />
-          <text x="752" y="650"><tspan class="mm-leaf-cmd">ini apply-finding</tspan><tspan class="mm-leaf-note" dx="6">· 一键修复，自动 .bak 备份</tspan></text>
-          <circle class="mm-leaf-dot" cx="740" cy="674" r="3" />
-          <text x="752" y="678"><tspan class="mm-leaf-cmd">health run</tspan><tspan class="mm-leaf-note" dx="6">· 3 模式（cidr/all/machine-ids）· 17 项 L1+L2+L3 + 修复建议</tspan></text>
-          <circle class="mm-leaf-dot" cx="740" cy="702" r="3" />
-          <text x="752" y="706"><tspan class="mm-leaf-cmd">health results</tspan><tspan class="mm-leaf-note" dx="6">· 输出 N 机 × 17 行矩阵</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="420" r="3" />
+          <text x="752" y="424"><tspan class="mm-leaf-cmd">ddc --backend auto</tspan><tspan class="mm-leaf-note" dx="6">· legacy pak / zen daemon 二选一</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="448" r="3" />
+          <text x="752" y="452"><tspan class="mm-leaf-cmd">ddc generate / distribute</tspan><tspan class="mm-leaf-note" dx="6">· legacy · share 共享 + Robocopy 扇出</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="476" r="3" />
+          <text x="752" y="480"><tspan class="mm-leaf-cmd">zen register / service / enable</tspan><tspan class="mm-leaf-note" dx="6">· zen daemon · HTTP 原生缓存</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="504" r="3" />
+          <text x="752" y="508"><tspan class="mm-leaf-cmd">pso verify / collect / distribute</tspan><tspan class="mm-leaf-note" dx="6">· 切场零卡顿 + GPU 一致性校验</tspan></text>
+          <circle class="mm-leaf-dot" cx="740" cy="532" r="3" />
+          <text x="752" y="536"><tspan class="mm-leaf-cmd">deploy ddc</tspan><tspan class="mm-leaf-note" dx="6">· 一键编排 11 步串起全流程</tspan></text>
         </g>
       </svg>
     </div>
@@ -644,10 +614,72 @@
     <header class="feature-head">
       <div class="feature-num">01</div>
       <div class="feature-title">
-        <h2>机器集群接入与状态刷新</h2>
+        <h2>状态刷新与集群诊断</h2>
         <div class="domains">
           <span class="domain accent">machine</span>
-          <span class="domain">winrm</span>
+          <span class="domain accent">ini</span>
+          <span class="domain accent">health</span>
+        </div>
+      </div>
+    </header>
+
+    <p class="gist">
+      操作的第一步是「看」——先发现集群里有哪些机器、各自什么状态，再体检配置正确性和运行可达性。<strong>这一步只读，不动任何配置</strong>。组合起来回答三个问题：机器活着吗 / 配置对吗 / 哪里不对、该怎么修。<strong>但 health / ini scan 是横切工具</strong>：开通（②）后要复验、部署缓存（③）后更要回跑确认生效，不是开工前用一次就完。
+    </p>
+
+    <div class="workflow" aria-label="状态刷新与诊断流程">
+      <span class="step">扫 CIDR 发现机器<span class="k">（5985 / 445 / 135）</span></span>
+      <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
+      <span class="step">refresh 读 UE 版本<span class="k">（注册表）</span>+ GPU<span class="k">（WMI）</span></span>
+      <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
+      <span class="step">ini scan 查配置</span>
+      <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
+      <span class="step">health run 出 24 项矩阵</span>
+    </div>
+
+    <div class="commands" aria-label="状态刷新命令">
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine scan <span class="arg">192.168.10.0/24</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine refresh <span class="arg">3 --cred-alias prod</span></span></div>
+    </div>
+
+    <div class="split" role="list" aria-label="诊断子模块" style="margin-top:24px">
+      <div class="pane" role="listitem">
+        <div class="pkind">1a · INI Scanner</div>
+        <h3 class="ptitle">配置正确性</h3>
+        <p class="pdesc">
+          <strong>base 规则 R001–R025</strong> 扫 project / user / engine 三级 INI：硬编码 <span class="k">DDC Path=</span>、user 级覆盖、deprecated CVar、PSO precaching（<span class="k">R008–R010</span>）、BackendGraph 调优（<span class="k">R011–R023</span>）、ShaderPipelineCache（<span class="k">R024</span>）。机器注册了 zen 端点时<strong>自动追加 zen 规则 R012–R018</strong>（ZenShared 配置正确性，无需加 flag）。带<strong>自动备份</strong>的一键修复。
+        </p>
+        <div class="pstat"><span class="n">R001–R025</span> base + <span class="n">R012–R018</span> zen · <span class="n">3</span> 级 INI · 一键 apply（含 .bak）</div>
+        <div class="pcmd">
+          <div><span class="prompt">$</span> uecm-cli ini scan <span class="arg">--machine-ids 3,4,5 --cred-alias prod</span></div>
+          <div><span class="prompt">$</span> uecm-cli ini apply <span class="arg">42 --yes</span></div>
+        </div>
+      </div>
+
+      <div class="pane" role="listitem">
+        <div class="pkind">1b · Health Check</div>
+        <h3 class="ptitle">运行可达性</h3>
+        <p class="pdesc">
+          四组垂直体检（共 24 项）：<strong>L1 端口</strong>（<span class="k">tcp_5985</span> / <span class="k">tcp_445</span> / <span class="k">tcp_135</span>）+ <strong>L2 Bootstrap</strong>（<span class="k">firewall_445</span> / <span class="k">local_account_token_filter</span> / <span class="k">long_paths_enabled</span> / <span class="k">lanman_server</span>）+ <strong>L3 业务</strong>（<span class="k">share_reachable</span> / <span class="k">ntfs_perm</span> / <span class="k">cred_user</span> / <span class="k">cred_system</span> / <span class="k">env_vars</span> / <span class="k">env_local</span> / <span class="k">env_shared</span> / <span class="k">system_write</span> / <span class="k">winmgmt</span> / <span class="k">rs_service</span>）+ <strong>L3 derived</strong>（<span class="k">ini_consistency</span> / <span class="k">pso_precaching</span> / <span class="k">gpu_consistency</span>）+ <strong>Zen</strong>（<span class="k">zen_reachable</span> / <span class="k">zen_version_consistent</span> / <span class="k">zen_binary_intact</span> / <span class="k">zen_cache_provider_ready</span>，机器没注册 zen 端点时记 <span class="k">na</span>，不计入健康统计）。每行红色状态自带 <span class="k">remediation</span> 文案，告诉操作员下一步该跑哪个 CLI。输出 <strong>N 机 × 24 行</strong>矩阵。
+        </p>
+        <div class="pstat"><span class="n">3</span> L1 + <span class="n">4</span> L2 + <span class="n">10</span> L3 + <span class="n">3</span> derived + <span class="n">4</span> zen · N×<span class="n">24</span> 矩阵 · 每行带 remediation</div>
+        <div class="pcmd">
+          <div><span class="prompt">$</span> uecm-cli health run <span class="arg">--cidr 192.168.10.0/24</span></div>
+          <div><span class="prompt">$</span> uecm-cli health run <span class="arg">--all --cred-alias prod</span></div>
+          <div><span class="prompt">$</span> uecm-cli health results <span class="arg">7</span></div>
+        </div>
+      </div>
+    </div>
+  </article>
+
+  <!-- Feature 02 -->
+  <article class="feature" id="f2">
+    <header class="feature-head">
+      <div class="feature-num">02</div>
+      <div class="feature-title">
+        <h2>开通与授权</h2>
+        <div class="domains">
+          <span class="domain accent">winrm</span>
           <span class="domain">cred</span>
           <span class="domain">bootstrap</span>
         </div>
@@ -655,18 +687,15 @@
     </header>
 
     <p class="gist">
-      把一台从未纳管过的 Windows render node，从「发现」一路带到「可远程操作 + 状态可读」。
-      <strong>两条 bootstrap 路径按机器可达性选</strong>，凭据存本机 DPAPI，TD 不用记任何明文密码。
+      诊断发现机器还没开通后，把一台从未纳管过的 Windows render node 从「发现」一路带到「可远程操作」。<strong>两条路径按机器可达性选</strong>，凭据存本机 DPAPI，TD 不用记任何明文密码。开通这一步会一次性把 WinRM、SMB 服务、防火墙、注册表全配好。
     </p>
 
-    <div class="workflow" aria-label="接入流程">
-      <span class="step">扫 CIDR<span class="k">（5985 / 445 / 135）</span></span>
-      <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
+    <div class="workflow" aria-label="开通流程">
       <span class="step">preflight 判 Path B 可行性</span>
       <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
       <span class="step">推 bootstrap<span class="k">（A · USB 或 B · 远程）</span></span>
       <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
-      <span class="step">machine refresh 读 UE 版本<span class="k">（注册表）</span>+ GPU<span class="k">（WMI）</span></span>
+      <span class="step">一次开通 7 项系统配置<span class="k">（含 SMB 服务）</span></span>
     </div>
 
     <div class="modes" role="list" aria-label="两条 bootstrap 路径">
@@ -685,15 +714,17 @@
     </div>
 
     <p class="mode-note">
-      <strong>bootstrap 实际做的 7 件事：</strong>不只是开 WinRM。<code>enable-winrm.ps1</code> 默认全开，覆盖
-      <code>WinRM core</code>、<code>SMB Server + 445</code>、<code>WMI</code>、<code>ExecutionPolicy=RemoteSigned</code>、<code>LongPaths</code>、<code>HighPerformance</code>、<code>LocalAccountTokenFilterPolicy=1</code>，远程操作 / 状态读取 / UE 资源路径所需的整套系统配置一次到位。
+      <strong>bootstrap 默认只开 WinRM core，其余 provisioning 按需开。</strong><code>winrm bootstrap</code> 默认启用 <code>WinRM core</code>（PSRemoting + WinRM 服务 + WRM 防火墙 + Network=Private + TrustedHosts）。<code>enable-winrm.ps1</code> 还能配
+      <code>SMB Server + 445</code>、<code>WMI</code>、<code>LongPaths</code>、<code>ExecutionPolicy=RemoteSigned</code>、<code>HighPerformance</code>、<code>LocalAccountTokenFilterPolicy=1</code>，但这些都是 opt-in 开关，需显式传（render node 全量 provisioning 时一次开齐）。
+    </p>
+
+    <p class="mode-note">
+      <strong>这一步开的是 SMB「服务」，不是具体共享。</strong>bootstrap 把 <code>SMB Server + 445 + LanmanServer</code> 打开，让缓存分发的网络通道就绪；而把某个 DDC 目录开成具体共享（<code>share create</code>），是 <a href="#f3">③ DDC 缓存工作流</a> legacy 路径里的一步。两者别混。
     </p>
 
     <div class="commands" aria-label="典型命令" style="margin-top:24px">
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine scan <span class="arg">--cidr 192.168.10.0/24</span></span></div>
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli winrm preflight <span class="arg">lanpc --user admin --pass-stdin [--probe]</span></span></div>
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli winrm bootstrap <span class="arg">--host lanpc</span></span></div>
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine refresh <span class="arg">--all</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli winrm preflight <span class="arg">lanpc --user Administrator --pass-stdin [--probe]</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli winrm bootstrap <span class="arg">lanpc --user Administrator --pass-stdin</span></span></div>
     </div>
 
     <div class="criterion" role="note">
@@ -706,95 +737,88 @@
     </div>
   </article>
 
-  <!-- Feature 02 -->
-  <article class="feature" id="f2">
-    <header class="feature-head">
-      <div class="feature-num">02</div>
-      <div class="feature-title">
-        <h2>SMB 共享配置</h2>
-        <div class="domains">
-          <span class="domain accent">share</span>
-        </div>
-      </div>
-    </header>
-
-    <p class="gist">
-      在目标机上把 DDC 路径开成 SMB 共享，<strong>是后面所有缓存分发的物理基础</strong>。两种模式按集群信任度选：
-    </p>
-
-    <div class="modes" role="list" aria-label="两种共享模式">
-      <div class="mode" role="listitem">
-        <div class="mkind">Mode A</div>
-        <h3 class="mtitle">信任内网</h3>
-        <p class="msub">最快上手，适合封闭 VP 棚。</p>
-        <p class="mech">开启 <span class="k">Guest</span> 账户，把目标目录的 NTFS / Share 权限都开成 <span class="k">Everyone : Full</span>。集群内任何机器、任何用户都能直接读写。</p>
-      </div>
-      <div class="mode" role="listitem">
-        <div class="mkind">Mode B</div>
-        <h3 class="mtitle">严格凭据 + SYSTEM 注入</h3>
-        <p class="msub">区别于「手撕 net share」的关键能力。</p>
-        <p class="mech">新建本地账号 <span class="k">ddc-svc</span>，把凭据同时写到当前用户 Credential Manager 和 <strong>SYSTEM 凭据空间</strong>，让 LocalSystem 启动的服务（如 RenderStream Service）也能在无人登录时挂载共享。</p>
-      </div>
-    </div>
-
-    <p class="mode-note">
-      <strong>选择依据：</strong>如果集群里跑了 RenderStream 这类 SYSTEM 服务，必须用 Mode B；否则服务进程拿不到任何用户凭据，路径会被解析为本地不存在。
-    </p>
-
-    <div class="commands" aria-label="典型命令" style="margin-top:24px">
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli share create <span class="arg">--host lanpc --mode A</span></span></div>
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli share inject-system-cred <span class="arg">--host lanpc --user ddc-svc</span></span></div>
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli share list <span class="arg">--all</span></span></div>
-    </div>
-  </article>
-
   <!-- Feature 03 -->
   <article class="feature" id="f3">
     <header class="feature-head">
       <div class="feature-num">03</div>
       <div class="feature-title">
-        <h2>DDC Pak 工作流</h2>
+        <h2>DDC 缓存工作流（含 PSO）</h2>
         <div class="domains">
           <span class="domain accent">ddc</span>
-          <span class="domain">L1 缓存层</span>
+          <span class="domain accent">zen</span>
+          <span class="domain accent">pso</span>
+          <span class="domain">share</span>
         </div>
       </div>
     </header>
 
     <p class="gist">
-      调 UE runner 生成 <span class="mono">.ddp</span> pak，校验文件完整性后用 Robocopy 扇出到全集群。<strong>三层缓存里的第一层，消除 Shader 重编译。</strong>
+      机器开通后跑缓存部署——三层缓存的落地。DDC 双 backend（legacy <span class="mono">.ddp</span> pak / zen daemon）按 UE 版本二选一；<strong>PSO Cache 是同一条流水线的延续</strong>，消除切场卡顿。<span class="mono">deploy ddc</span> 能把全流程 11 步一键串起来。
     </p>
 
-    <div class="workflow" aria-label="DDC Pak 工作流">
-      <span class="step"><span class="k">UE runner</span> 生成 .ddp pak</span>
-      <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
-      <span class="step">验证文件完整性</span>
-      <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
-      <span class="step">Robocopy 扇出到全集群</span>
-    </div>
+    <div class="subsection"><span class="tag">3a</span> DDC Backend · legacy / zen 双路径</div>
 
-    <div class="commands" aria-label="典型命令">
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli ddc generate <span class="arg">--project MyVPShow --engine 5.5</span></span></div>
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli ddc verify <span class="arg">--pak ./MyVPShow.ddp</span></span></div>
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli ddc distribute <span class="arg">--pak ./MyVPShow.ddp --targets all</span></span></div>
-    </div>
-  </article>
-
-  <!-- Feature 04 -->
-  <article class="feature" id="f4">
-    <header class="feature-head">
-      <div class="feature-num">04</div>
-      <div class="feature-title">
-        <h2>PSO Cache 工作流</h2>
-        <div class="domains">
-          <span class="domain accent">pso</span>
-          <span class="domain">L2 + L3 缓存层</span>
-        </div>
+    <div class="modes" role="list" aria-label="两条 DDC backend">
+      <div class="mode" role="listitem">
+        <div class="mkind">Legacy · .ddp Pak</div>
+        <h3 class="mtitle">文件式共享缓存</h3>
+        <p class="msub">UE ≤ 5.3，或 5.4+ 但 zen 不可达时的兜底。</p>
+        <p class="mech">调 UE runner 把工程 DDC 烤成一个 <span class="k">.ddp</span> pak，校验完整性后用 <span class="k">Robocopy</span> 扇出到全集群的 SMB 共享。机器开工程时从共享路径读，不再本地重编译。</p>
       </div>
-    </header>
+      <div class="mode" role="listitem">
+        <div class="mkind">Zen · Daemon</div>
+        <h3 class="mtitle">引擎原生缓存服务</h3>
+        <p class="msub">UE 5.4+ 内置 ZenServer，缓存走 HTTP 不再靠文件扇出。</p>
+        <p class="mech">master 节点跑 <span class="k">ZenServer</span> Windows 服务，worker 工程 INI 指向它的 <span class="k">ZenShared</span> upstream。UECM 管端点注册、<span class="k">/health</span> 探活、服务生命周期、URL ACL 和 INI 切换，<strong>不碰 zen 二进制本身</strong>。</p>
+      </div>
+    </div>
 
-    <p class="gist">
-      先体检 precaching CVar 配置，再用 UE <span class="mono">-game</span> 模式跑采集，得到 <span class="mono">*.upipelinecache</span> / <span class="mono">*.stablepc.csv</span>，最后<strong>带 GPU 一致性检测再分发</strong>。
+    <p class="mode-note">
+      <strong><code>--backend auto</code> 决策：</strong>工程 UE <span class="mono">&lt; 5.4</span> 或版本未知 → 走 <code>legacy</code>（保守）；UE <span class="mono">≥ 5.4</span> 且机器装了 5.4+ 引擎、zen 端点可达 → 走 <code>zen</code>（此时 ddc 命令是 no-op，缓存由 zen 原生托管）；否则回落 <code>legacy</code>。每工程每机器的 <code>project_cache_backend</code> 显式覆盖永远赢过这张决策表。
+    </p>
+
+    <div class="commands" aria-label="legacy pak 命令">
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli ddc generate <span class="arg">--project-id 7 --source-machine 3 --backend legacy</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli ddc verify <span class="arg">--project-id 7 --source-machine 3</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli ddc distribute <span class="arg">--project-id 7 --source-machine 3 --targets 4,5,6 --backend auto --yes</span></span></div>
+    </div>
+
+    <p class="mode-note">
+      <strong>legacy 分发的前置 · SMB 共享创建：</strong>把 DDC 目录开成共享有两种模式——<code>Mode A</code> 开 Guest + Everyone:Full（封闭 VP 棚最快上手）；<code>Mode B</code> 建 ddc-svc 账号 + 把凭据注入 <strong>SYSTEM 凭据空间</strong>（集群里跑 RenderStream 这类 LocalSystem 服务时必须用，否则服务进程拿不到凭据、共享路径会被解析为本地不存在）。zen 模式走 HTTP，不需要这一步。
+    </p>
+
+    <div class="commands" aria-label="SMB 共享命令">
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli share create <span class="arg">--mode b --host lanpc --share DDC --local-path D:\UE-DDC --yes</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli share inject-system-cred <span class="arg">--client-host worker1 --target-host lanpc --svc-user ddc-svc --yes</span></span></div>
+    </div>
+
+    <p class="mode-note"><strong>切到 zen 的典型链路：</strong>注册端点 → 探活 → master 装服务 → 集群改 INI 切 ZenShared upstream。</p>
+
+    <div class="commands" aria-label="zen daemon 命令">
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli zen register <span class="arg">--machine 3 --declared-port 8558 --role shared_upstream --lifecycle installed_service --data-dir D:\ZenData</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli zen probe <span class="arg">--all --cred-alias prod</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli zen service install <span class="arg">--endpoint-id 1 --cred-alias prod --yes</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli zen enable <span class="arg">--project-id 7 --machines 3,4,5 --upstream-endpoint-id 1 --cred-alias prod --yes</span></span></div>
+    </div>
+
+    <div class="callout" role="note">
+      <span class="glyph" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+          <line x1="12" y1="9" x2="12" y2="13"></line>
+          <line x1="12" y1="17" x2="12.01" y2="17"></line>
+        </svg>
+      </span>
+      <div class="body">
+        <strong>zen 的两条红线。</strong>UECM 绝不在 server 端重装 zen 二进制（视作不可信升级，PS sidecar 层硬拦）；<span class="k">zen disable</span> 也只删 ZenShared key，<strong>不自动恢复</strong> legacy SMB / Pak 配置。
+        <span class="why">要回退旧配置，用 git restore 或 ini_editor 留下的 <span class="mono">.bak.&lt;timestamp&gt;</span> 兄弟文件。</span>
+      </div>
+    </div>
+
+    <div class="subsection"><span class="tag">3b</span> PSO Cache · 切场零卡顿</div>
+
+    <p class="mode-note" style="margin-top:0">
+      L2 + L3 缓存。先体检 precaching CVar 配置，再用 UE <code>-game</code> 模式跑采集，得到 <code>*.upipelinecache</code> / <code>*.stablepc.csv</code>，最后<strong>带 GPU 一致性检测再分发</strong>。
     </p>
 
     <div class="workflow" aria-label="PSO Cache 工作流">
@@ -807,10 +831,10 @@
       <span class="step">GPU 一致性检测后扇出分发</span>
     </div>
 
-    <div class="commands" aria-label="典型命令">
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli pso verify <span class="arg">--host lanpc</span></span></div>
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli pso collect <span class="arg">--project MyVPShow --map MainStage</span></span></div>
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli pso distribute <span class="arg">--source lanpc --targets all --check-gpu</span></span></div>
+    <div class="commands" aria-label="PSO 命令">
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli pso verify <span class="arg">--project-id 7</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli pso collect <span class="arg">--project-id 7 --source-machine 3</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli pso distribute <span class="arg">--project-id 7 --source-machine 3 --targets 4,5,6 --yes</span></span></div>
     </div>
 
     <div class="callout" role="note">
@@ -822,57 +846,29 @@
         </svg>
       </span>
       <div class="body">
-        <strong>GPU mismatch 检测必须先过。</strong>把 RDNA 上采集的 PSO 推给 Ampere（或反过来）会触发首帧 pipeline 重建，肉眼可见 hitch。
+        <strong>GPU mismatch 检测必须先过。</strong>把 RDNA 上采集的 PSO 推给 Ampere（或反过来）会触发首帧 pipeline 重建，肉眼可见 hitch。<code>pso distribute</code> 内建 GPU preflight guard，不靠 flag 触发。
         <span class="why">分发前 UECM 会对比源机和目标机的 GPU vendor / family / driver，不一致直接拒绝。</span>
       </div>
     </div>
-  </article>
 
-  <!-- Feature 05 -->
-  <article class="feature" id="f5">
-    <header class="feature-head">
-      <div class="feature-num">05</div>
-      <div class="feature-title">
-        <h2>集群诊断</h2>
-        <div class="domains">
-          <span class="domain accent">ini</span>
-          <span class="domain accent">health</span>
-        </div>
-      </div>
-    </header>
+    <div class="subsection"><span class="tag">3c</span> 一键 deploy 编排</div>
 
-    <p class="gist">
-      两个互补的子模块：一个查<strong>配置正确性</strong>，一个查<strong>运行可达性</strong>。组合起来回答「集群健康吗 / 哪里不对 / 怎么修」。
+    <p class="mode-note" style="margin-top:0">
+      <code>deploy ddc --plan</code> 把上面这些（开本地目录 → 建 SMB 共享 → 写 BackendGraph → 生成/分发 pak → 设 PSO CVar → 采集/分发 PSO → 验证启动日志）<strong>11 步</strong>串成一条工作流，支持 <code>--dry-run</code> 预览和 <code>--stop-on-failure</code>。
     </p>
 
-    <div class="split" role="list" aria-label="诊断子模块">
-      <div class="pane" role="listitem">
-        <div class="pkind">5a · INI Scanner</div>
-        <h3 class="ptitle">配置正确性</h3>
-        <p class="pdesc">
-          <strong>7 条规则 R001–R007</strong>，扫 project / user / engine 三级 INI，找硬编码 <span class="k">DDC Path=</span>、user 级覆盖、mapped drive 路径、deprecated CVar 等问题。
-          支持带<strong>自动备份</strong>的一键修复。
-        </p>
-        <div class="pstat"><span class="n">7</span> 条规则 · <span class="n">3</span> 级 INI · 一键 apply（含 .bak）</div>
-        <div class="pcmd">
-          <div><span class="prompt">$</span> uecm-cli ini scan <span class="arg">--host lanpc</span></div>
-          <div><span class="prompt">$</span> uecm-cli ini apply-finding <span class="arg">--id R003</span></div>
-        </div>
-      </div>
+    <div class="commands" aria-label="一键部署命令">
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli deploy ddc <span class="arg">--plan ./deploy-plan.json --dry-run</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli deploy ddc <span class="arg">--plan ./deploy-plan.json --yes</span></span></div>
+    </div>
 
-      <div class="pane" role="listitem">
-        <div class="pkind">5b · Health Check</div>
-        <h3 class="ptitle">运行可达性</h3>
-        <p class="pdesc">
-          分三层垂直体检（共 17 项）：<strong>L1 端口</strong>（<span class="k">tcp_5985</span> / <span class="k">tcp_445</span> / <span class="k">tcp_135</span>）+ <strong>L2 Bootstrap</strong>（<span class="k">firewall_445</span> / <span class="k">local_account_token_filter</span> / <span class="k">long_paths_enabled</span> / <span class="k">lanman_server</span>）+ <strong>L3 业务</strong>（<span class="k">share_reachable</span> / <span class="k">ntfs_perm</span> / <span class="k">cred_user</span> / <span class="k">cred_system</span> / <span class="k">env_vars</span> / <span class="k">system_write</span> / <span class="k">winmgmt</span> + 3 derived <span class="k">ini_consistency</span> / <span class="k">pso_precaching</span> / <span class="k">gpu_consistency</span>）。每行红色状态自带 <span class="k">remediation</span> 文案，告诉操作员下一步该跑哪个 CLI。输出 <strong>N 机 × 17 行</strong>矩阵。
-        </p>
-        <div class="pstat"><span class="n">3</span> L1 + <span class="n">4</span> L2 + <span class="n">7</span> L3 + <span class="n">3</span> derived · N×<span class="n">17</span> 矩阵 · 每行带 remediation</div>
-        <div class="pcmd">
-          <div><span class="prompt">$</span> uecm-cli health run <span class="arg">--cidr 192.168.10.0/24</span></div>
-          <div><span class="prompt">$</span> uecm-cli health run <span class="arg">--all --cred-alias prod</span></div>
-          <div><span class="prompt">$</span> uecm-cli health results <span class="arg">--format matrix</span></div>
-        </div>
-      </div>
+    <p class="mode-note" style="margin-top:24px">
+      <strong>验证生效 · 别让「配了」等于「生效了」：</strong>部署跑完别假设缓存就在用。<code>log verify-startup</code> 跑一次 nullrhi 编辑器、解析 <code>LogDerivedDataCache</code> 启动输出，确认 <code>ZenShared … OK!</code>（或 legacy 的 <code>Using Shared data cache path</code>）真的出现；再回 <a href="#f1">① health</a> 看 <code>zen_*</code> / <code>ini_consistency</code> / <code>pso_precaching</code> 这几行转绿。
+    </p>
+
+    <div class="commands" aria-label="验证生效命令">
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli log verify-startup <span class="arg">--host lanpc --editor-exe "C:\UE\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" --project "D:\Show\My.uproject"</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli health run <span class="arg">--all --cred-alias prod</span></span></div>
     </div>
   </article>
 
@@ -880,15 +876,15 @@
   <section class="foundations">
     <span class="label">底层支撑（不单独成核心）</span>
     <p>
-      下面这些域是上面 5 个核心功能能跑起来的「水电煤」：单独看不构成完整业务，但每个 CLI / GUI 操作都会经过它们。出问题时 health 矩阵会先点出来。
+      下面这些域是上面 3 个核心功能能跑起来的「水电煤」：单独看不构成完整业务，但每个 CLI / GUI 操作都会经过它们。出问题时 health 矩阵会先点出来。
     </p>
     <div class="chips">
       <span class="chip">system</span>
-      <span class="chip">winrm</span>
-      <span class="chip">cred</span>
       <span class="chip">env</span>
       <span class="chip">gpu</span>
       <span class="chip">project</span>
+      <span class="chip">local-cache</span>
+      <span class="chip">log</span>
       <span class="chip">ini · 单条编辑</span>
     </div>
   </section>
@@ -897,7 +893,10 @@
   <footer class="colophon">
     <div class="meta-row">
       <span><span class="k">Document</span> · UECM Core Functions Overview</span>
-      <span><span class="k">Source</span> · PRODUCT.md + 用户梳理</span>
+      <span><span class="k">Source</span> · PRODUCT.md + docs/zen-integration.md + 用户梳理</span>
+    </div>
+    <div class="meta-row">
+      <span><span class="k">CLI</span> · 命令语法以 <span class="k">uecm-cli &lt;DOMAIN&gt; --help</span> 为准，本页示例仅作流程示意</span>
     </div>
     <div class="meta-row">
       <span><span class="k">Theme</span> · Light / Dark via toggle</span>
