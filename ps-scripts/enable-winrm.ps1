@@ -82,6 +82,22 @@ function Get-UecmLogDirCandidates {
     return $result
 }
 
+function Get-UecmCriticalVerdict {
+    param([hashtable]$State)
+    $missing = New-Object 'System.Collections.Generic.List[string]'
+    if ($State.winrm_service_status -ne 'Running')         { $missing.Add('winrm_service')  | Out-Null }
+    if (-not $State.wsman_localhost_ok)                    { $missing.Add('wsman_localhost')| Out-Null }
+    if ([int]($State.local_account_token_filter_policy) -ne 1) { $missing.Add('latfp')      | Out-Null }
+    if ([int]($State.long_paths_enabled) -ne 1)            { $missing.Add('long_paths')     | Out-Null }
+    if ($State.lanman_server_running -ne $true)            { $missing.Add('lanman_server')  | Out-Null }
+    if ($State.winmgmt_running -ne $true)                  { $missing.Add('winmgmt')        | Out-Null }
+    if ($State.fps_smb_in_tcp_enabled -ne $true)           { $missing.Add('firewall_445')   | Out-Null }
+    return @{
+        verdict = $(if ($missing.Count -eq 0) { 'SUCCESS' } else { 'FAILED' })
+        missing = $missing.ToArray()
+    }
+}
+
 function Test-UecmAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)

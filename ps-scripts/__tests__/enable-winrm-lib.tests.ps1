@@ -26,4 +26,23 @@ if ($cand[2] -ne 'C:\T')              { throw "candidate[2] should be Temp, got 
 # 空 scriptRoot 被跳过
 $cand2 = Get-UecmLogDirCandidates -ScriptRoot '' -ProgramData 'C:\PD' -Temp 'C:\T'
 if ($cand2[0] -ne 'C:\PD\UECM\Logs') { throw "empty scriptRoot should be skipped" }
+
+# Get-UecmCriticalVerdict: 全绿 -> SUCCESS / 缺项 -> FAILED + missing
+$green = @{
+    winrm_service_status = 'Running'; wsman_localhost_ok = $true
+    local_account_token_filter_policy = 1; long_paths_enabled = 1
+    lanman_server_running = $true; winmgmt_running = $true; fps_smb_in_tcp_enabled = $true
+}
+$v1 = Get-UecmCriticalVerdict -State $green
+if ($v1.verdict -ne 'SUCCESS') { throw "all-green should be SUCCESS, got $($v1.verdict)" }
+if ($v1.missing.Count -ne 0)   { throw "all-green missing should be empty, got $($v1.missing -join ',')" }
+
+$noLatfp = $green.Clone(); $noLatfp.local_account_token_filter_policy = $null
+$v2 = Get-UecmCriticalVerdict -State $noLatfp
+if ($v2.verdict -ne 'FAILED')        { throw "missing latfp should be FAILED" }
+if ($v2.missing -notcontains 'latfp'){ throw "missing should contain latfp, got $($v2.missing -join ',')" }
+
+$noFw = $green.Clone(); $noFw.fps_smb_in_tcp_enabled = $false
+$v3 = Get-UecmCriticalVerdict -State $noFw
+if ($v3.missing -notcontains 'firewall_445') { throw "missing should contain firewall_445" }
 "OK"
