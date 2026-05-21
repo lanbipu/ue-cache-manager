@@ -65,6 +65,8 @@ if ($byKey['quickconfig'].Critical -ne $false)      { throw "quickconfig must be
 if (-not $byKey.ContainsKey('smb_firewall'))        { throw "missing smb_firewall step" }
 if ($byKey['smb_firewall'].Critical -ne $true)      { throw "smb_firewall must be Critical" }
 if ($byKey['latfp'].Critical -ne $true)             { throw "latfp must be Critical" }
+if ($byKey['winmgmt'].Critical -ne $true)           { throw "winmgmt must be Critical" }
+if ($byKey['long_paths'].Critical -ne $true)        { throw "long_paths must be Critical" }
 
 # Get-UecmWinRmState: 含 4 个新判定字段(只读查询, dot-source 下可安全调用)
 $state = Get-UecmWinRmState

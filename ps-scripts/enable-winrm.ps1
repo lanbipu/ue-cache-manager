@@ -156,7 +156,7 @@ function Write-UecmLogLine {
     param([hashtable]$LogState, [string]$Status, [string]$Key, [string]$Message)
     if (-not $LogState.WriteOk -or -not $LogState.Path) { return }
     $line = Format-UecmLogLine -Timestamp (Get-Date) -Status $Status -Key $Key -Message $Message
-    try { $enc = New-Object System.Text.UTF8Encoding($false); [System.IO.File]::AppendAllText($LogState.Path, $line + "`r`n", $enc) } catch {}
+    try { [System.IO.File]::AppendAllText($LogState.Path, $line + "`r`n", [System.Text.Encoding]::UTF8) } catch {}
 }
 
 function Invoke-UecmStep {
@@ -545,10 +545,9 @@ function Set-UecmPowerPlan {
 }
 
 if (-not $LibraryOnly) {
-$changes     = New-Object 'System.Collections.Generic.List[string]'
-$failed      = New-Object 'System.Collections.Generic.List[string]'
-$stepResults = New-Object 'System.Collections.Generic.List[hashtable]'
-$logState    = New-UecmLogState -ScriptRoot $PSScriptRoot
+$changes  = New-Object 'System.Collections.Generic.List[string]'
+$failed   = New-Object 'System.Collections.Generic.List[string]'
+$logState = New-UecmLogState -ScriptRoot $PSScriptRoot
 try {
     if ($CheckOnly) {
         $checkState = Get-UecmWinRmState
@@ -577,7 +576,6 @@ try {
 
     foreach ($step in (Build-UecmStepTable)) {
         $r = Invoke-UecmStep -Step $step -Changes $changes -LogState $logState
-        $stepResults.Add($r) | Out-Null
         if ($r.status -ne 'ok') { $failed.Add($r.key) | Out-Null }
     }
 

@@ -225,6 +225,6 @@ uecm-cli health run --host <target-ip> --username <user> --password <pass>
 
 | 项目 | 说明 |
 |---|---|
-| `Enable-UecmWinRm` 函数 | 原脚本中的旧版入口函数，现已被步骤表主体替代，是死代码，可在后续 task 中删除 |
+| `Enable-UecmWinRm` 函数 | ~~原脚本中的旧版入口函数，是死代码，可在后续 task 中删除~~ **已在 commit `8c3b01b` 中删除，无需后续清理** |
 | catch JSON 缺少字段 | catch 路径的 JSON 目前不包含 `missing_critical`、`firewall_profiles_disabled`；admin 门槛前这两个字段无法采集，属已知限制，不影响功能 |
-| UTF-8 BOM 写入 | 当前 log 文件用 `[System.Text.Encoding]::UTF8` 写入，会带 BOM；Windows 工具兼容，但 Unix 侧 `cat` 会看到 BOM 字节（`\xEF\xBB\xBF`）。可后续改为 `New-Object System.Text.UTF8Encoding($false)` 去掉 BOM |
+| UTF-8 BOM 写入 | log 文件用 `[System.Text.Encoding]::UTF8` 写入，**带 BOM（UTF-8 with BOM，符合规格 §3.4）**；用于保证 zh-CN Windows 上 Notepad 正确渲染系统中文错误信息（如"用户名或密码不正确"）。Unix 侧 `cat` 会看到 BOM 字节（`\xEF\xBB\xBF`），属预期行为。 |
