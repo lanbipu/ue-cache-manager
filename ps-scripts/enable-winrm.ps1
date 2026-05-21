@@ -55,6 +55,19 @@ try { chcp 65001 | Out-Null } catch {}
 
 $ErrorActionPreference = 'Stop'
 
+function Format-UecmLogLine {
+    param(
+        [datetime]$Timestamp,
+        [string]$Status,
+        [string]$Key,
+        [string]$Message
+    )
+    $ts = $Timestamp.ToString('yyyy-MM-dd HH:mm:ss')
+    $st = ('[' + $Status.ToUpper() + ']').PadRight(8)
+    $k  = $Key.PadRight(17)
+    return "[$ts] $st$k| $Message"
+}
+
 function Test-UecmAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
