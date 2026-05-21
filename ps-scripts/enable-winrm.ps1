@@ -570,6 +570,8 @@ $logState    = New-UecmLogState -ScriptRoot $PSScriptRoot
 try {
     if ($CheckOnly) {
         $checkState = Get-UecmWinRmState
+        $verdictInfo = Get-UecmCriticalVerdict -State $checkState
+        Write-UecmLogLine -LogState $logState -Status 'sumry' -Key 'CHECKONLY' -Message "verdict=$($verdictInfo.verdict)  missing_critical=[$($verdictInfo.missing -join ',')]"
         $checkOk = [bool]$checkState.wsman_localhost_ok
         $checkMessage = if ($checkOk) {
             'UECM WinRM bootstrap check completed'
@@ -581,6 +583,8 @@ try {
             message = $checkMessage
             changed = @()
             state = $checkState
+            log_path = $logState.Path
+            log_write_ok = $logState.WriteOk
         } | ConvertTo-Json -Depth 8 -Compress
         if ($checkOk) { exit 0 } else { exit 1 }
     }
