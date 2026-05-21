@@ -71,4 +71,27 @@ $state = Get-UecmWinRmState
 foreach ($k in 'long_paths_enabled','lanman_server_running','winmgmt_running','fps_smb_in_tcp_enabled') {
     if (-not $state.ContainsKey($k)) { throw "Get-UecmWinRmState missing key $k" }
 }
+
+# Write-UecmLogLine: 写到第一个可写目录, 返回最终文件路径
+$tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("uecmlogtest-" + [guid]::NewGuid())
+New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+# ScriptRoot 故意指向一个永远无法写入的路径（kernel32.dll 是文件, 其子路径 AppendAllText 必然失败）
+$logState = New-UecmLogState -ScriptRoot 'C:\Windows\System32\kernel32.dll\bad-subdir' -ProgramData $tmp -Temp $tmp
+if (-not $logState.Path) { throw "New-UecmLogState should resolve a writable path" }
+if ($logState.Path -notlike "$tmp*") { throw "should fall back to writable dir (ProgramData or Temp), got $($logState.Path)" }
+Write-UecmLogLine -LogState $logState -Status 'ok' -Key 'k1' -Message 'hello'
+if (-not (Test-Path $logState.Path)) { throw "log file not created" }
+if ((Get-Content $logState.Path -Raw) -notmatch 'k1.*hello') { throw "log line not written" }
+
+# Invoke-UecmStep: 失败步骤不抛, 返回 fail 结果
+$okStep   = @{ Key='s_ok';   Critical=$true;  Label='ok step';   Action={ param($c) Add-UecmChange $c 'did ok' } }
+$failStep = @{ Key='s_fail'; Critical=$false; Label='fail step'; Action={ param($c) throw 'boom' } }
+$changes = New-Object 'System.Collections.Generic.List[string]'
+$r1 = Invoke-UecmStep -Step $okStep   -Changes $changes -LogState $logState
+$r2 = Invoke-UecmStep -Step $failStep -Changes $changes -LogState $logState
+if ($r1.status -ne 'ok')   { throw "ok step should be ok, got $($r1.status)" }
+if ($r2.status -ne 'fail') { throw "fail step should be fail, got $($r2.status)" }
+if ($r2.message -notmatch 'boom') { throw "fail step should capture exception message" }
+Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+
 "OK"

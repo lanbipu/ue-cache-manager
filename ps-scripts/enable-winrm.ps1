@@ -138,6 +138,41 @@ function Build-UecmStepTable {
     )
 }
 
+function New-UecmLogState {
+    param([string]$ScriptRoot, [string]$ProgramData = $env:ProgramData, [string]$Temp = $env:TEMP)
+    $fileName = "UECM-Bootstrap-$env:COMPUTERNAME-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
+    foreach ($dir in (Get-UecmLogDirCandidates -ScriptRoot $ScriptRoot -ProgramData $ProgramData -Temp $Temp)) {
+        try {
+            if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
+            $candidate = Join-Path $dir $fileName
+            [System.IO.File]::AppendAllText($candidate, '')
+            return @{ Path = $candidate; WriteOk = $true }
+        } catch { continue }
+    }
+    return @{ Path = $null; WriteOk = $false }
+}
+
+function Write-UecmLogLine {
+    param([hashtable]$LogState, [string]$Status, [string]$Key, [string]$Message)
+    if (-not $LogState.WriteOk -or -not $LogState.Path) { return }
+    $line = Format-UecmLogLine -Timestamp (Get-Date) -Status $Status -Key $Key -Message $Message
+    try { [System.IO.File]::AppendAllText($LogState.Path, $line + "`r`n", [System.Text.Encoding]::UTF8) } catch {}
+}
+
+function Invoke-UecmStep {
+    param([hashtable]$Step, [System.Collections.Generic.List[string]]$Changes, [hashtable]$LogState)
+    try {
+        & $Step.Action $Changes
+        Write-UecmLogLine -LogState $LogState -Status 'ok' -Key $Step.Key -Message $Step.Label
+        return @{ key = $Step.Key; status = 'ok'; critical = [bool]$Step.Critical; message = $Step.Label }
+    } catch {
+        $msg = $_.Exception.Message
+        $tag = $(if ($Step.Critical) { '' } else { '  (non-critical, continue)' })
+        Write-UecmLogLine -LogState $LogState -Status 'fail' -Key $Step.Key -Message ($msg + $tag)
+        return @{ key = $Step.Key; status = 'fail'; critical = [bool]$Step.Critical; message = $msg }
+    }
+}
+
 function Test-UecmAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
