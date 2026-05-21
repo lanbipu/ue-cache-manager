@@ -45,7 +45,9 @@ param(
     [ValidateSet('HighPerformance', 'Balanced', 'Skip')]
     [string]$PowerProfile = 'Skip',
 
-    [switch]$CheckOnly
+    [switch]$CheckOnly,
+
+    [switch]$LibraryOnly
 )
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -440,6 +442,7 @@ function Set-UecmPowerPlan {
     Add-UecmChange $Changes "active power plan set to $PowerProfile (active GUID: $activeGuid)"
 }
 
+if (-not $LibraryOnly) {
 try {
     if ($CheckOnly) {
         $checkState = Get-UecmWinRmState
@@ -495,4 +498,5 @@ catch {
         state = Get-UecmWinRmState
     } | ConvertTo-Json -Depth 8 -Compress
     exit 1
+}
 }
