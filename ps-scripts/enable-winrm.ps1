@@ -250,6 +250,11 @@ function Get-UecmWinRmState {
         network_profiles = @(Get-UecmNetworkProfiles)
         trusted_hosts = Get-UecmTrustedHosts
         local_account_token_filter_policy = $localAccountTokenPolicy
+        long_paths_enabled = Get-UecmRegistryDword `
+            -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name 'LongPathsEnabled'
+        lanman_server_running = ((Get-Service -Name LanmanServer -ErrorAction SilentlyContinue).Status -eq 'Running')
+        winmgmt_running = ((Get-Service -Name Winmgmt -ErrorAction SilentlyContinue).Status -eq 'Running')
+        fps_smb_in_tcp_enabled = ((Get-NetFirewallRule -Name 'FPS-SMB-In-TCP' -ErrorAction SilentlyContinue).Enabled -eq 'True')
     }
 }
 
