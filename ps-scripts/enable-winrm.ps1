@@ -156,7 +156,7 @@ function Write-UecmLogLine {
     param([hashtable]$LogState, [string]$Status, [string]$Key, [string]$Message)
     if (-not $LogState.WriteOk -or -not $LogState.Path) { return }
     $line = Format-UecmLogLine -Timestamp (Get-Date) -Status $Status -Key $Key -Message $Message
-    try { [System.IO.File]::AppendAllText($LogState.Path, $line + "`r`n", [System.Text.Encoding]::UTF8) } catch {}
+    try { $enc = New-Object System.Text.UTF8Encoding($false); [System.IO.File]::AppendAllText($LogState.Path, $line + "`r`n", $enc) } catch {}
 }
 
 function Invoke-UecmStep {
@@ -307,24 +307,6 @@ function Set-UecmNetworkProfile {
         Set-NetConnectionProfile -InterfaceIndex $profile.InterfaceIndex -NetworkCategory $NetworkCategory -ErrorAction Stop
         Add-UecmChange $Changes "network profile $($profile.InterfaceAlias) changed from Public to $NetworkCategory"
     }
-}
-
-function Enable-UecmWinRm {
-    param(
-        [System.Collections.Generic.List[string]]$Changes
-    )
-
-    Set-Service -Name WinRM -StartupType Automatic -ErrorAction Stop
-    Add-UecmChange $Changes 'WinRM startup type set to Automatic'
-
-    Start-Service -Name WinRM -ErrorAction Stop
-    Add-UecmChange $Changes 'WinRM service started'
-
-    Enable-PSRemoting -Force -SkipNetworkProfileCheck | Out-Null
-    Add-UecmChange $Changes 'PowerShell Remoting enabled'
-
-    Enable-NetFirewallRule -DisplayGroup 'Windows Remote Management' -ErrorAction Stop | Out-Null
-    Add-UecmChange $Changes 'Windows Remote Management firewall rules enabled'
 }
 
 function Set-UecmFirewallScope {
