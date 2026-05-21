@@ -45,4 +45,24 @@ if ($v2.missing -notcontains 'latfp'){ throw "missing should contain latfp, got 
 $noFw = $green.Clone(); $noFw.fps_smb_in_tcp_enabled = $false
 $v3 = Get-UecmCriticalVerdict -State $noFw
 if ($v3.missing -notcontains 'firewall_445') { throw "missing should contain firewall_445" }
+
+# Build-UecmStepTable: 结构完整 / Key 唯一 / 关键步 Critical 标记正确
+$steps = Build-UecmStepTable
+if ($steps.Count -lt 10) { throw "expected >=10 steps, got $($steps.Count)" }
+$keys = $steps | ForEach-Object { $_.Key }
+$dups = $keys | Group-Object | Where-Object { $_.Count -gt 1 }
+if ($dups) { throw "duplicate step keys: $($dups.Name -join ',')" }
+foreach ($s in $steps) {
+    foreach ($f in 'Key','Critical','Label','Action') {
+        if (-not $s.ContainsKey($f)) { throw "step $($s.Key) missing field $f" }
+    }
+    if ($s.Action -isnot [scriptblock]) { throw "step $($s.Key) Action not a scriptblock" }
+}
+$byKey = @{}; $steps | ForEach-Object { $byKey[$_.Key] = $_ }
+if ($byKey['winrm_service'].Critical -ne $true)     { throw "winrm_service must be Critical" }
+if ($byKey['winrm_psremoting'].Critical -ne $false) { throw "winrm_psremoting must be non-critical (firewall 异常时不拖垮整体)" }
+if ($byKey['quickconfig'].Critical -ne $false)      { throw "quickconfig must be non-critical" }
+if (-not $byKey.ContainsKey('smb_firewall'))        { throw "missing smb_firewall step" }
+if ($byKey['smb_firewall'].Critical -ne $true)      { throw "smb_firewall must be Critical" }
+if ($byKey['latfp'].Critical -ne $true)             { throw "latfp must be Critical" }
 "OK"

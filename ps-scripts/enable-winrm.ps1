@@ -98,6 +98,46 @@ function Get-UecmCriticalVerdict {
     }
 }
 
+function Build-UecmStepTable {
+    # Critical = steps that feed into the L1+L2 final verdict. Action receives [List[string]]$Changes.
+    # The 5 WinRM sub-steps are split: service start/stop is critical; PSRemoting/quickconfig/
+    # firewall rules are non-critical -- those are the ones that throw "Unable to check the status
+    # of the firewall" when Windows Firewall is disabled, but the listener is usually already up
+    # by then; the final verdict checks wsman_localhost_ok directly.
+    return @(
+        @{ Key='network_profile';  Critical=$false; Label='Set Public network profile to Private';
+           Action={ param($c) Set-UecmNetworkProfile -Changes $c } }
+        @{ Key='winrm_service';    Critical=$true;  Label='Set WinRM Automatic and start service';
+           Action={ param($c)
+               Set-Service -Name WinRM -StartupType Automatic -ErrorAction Stop
+               Add-UecmChange $c 'WinRM set to Automatic'
+               Start-Service -Name WinRM -ErrorAction Stop
+               Add-UecmChange $c 'WinRM service started' } }
+        @{ Key='winrm_psremoting'; Critical=$false; Label='Enable-PSRemoting (may fail if firewall disabled; listener usually already up)';
+           Action={ param($c) Enable-PSRemoting -Force -SkipNetworkProfileCheck | Out-Null; Add-UecmChange $c 'PSRemoting enabled' } }
+        @{ Key='quickconfig';      Critical=$false; Label='winrm quickconfig convenience wrapper (non-fatal)';
+           Action={ param($c) & winrm quickconfig -q | Out-Null; Add-UecmChange $c 'winrm quickconfig done' } }
+        @{ Key='winrm_fw_rule';    Critical=$false; Label='Enable WinRM HTTP-In firewall rule';
+           Action={ param($c) Enable-NetFirewallRule -DisplayGroup 'Windows Remote Management' -ErrorAction Stop | Out-Null; Add-UecmChange $c 'WinRM firewall rules enabled' } }
+        @{ Key='firewall_scope';   Critical=$false; Label='Restrict WinRM firewall to allowed source IPs (optional)';
+           Action={ param($c) Set-UecmFirewallScope -Changes $c } }
+        @{ Key='trusted_hosts';    Critical=$false; Label='Set WSMan TrustedHosts (optional)';
+           Action={ param($c) Set-UecmTrustedHosts -Changes $c } }
+        @{ Key='latfp';            Critical=$true;  Label='LocalAccountTokenFilterPolicy=1';
+           Action={ param($c) Enable-UecmLocalAccountRemoteAdmin -Changes $c } }
+        @{ Key='smb_firewall';     Critical=$true;  Label='LanmanServer service + FPS-SMB-In-TCP rule';
+           Action={ param($c) Enable-UecmSmbServer -Changes $c } }
+        @{ Key='winmgmt';          Critical=$true;  Label='Winmgmt service Auto+Running';
+           Action={ param($c) Enable-UecmWmi -Changes $c } }
+        @{ Key='execution_policy'; Critical=$false; Label='LocalMachine execution policy';
+           Action={ param($c) Set-UecmLocalExecutionPolicy -Changes $c } }
+        @{ Key='long_paths';       Critical=$true;  Label='LongPathsEnabled=1';
+           Action={ param($c) Enable-UecmLongPaths -Changes $c } }
+        @{ Key='power_plan';       Critical=$false; Label='Power plan';
+           Action={ param($c) Set-UecmPowerPlan -Changes $c } }
+    )
+}
+
 function Test-UecmAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -242,9 +282,6 @@ function Enable-UecmWinRm {
 
     Enable-PSRemoting -Force -SkipNetworkProfileCheck | Out-Null
     Add-UecmChange $Changes 'PowerShell Remoting enabled'
-
-    & winrm quickconfig -q | Out-Null
-    Add-UecmChange $Changes 'WinRM quickconfig completed'
 
     Enable-NetFirewallRule -DisplayGroup 'Windows Remote Management' -ErrorAction Stop | Out-Null
     Add-UecmChange $Changes 'Windows Remote Management firewall rules enabled'
