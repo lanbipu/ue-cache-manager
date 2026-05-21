@@ -563,6 +563,10 @@ function Set-UecmPowerPlan {
 }
 
 if (-not $LibraryOnly) {
+$changes     = New-Object 'System.Collections.Generic.List[string]'
+$failed      = New-Object 'System.Collections.Generic.List[string]'
+$stepResults = New-Object 'System.Collections.Generic.List[hashtable]'
+$logState    = New-UecmLogState -ScriptRoot $PSScriptRoot
 try {
     if ($CheckOnly) {
         $checkState = Get-UecmWinRmState
@@ -585,36 +589,41 @@ try {
         throw 'Administrator privileges are required. Start PowerShell with Run as Administrator.'
     }
 
-    $changes = New-Object 'System.Collections.Generic.List[string]'
-
-    Set-UecmNetworkProfile -Changes $changes
-    Enable-UecmWinRm -Changes $changes
-    Set-UecmFirewallScope -Changes $changes
-    Set-UecmTrustedHosts -Changes $changes
-    Enable-UecmLocalAccountRemoteAdmin -Changes $changes
-    Enable-UecmSmbServer -Changes $changes
-    Enable-UecmWmi -Changes $changes
-    Set-UecmLocalExecutionPolicy -Changes $changes
-    Enable-UecmLongPaths -Changes $changes
-    Set-UecmPowerPlan -Changes $changes
-
-    if (-not (Test-UecmLocalWsMan)) {
-        throw 'WinRM was configured but Test-WSMan localhost still failed.'
+    foreach ($step in (Build-UecmStepTable)) {
+        $r = Invoke-UecmStep -Step $step -Changes $changes -LogState $logState
+        $stepResults.Add($r) | Out-Null
+        if ($r.status -ne 'ok') { $failed.Add($r.key) | Out-Null }
     }
 
+    $state = Get-UecmWinRmState
+    $fwProfilesDisabled = -not ((Get-NetFirewallProfile -ErrorAction SilentlyContinue | Where-Object { $_.Enabled -eq $true }).Count -gt 0)
+    $verdictInfo = Get-UecmCriticalVerdict -State $state
+    $ok = ($verdictInfo.verdict -eq 'SUCCESS')
+
+    $summaryLine = "verdict=$($verdictInfo.verdict)  failed_steps=[$($failed -join ',')]  missing_critical=[$($verdictInfo.missing -join ',')]  log_write_ok=$($logState.WriteOk)"
+    Write-UecmLogLine -LogState $logState -Status 'sumry' -Key 'SUMMARY' -Message $summaryLine
+
     @{
-        ok = $true
-        message = 'UECM WinRM bootstrap completed'
+        ok = $ok
+        message = $(if ($ok) { 'UECM WinRM bootstrap completed' } else { "bootstrap finished with unmet critical items: $($verdictInfo.missing -join ',')" })
         changed = @($changes)
-        state = Get-UecmWinRmState
+        failed = @($failed)
+        missing_critical = @($verdictInfo.missing)
+        log_path = $logState.Path
+        log_write_ok = $logState.WriteOk
+        firewall_profiles_disabled = $fwProfilesDisabled
+        state = $state
     } | ConvertTo-Json -Depth 8 -Compress
-    exit 0
+    exit $(if ($ok) { 0 } else { 1 })
 }
 catch {
     @{
         ok = $false
         message = $_.Exception.Message
-        changed = @()
+        changed = @($changes)
+        failed = @($failed)
+        log_path = $(if ($logState) { $logState.Path } else { $null })
+        log_write_ok = $(if ($logState) { $logState.WriteOk } else { $false })
         state = Get-UecmWinRmState
     } | ConvertTo-Json -Depth 8 -Compress
     exit 1
