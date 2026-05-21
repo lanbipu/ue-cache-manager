@@ -68,6 +68,20 @@ function Format-UecmLogLine {
     return "[$ts] $st$k| $Message"
 }
 
+function Get-UecmLogDirCandidates {
+    param(
+        [string]$ScriptRoot,
+        [string]$ProgramData,
+        [string]$Temp
+    )
+    $dirs = New-Object 'System.Collections.Generic.List[string]'
+    if (-not [string]::IsNullOrWhiteSpace($ScriptRoot))  { $dirs.Add($ScriptRoot) | Out-Null }
+    if (-not [string]::IsNullOrWhiteSpace($ProgramData)) { $dirs.Add((Join-Path $ProgramData 'UECM\Logs')) | Out-Null }
+    if (-not [string]::IsNullOrWhiteSpace($Temp))        { $dirs.Add($Temp) | Out-Null }
+    [string[]]$result = $dirs.ToArray()
+    return $result
+}
+
 function Test-UecmAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
