@@ -22,6 +22,7 @@
 
 ## Revision History
 
+<<<<<<< Updated upstream
 - **v4 (2026-05-18)** — M0 lanPC 真机 fact-finding 后大改 7 大方向（详见 `docs/research/zen-launch-mechanism.md`）：
   (1) **zen 启用机制错向**：UE 5.4+ local zen 自动启，不需要工程 INI；plan §6 yaml 从 `enable_zen_backend` 重写为 `enable_zen_shared` —— 真正要配的是 `ZenShared` upstream，不是 `Zen` backend；
   (2) **binary 实际跑在 `%LOCALAPPDATA%\UnrealEngine\Common\Zen\Install\`**，所有 UE 版本共享同一份 install，按"最大见过版本"决策；§1.1 `zen_binary_expected` PK 改为 `(zen_build_version, binary_kind)`，§1.2 加 install_* 字段，R016 / R018 / T1.6 全部按 install 路径校验，InTree 副本仅作 reference；
@@ -31,6 +32,9 @@
   (6) **集群"共享 cache"真实 key 是 `ZenShared`**（不是 plan v3 假设的"在 InstalledDerivedDataBackendGraph 加 Zen entry"）；M3 enable/disable 全部按 ZenShared 配置改；
   (7) Red Line #6 措辞修订：禁动 InTree 和 install 两个位置的 binary，UECM 仅监测 hash 漂移不修复。
 - **v3.1 (2026-05-18)** — Codex second review 修正 5 处：(1) 分清 `zen.exe`（CLI）和 `zenserver.exe`（daemon），baseline / R016 校验目标改 zenserver.exe + 副检 zen.exe；(2) `unverified_policy` 默认改 `refuse`，`verified_versions` 初始为空，M0 实测通过才追加；(3) `EngineAssociation` 加 4 种形态解析规则（version / GUID / empty / unknown），未知形态强制 legacy_pak；(4) 明确 raw_json 与现有 3 个 flat extract 列的关系（baseline 冻结，未来不加新 flat 列）；(5) lockfile 解析改用 `zen status --format json` CLI，不自己实现 Compact Binary parser。**v4 把这条 lockfile 决策反转了 —— 该 flag 实测不存在。**
+=======
+- **v3.1 (2026-05-18)** — Codex second review 修正 5 处：(1) 分清 `zen.exe`（CLI）和 `zenserver.exe`（daemon），baseline / R016 校验目标改 zenserver.exe + 副检 zen.exe；(2) `unverified_policy` 默认改 `refuse`，`verified_versions` 初始为空，M0 实测通过才追加；(3) `EngineAssociation` 加 4 种形态解析规则（version / GUID / empty / unknown），未知形态强制 legacy_pak；(4) 明确 raw_json 与现有 3 个 flat extract 列的关系（baseline 冻结，未来不加新 flat 列）；(5) lockfile 解析改用 `zen status --format json` CLI，不自己实现 Compact Binary parser。
+>>>>>>> Stashed changes
 - **v3 (2026-05-18)** — 初版。
 
 ## Goal
@@ -43,6 +47,7 @@ Plan 7 把 UE 5.4+ 自带的 zen 缓存服务接进 UECM，让 5–20 台 render
 
 ## Architecture additions
 
+<<<<<<< Updated upstream
 - `core::zen::*` — 12 个子模块（endpoint / probe / cache_stats / enable / disable / binary / lua_config / lockfile / retention / redaction / rules_loader / verify / **cb_parser**（v4 新增））
 - `core::cache_backend` — 顶级路由器，按工程 + 机器组合决定走 zen 还是 legacy；`ddc generate/distribute` 通过它做选择
 - `data::zen_endpoints / zen_probes / zen_cache_stats / project_cache_backend / zen_binary_expected / zen_binary_intree / machine_zen_install` — 7 张新表 + 1 张老表加字段（v4: 拆 install vs InTree）
@@ -52,11 +57,20 @@ Plan 7 把 UE 5.4+ 自带的 zen 缓存服务接进 UECM，让 5–20 台 render
 - `cli/domain_zen.rs` + `commands/zen.rs` — CLI 与 Tauri API 一一对应，业务逻辑全部在 `core/zen/`
 - `docs/research/zen-ini-rules.yaml` — v4: ZenShared upstream + legacy DDC 清理规则 + verified_versions 列表 + overrides 例外机制
 - `docs/research/zen-launch-mechanism.md` — v4 M0 fact-finding 交付物，记录 UE 5.4+ zen 真实运行机制
+=======
+- `core::zen::*` — 11 个子模块（endpoint / probe / cache_stats / enable / disable / binary / lua_config / lockfile / retention / redaction / rules_loader / verify）
+- `core::cache_backend` — 顶级路由器，按工程 + 机器组合决定走 zen 还是 legacy；`ddc generate/distribute` 通过它做选择
+- `data::zen_endpoints / zen_probes / zen_cache_stats / project_cache_backend / zen_binary_expected` — 5 张新表 + 2 张老表加字段
+- `ps-scripts/zen-*.ps1` — 13 个新 PowerShell sidecar（remote 探测、INI 编辑、URL ACL、service 安装）
+- `cli/domain_zen.rs` + `commands/zen.rs` — CLI 与 Tauri API 一一对应，业务逻辑全部在 `core/zen/`
+- `docs/research/zen-ini-rules.yaml` — 5.4+ 通用 INI 规则 + verified_versions 列表 + overrides 例外机制
+>>>>>>> Stashed changes
 
 ---
 
 ## Key design decisions
 
+<<<<<<< Updated upstream
 1. **zen binary 实际跑在 `%LOCALAPPDATA%\UnrealEngine\Common\Zen\Install\`，所有 UE 版本共享一份 install**（v4 实测修订）：
    - `Engine\Binaries\Win64\zen.exe` / `zenserver.exe` 是 **InTree 源版本**（每个 UE 版本各一份），UE editor 启动时按 "install 版本 >= InTree 就用 install" 决策。结果：集群里只要任一台开过 UE 5.8，那台的 install 路径就升到 5.8.x，之后即使跑 UE 5.7 工程也用 5.8.x zenserver。
    - **Health check / baseline 校验对象 = install 路径下的 zenserver.exe**（按 zen build version 索引，跟 UE major/minor 解耦）；InTree 副本另设 reference 表，hash 漂移仅作信息不告警。
@@ -74,6 +88,19 @@ Plan 7 把 UE 5.4+ 自带的 zen 缓存服务接进 UECM，让 5–20 台 render
 6. **raw_cb BLOB + Rust CB mini-parser**（v4 取代 v3.1 raw_json 决策）：cache metrics / probes 表存 zen 返回的原始 CB 二进制 + `schema_version` 标记 CB schema 兼容版本；现有 3 个 flat 列（`cache_hit_ratio` / `cache_disk_size_bytes` / `cache_memory_size_bytes`）作为**冻结基线**仅供索引查询，未来不加新 flat 列——新指标由 mini-parser 现取 CB blob。
 7. **lockfile 解析必须用 Rust CB mini-parser 直接读 `<data-dir>\.lock`**（v4 推翻 v3.1）：实测 `zen.exe status --format json` flag 不存在，`zen.exe status --data-dir <path>` 也返回 `No Zen state found`（CLI 自己读不出 lockfile）。zen CB 格式 spec 在 UE 源码 `Engine/Source/Runtime/Core/Public/Serialization/CompactBinary.h`；mini-parser read-only 实现工程量 ~2-3 天。port 区分 declared_port / effective_port 仍然有效：probe 必读 lockfile 拿 effective_port / pid / executable。
 8. **规则数据化**：ZenShared upstream + legacy DDC 清理规则从 `zen-ini-rules.yaml` 读，不 hardcode
+=======
+1. **两个 binary 都用 UE 自带，零部署 / 零升级 / 零替换**：
+   - `Engine\Binaries\Win64\zen.exe` — CLI 工具（执行 `service install` / `status` / `up` 等命令）
+   - `Engine\Binaries\Win64\zenserver.exe` — **真正跑的 daemon**，`zen service install` 装的是它
+   - **Health check / baseline 主要看 zenserver.exe**，zen.exe 只做副检（CLI 完整性）
+2. **UECM 责任 = 启用 + 配置 + 监测**，不碰部署
+3. **双 backend 并存**，按工程 UE 版本 + 机器实际安装 routing；老 `core::ddc_pak` / `core::pak_distribute` 一行不动
+4. **CLI 与 Tauri API 平级实现**，业务逻辑在共享 `core/zen/`，禁止两边各写一套
+5. **`/health` / `/stats` 真实 API 形态**：`/health` 只返 `OK!` 文本；详情在 `/health/info`；version 在 `/health/version`；cache stats 在 `/stats/z$` 嵌套 JSON，不在裸 `/stats`
+6. **raw_json 优先 + frozen extract baseline**：cache metrics 表存原文 JSON + schema_version 防 zen API drift；现有的 3 个 flat 列（`cache_hit_ratio` / `cache_disk_size_bytes` / `cache_memory_size_bytes`）作为**冻结基线**仅供索引查询，**未来不加新 flat 列**——新指标一律从 raw_json 现取（SQLite JSON1 extension）
+7. **port 区分 declared_port / effective_port**：`zen up` 会按 lockfile 选可用端口，probe 必须读 lockfile
+8. **规则数据化**：INI Scanner 规则从 `zen-ini-rules.yaml` 读，不 hardcode
+>>>>>>> Stashed changes
 9. **未验证 UE 版本默认拒绝**：YAML `unverified_policy: refuse` 兜底，防瞎装炸现场
 10. **service install 禁 `--full` flag**：避免拷 binary 进系统目录
 
@@ -92,7 +119,11 @@ CREATE TABLE zen_endpoints (
     role TEXT NOT NULL,                             -- 'local' | 'shared_upstream'
     upstream_endpoint_id INTEGER REFERENCES zen_endpoints(id),
     data_dir TEXT NOT NULL,
+<<<<<<< Updated upstream
     httpserverclass TEXT NOT NULL DEFAULT 'asio',   -- v4: 实测默认 asio（UE 5.7 sponsor 启动）
+=======
+    httpserverclass TEXT NOT NULL DEFAULT 'httpsys',
+>>>>>>> Stashed changes
     lifecycle_mode TEXT NOT NULL,                   -- 'editor_owned' | 'installed_service'
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -100,12 +131,16 @@ CREATE TABLE zen_endpoints (
 );
 CREATE INDEX idx_zen_endpoints_machine ON zen_endpoints(machine_id);
 
+<<<<<<< Updated upstream
 -- v4: probes 表存 CB BLOB（zen HTTP API 全是 Compact Binary），mini-parser 解码后写 flat 列
+=======
+>>>>>>> Stashed changes
 CREATE TABLE zen_probes (
     id INTEGER PRIMARY KEY,
     endpoint_id INTEGER NOT NULL REFERENCES zen_endpoints(id),
     probed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     reachable INTEGER NOT NULL,
+<<<<<<< Updated upstream
     schema_version INTEGER NOT NULL DEFAULT 1,      -- CB schema 兼容版本（mini-parser 不识别字段时 bump）
     effective_port INTEGER,                         -- from /health/info CB → RuntimeConfig.EffectivePort
     pid INTEGER,                                    -- from /health/info CB → Pid
@@ -116,21 +151,45 @@ CREATE TABLE zen_probes (
     health_info_cb BLOB,                            -- v4: /health/info 原始 CB 二进制流
     health_version_text TEXT,                       -- v4: /health/version 纯文本（短字符串如 "5.8.10"）
     stats_providers_cb BLOB,                        -- v4: /stats 原始 CB（含 providers 数组）
+=======
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    effective_port INTEGER,
+    pid INTEGER,
+    uptime_seconds INTEGER,
+    data_root TEXT,
+    is_dedicated INTEGER,
+    build_version TEXT,
+    health_info_json TEXT,
+    health_version_json TEXT,
+    stats_providers_json TEXT,
+>>>>>>> Stashed changes
     error_message TEXT
 );
 CREATE INDEX idx_zen_probes_endpoint_time ON zen_probes(endpoint_id, probed_at);
 
+<<<<<<< Updated upstream
 -- v4: cache_stats 表 raw 改为 CB BLOB
+=======
+>>>>>>> Stashed changes
 CREATE TABLE zen_cache_stats (
     id INTEGER PRIMARY KEY,
     endpoint_id INTEGER NOT NULL REFERENCES zen_endpoints(id),
     sampled_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+<<<<<<< Updated upstream
     cache_hit_ratio REAL,                           -- 冻结基线，从 raw_cb CB → cache.hit_ratio
     cache_disk_size_bytes INTEGER,                  -- 冻结基线，从 raw_cb CB → cache.size.disk
     cache_memory_size_bytes INTEGER,                -- 冻结基线，从 raw_cb CB → cache.size.memory
     provider_path TEXT NOT NULL DEFAULT '/stats/z$',
     raw_cb BLOB NOT NULL,                           -- v4: /stats/z$ 原始 CB 二进制流
     schema_version INTEGER NOT NULL DEFAULT 1       -- CB schema 兼容版本
+=======
+    cache_hit_ratio REAL,
+    cache_disk_size_bytes INTEGER,
+    cache_memory_size_bytes INTEGER,
+    provider_path TEXT NOT NULL DEFAULT '/stats/z$',
+    raw_json TEXT NOT NULL,
+    schema_version INTEGER NOT NULL DEFAULT 1
+>>>>>>> Stashed changes
 );
 CREATE INDEX idx_zen_cache_stats_endpoint_time ON zen_cache_stats(endpoint_id, sampled_at);
 
@@ -144,14 +203,22 @@ CREATE TABLE project_cache_backend (
     PRIMARY KEY (project_id, machine_id)
 );
 
+<<<<<<< Updated upstream
 -- v4: baseline = install 路径副本的 sha256，按 zen build version 索引（跟 UE major/minor 解耦）
 -- 实测：所有 UE 版本共享 %LOCALAPPDATA%\UnrealEngine\Common\Zen\Install\，按"最大见过版本"决策
 CREATE TABLE zen_binary_expected (
     zen_build_version TEXT NOT NULL,                -- 如 "5.8.10-202605071938-windows-x64-release-fbacdecd"
+=======
+-- baseline 期望值：每个 UE 版本分别记 zen.exe 和 zenserver.exe 两个 hash
+CREATE TABLE zen_binary_expected (
+    ue_version_major INTEGER NOT NULL,
+    ue_version_minor INTEGER NOT NULL,
+>>>>>>> Stashed changes
     binary_kind TEXT NOT NULL,                      -- 'zen_cli' | 'zenserver'
     sha256 TEXT NOT NULL,
     locked_by TEXT,
     first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+<<<<<<< Updated upstream
     PRIMARY KEY (zen_build_version, binary_kind)
 );
 
@@ -164,6 +231,8 @@ CREATE TABLE zen_binary_intree (
     build_version TEXT,                             -- InTree zen.version 文件内容
     sha256 TEXT,
     last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+=======
+>>>>>>> Stashed changes
     PRIMARY KEY (ue_version_major, ue_version_minor, binary_kind)
 );
 ```
@@ -171,6 +240,7 @@ CREATE TABLE zen_binary_intree (
 ### 1.2 Existing tables
 
 ```sql
+<<<<<<< Updated upstream
 -- v4 实测修订：每台机器只有一份共享 install zenserver/zen.exe（跨 UE 版本），
 -- 所以 install_* 列存到 machines 表（machine 级），不存 machine_ue_installs（每 UE 版本一行）。
 -- machine_ue_installs 表上的 zen_cli_intree_* / zenserver_intree_* 是 InTree 源版本 reference（每 UE 版本各一份）。
@@ -195,6 +265,16 @@ ALTER TABLE machine_ue_installs ADD COLUMN zen_cli_intree_sha256 TEXT;
 ALTER TABLE machine_ue_installs ADD COLUMN zenserver_intree_path TEXT;
 ALTER TABLE machine_ue_installs ADD COLUMN zenserver_intree_version TEXT;
 ALTER TABLE machine_ue_installs ADD COLUMN zenserver_intree_sha256 TEXT;
+=======
+-- zen.exe（CLI）
+ALTER TABLE machine_ue_installs ADD COLUMN zen_cli_path TEXT;
+ALTER TABLE machine_ue_installs ADD COLUMN zen_cli_version TEXT;
+ALTER TABLE machine_ue_installs ADD COLUMN zen_cli_sha256 TEXT;
+-- zenserver.exe（真正的 daemon）
+ALTER TABLE machine_ue_installs ADD COLUMN zenserver_path TEXT;
+ALTER TABLE machine_ue_installs ADD COLUMN zenserver_version TEXT;
+ALTER TABLE machine_ue_installs ADD COLUMN zenserver_sha256 TEXT;
+>>>>>>> Stashed changes
 -- UE 版本（见下方 §1.3 EngineAssociation 解析）
 ALTER TABLE projects ADD COLUMN ue_version_major INTEGER;
 ALTER TABLE projects ADD COLUMN ue_version_minor INTEGER;
@@ -389,6 +469,7 @@ pub fn resolve_for(project_id: i64, machine_id: i64) -> UecmResult<Backend> {
 
 ## 5. INI Scanner — new rules (loaded from YAML, not hardcoded)
 
+<<<<<<< Updated upstream
 v4 修订：UE 5.4+ local zen 自动启不需 INI 改动；INI Scanner 真正要检的是 **ZenShared upstream 配置 + legacy DDC 路径清理**。
 
 | 规则 ID | 检查 | 触发条件 |
@@ -400,16 +481,32 @@ v4 修订：UE 5.4+ local zen 自动启不需 INI 改动；INI Scanner 真正要
 | R016 | **install 路径** `%LOCALAPPDATA%\UnrealEngine\Common\Zen\Install\zenserver.exe` 的 sha256 跟 `zen_binary_expected (zen_build_version=X, binary_kind='zenserver')` 匹配；副检 install zen.exe 跟 `binary_kind='zen_cli'` 匹配。InTree 副本 hash 漂移仅日志不告警。 | 防止 zen install 被外部工具篡改 |
 | R017 | zen 进程的 datadir 磁盘容量 | endpoint reachable 且磁盘 < 20% |
 | R018 | 集群内每台机器 install zen build version 一致 | 全集群比较 `machine_zen_install.zenserver_build_version`（跟 UE major/minor 解耦） |
+=======
+| 规则 ID | 检查 | 触发条件 |
+|---|---|---|
+| R012 | 工程是否启用 Zen Store（按 YAML rule 匹配） | UE ≥ 5.4 且 project backend = zen |
+| R013 | Zen upstream URL 指向预期 endpoint | endpoint role = shared_upstream |
+| R014 | Legacy DDC `Path=` 和 zen backend 同时存在 | 双配置冲突 |
+| R015 | http.sys URL 预留就绪 | endpoint.httpserverclass = httpsys |
+| R016 | **zenserver.exe** sha256 跟 `zen_binary_expected (binary_kind='zenserver')` 匹配；副检 zen.exe 跟 `binary_kind='zen_cli'` 匹配 | 防 UE 升级把真正跑的 server binary 替换掉 |
+| R017 | zen 进程的 datadir 磁盘容量 | endpoint reachable 且磁盘 < 20% |
+| R018 | 集群内 zen 版本一致 | 全集群比较 `zen_binary_version` |
+>>>>>>> Stashed changes
 
 ---
 
 ## 6. Rule Config — `docs/research/zen-ini-rules.yaml`
 
+<<<<<<< Updated upstream
 ### 6.1 Schema（v4 重写：方向从「启用 zen」改为「配置 ZenShared upstream + 清理 legacy DDC」）
+=======
+### 6.1 Schema
+>>>>>>> Stashed changes
 
 ```yaml
 zen_ini:
   applies_to: ">=5.4"
+<<<<<<< Updated upstream
   # v4 实测结论：UE 5.4+ local zen 自动启，工程 INI 不需要也不应该配 "启 zen"。
   # plan §6 真正要管的是两件事：
   #   (1) 配置 ZenShared 指向 cluster master endpoint（让 render node 走集群共享 cache）
@@ -446,15 +543,39 @@ zen_ini:
 
 # 必须以 M0 实测结果为准——下面这个列表是 EMPTY，
 # M0 在哪个版本上跑通 verify-rules 就追加哪个版本（"verified" 在 v4 改为「ZenShared 配置在该 UE 版本的 INI 形态已实测」）。
+=======
+  rules:
+    enable_zen_backend:
+      ini_file: DefaultEngine.ini
+      section: "[InstalledDerivedDataBackendGraph]"
+      key: Zen
+      value_template: "(Type=Zen, Host=\"{host}\", Port={port})"
+      backup: true
+    set_default_graph:
+      ini_file: DefaultEngine.ini
+      section: "[InstalledDerivedDataBackendGraph]"
+      key: Root
+      value_template: "(Type=KeyLength, Length=120, Inner=Zen)"
+      backup: true
+
+# 必须以 M0 实测结果为准——下面这个列表是 EMPTY，
+# M0 在哪个版本上跑通 verify-rules 就追加哪个版本。
+>>>>>>> Stashed changes
 verified_versions: []
 
 # 默认拒绝未验证版本，与 Red Line §12 第 7 条一致
 unverified_policy: refuse   # refuse = 拒绝执行 | warn = 提示但允许（不推荐改）
 
 overrides:
+<<<<<<< Updated upstream
   # 未来 UE 5.9 若改了 ZenShared 配置形态，加在这里覆盖默认
   # "5.9":
   #   enable_zen_shared:
+=======
+  # 未来 UE 5.9 若改了配置形态，加在这里覆盖默认
+  # "5.9":
+  #   enable_zen_backend:
+>>>>>>> Stashed changes
   #     section: "[NewSectionName]"
 ```
 
@@ -512,6 +633,7 @@ uecm-cli health run --json
 
 ### M0 — Fact-finding + Pre-M1 fix [3 天]
 
+<<<<<<< Updated upstream
 **目标**：搞清楚 UE 5.4+ 真实 zen 运行机制 + zen 配置启用形态 + 修一个现有 bug。M0 不出文档后续阶段全部封盘。
 
 **v4 修订**：T0.2 / T0.4 / T0.4b 已通过 lanPC 真机探测一次性完成，结论写在 `docs/research/zen-launch-mechanism.md`。**结论颠覆 plan 原假设**（详见 v4 revision history）。剩下要做：T0.3 在 5.6 上再确认一次；T0.5 改为 ZenShared 定向 fact-find + 写入 yaml。
@@ -545,6 +667,31 @@ uecm-cli health run --json
 - [ ] T1.9 CLI: `zen status` / `zen probe` / `zen cache-stats` / `zen detect-binary` / `zen list-endpoints` / `zen baseline list/lock/unlock`
 - [ ] T1.10 Tauri commands 对应包装
 - [ ] T1.11 验收：跑 `uecm-cli zen detect-binary --all --json` 在 5.7 机器上**同时拉到 install 路径 + InTree 两套 binary 元数据**；`zen probe` 写库（raw_cb BLOB + extracted flat 列）；`zen cache-stats` 拉到命中率；CB parser 单测覆盖 fixture 样本
+=======
+**目标**：搞清楚 UE 5.4+ 真实 zen 启用 INI 形态 + 修一个现有 bug。M0 不出文档后续阶段全部封盘。
+
+- [ ] T0.1 修 `core/project_discovery.rs:83-96` 把 `EngineAssociation` 写到 `projects.ue_version_major/minor`，不再错填 `uproject_guid`
+- [ ] T0.2 在 5.7 测试机上手工创建一个空工程，按公开文档候选写法启用 zen，确认 editor 启动日志 `LogDerivedDataCache: ... Zen ...` 出现且 zen 服务的 `/stats/z$` 命中率 > 0
+- [ ] T0.3 在 5.6 测试机上重做 T0.2，确认通用规则有效
+- [ ] T0.4 抓 `Engine\Saved\Zen\zen.json` 内容、抓 zen.exe 的 sponsor 启动命令，记录到 `docs/research/zen-launch-mechanism.md`
+- [ ] T0.4b **实测确认 `zen status --data-dir <path> --format json` 输出包含 effective_port / pid / executable**（T1.3 依赖这个）。若该 flag 不存在或字段不全，fallback 方案：用 `zen status` 默认输出解析文本（或考虑加 Rust Compact Binary mini-parser，工程量评估写进文档）
+- [ ] T0.5 把实测确认的 section / key / value template 写入 `docs/research/zen-ini-rules.yaml`；`verified_versions` **只填实测通过的版本**（如 T0.2/T0.3 跑通 5.6 + 5.7 就只填这两个）；`unverified_policy: refuse`（默认拒绝未实测的版本）
+- [ ] T0.6 M0 交付物 review：YAML + launch 机制文档进 repo
+
+### M1 — Schema + Probe + Binary Detect [1 周]
+
+- [ ] T1.1 写 5 张新表 + 2 张 ALTER 的 migration，挂进 `data::schema::migrate()`；每张表加单测
+- [ ] T1.2 `data::zen_endpoints` / `data::zen_probes` / `data::zen_cache_stats` / `data::project_cache_backend` / `data::zen_binary_expected` CRUD
+- [ ] T1.3 `core::zen::lockfile` 拿 effective_port：**调 `zen status --data-dir <path> --format json` 让 zen 自己解析 lockfile（Compact Binary 格式）**，Rust 只读它输出的 JSON 拿 effective_port / pid / executable。理由：UECM Rust deps 没 CB parser，写一个仅为读 4 个字段不划算。`ps-scripts/zen-read-lockfile.ps1` 是 PS 包装，远端调 `zen status`
+- [ ] T1.4 `core::zen::probe` 拉 `/health` + `/health/info` + `/health/version`，写 `zen_probes`
+- [ ] T1.5 `core::zen::cache_stats` 拉 `/stats` 拿 providers，挑 `z$` 再拉 `/stats/z$`，写 `zen_cache_stats`
+- [ ] T1.6 `core::zen::binary` 远机**同时扫 `zen.exe` 和 `zenserver.exe`**，分别记 path/version/sha256 写到 `machine_ue_installs` 的 zen_cli_* 和 zenserver_* 字段；首次探测自动写 `zen_binary_expected (binary_kind='zen_cli')` 和 `(binary_kind='zenserver')` 两条 baseline
+- [ ] T1.7 `core::zen::retention` 启动调度，probes/cache_stats 表 GC
+- [ ] T1.8 PS 脚本：`zen-probe-health.ps1` / `zen-probe-cache-stats.ps1` / `zen-detect-binary.ps1` / `zen-read-lockfile.ps1`
+- [ ] T1.9 CLI: `zen status` / `zen probe` / `zen cache-stats` / `zen detect-binary` / `zen list-endpoints` / `zen baseline list/lock/unlock`
+- [ ] T1.10 Tauri commands 对应包装
+- [ ] T1.11 验收：跑 `uecm-cli zen detect-binary --all --json` 在 5.7 机器上**同时拉到 zen.exe 和 zenserver.exe**；`zen probe` 写库；`zen cache-stats` 拉到命中率
+>>>>>>> Stashed changes
 
 ### M2 — Endpoint Config + Lua + Service [1.5 周]
 
@@ -560,16 +707,24 @@ uecm-cli health run --json
 
 ### M3 — Project Enable + Backend Router [1.5 周]
 
+<<<<<<< Updated upstream
 **v4 修订**：`zen enable/disable` 的真实操作不是"在 INI 里启 zen"（5.4+ local zen 自动启），而是**配置 ZenShared upstream 指向 cluster master endpoint + 关闭 legacy SMB+Pak 路径**。
 
 - [ ] T3.1 `core::zen::rules_loader` 读 `zen-ini-rules.yaml`（v4 schema：`enable_zen_shared` + `disable_legacy_smb_shared` + `disable_legacy_pak`），按 UE 版本匹配规则；处理 verified_versions / unverified_policy / overrides 三层
 - [ ] T3.2 `core::zen::enable` 按规则改 `DefaultEngine.ini`：(a) 配 ZenShared.Host = cluster master endpoint；(b) 移除 legacy `Shared` SMB 配置（DefaultEngine.ini + user-level env var `UE-SharedDataCachePath`）；(c) 移除 legacy `Pak/CompressedPak` 配置。沿用 `core::ini_apply` 原子写入 + 备份
 - [ ] T3.3 `core::zen::disable` 反向回滚：恢复 SMB+Pak 配置（从备份），清掉 ZenShared
 - [ ] T3.4 PS 脚本：`zen-enable-project.ps1` / `zen-disable-project.ps1`（v4 同时处理 user-level env var 清理）
+=======
+- [ ] T3.1 `core::zen::rules_loader` 读 `zen-ini-rules.yaml`，按 UE 版本匹配规则；处理 verified_versions / unverified_policy / overrides 三层
+- [ ] T3.2 `core::zen::enable` 按规则改 `DefaultEngine.ini`（带备份，沿用 `core::ini_apply` 原子写入）
+- [ ] T3.3 `core::zen::disable` 反向回滚
+- [ ] T3.4 PS 脚本：`zen-enable-project.ps1` / `zen-disable-project.ps1`
+>>>>>>> Stashed changes
 - [ ] T3.5 `core::cache_backend` 路由器 + 决策表实现；macOS 单测覆盖所有路径
 - [ ] T3.6 `ddc generate/distribute` 加 `--backend` flag；`backend=zen` 走 no-op 路径返回 `{"backend":"zen","skipped":true}`
 - [ ] T3.7 CLI: `zen enable` / `zen disable`
 - [ ] T3.8 幂等性：`enable` 已是目标态返回 `{"changed":false}` 退出码 0
+<<<<<<< Updated upstream
 - [ ] T3.9 验收：5.4+ 工程选 5 台机器一键 enable；editor 启动 log 显示 `ZenShared: Using ZenServer HTTP service at <host>:<port> status: OK!`（替代当前 `ZenShared: Disabled because Host is set to 'None'`）；cluster master 的 /stats/z$ 命中率上涨
 
 ### M4 — INI Scanner + Health Check + Verify-rules [1 周]
@@ -578,6 +733,16 @@ uecm-cli health run --json
 - [ ] T4.2 Health Check 加 4 行：`zen_reachable` / `zen_version_consistent` / `zen_binary_intact` / `zen_cache_provider_ready`。v4: `zen_version_consistent` 比对 `machine_zen_install.zenserver_build_version`（不是 UE major/minor）
 - [ ] T4.3 R016 binary_intact 接 `zen_binary_expected (zen_build_version, binary_kind)` 表；比对 install 路径 sha256；不一致告警优先于匹配。InTree 漂移仅日志不告警
 - [ ] T4.4 `core::zen::verify` 实现：在 fixture 工程上跑 enable → 起 editor headless → 抓启动日志确认 `ZenShared: Using ZenServer HTTP service at <host>:<port> status: OK!` 出现 → 探测 cluster master /stats/z$ 命中率 > 0。**v4 T0.5 实测发现**：`UnrealEditor.exe -Unattended -Quit` 不立即退出（卡在 asset registry / Python plugin / Pak mount 等步骤 >3 分钟），所以 verify 实现必须用流式 stdout 监控 + 命中 ZenShared 日志后立即 kill editor，或者用 `UnrealEditor-Cmd.exe -run=<commandlet>` 跑会主动退出的 commandlet
+=======
+- [ ] T3.9 验收：5.4+ 工程选 5 台机器一键 enable；editor 启动 cache 走 zen 命中
+
+### M4 — INI Scanner + Health Check + Verify-rules [1 周]
+
+- [ ] T4.1 INI Scanner 加 R012–R018，从 YAML 读规则（不 hardcode）
+- [ ] T4.2 Health Check 加 4 行：`zen_reachable` / `zen_version_consistent` / `zen_binary_intact` / `zen_cache_provider_ready`
+- [ ] T4.3 R016 binary_intact 接 `zen_binary_expected` 表；不一致告警优先于匹配
+- [ ] T4.4 `core::zen::verify` 实现：在 fixture 工程上跑 enable → 起 editor → 抓启动日志确认命中 → 探测命中率 > 0
+>>>>>>> Stashed changes
 - [ ] T4.5 CLI: `zen verify-rules --ue-version X --ue-install PATH [--write-verified]`
 - [ ] T4.6 PS 脚本：`zen-verify-rules.ps1`
 - [ ] T4.7 验收：健康检查识别"集群 zen 版本不一致"、"zen.exe 被 UE 升级覆盖"；`verify-rules` 在 fixture 工程上跑通
@@ -618,6 +783,7 @@ uecm-cli health run --json
 
 | 风险 | 对策 |
 |---|---|
+<<<<<<< Updated upstream
 | install 路径 binary 被外部工具替换 | R016 + Health Check `zen_binary_intact`（用 `zen_binary_expected (zen_build_version, binary_kind)` 表，对 install 路径 sha256）|
 | 集群 install 路径 zen 版本不齐 | R018 + `zen_version_consistent`（v4: 比对 `machine_zen_install.zenserver_build_version`，不是 UE major/minor）|
 | UE 升级导致 install 路径升版本（"最大见过版本"机制）| 信息性事件：detect 到 install version 升了自动写新 baseline + 通知集群其他机器 sync；UECM 不阻止 |
@@ -635,17 +801,41 @@ uecm-cli health run --json
 | secret 泄露 | §12 红线 + `zen/redaction.rs` |
 | UE 新主版本 ZenShared 配置形态变了 | YAML `overrides` 加 entry；`unverified_policy=refuse` 兜底 |
 | zen 升级后 CB 格式 incompat | mini-parser fixture 加新版本样本；schema_version bump；旧版 raw_cb 保留可读 |
+=======
+| UE 升级覆盖 zen.exe | R016 + Health Check `zen_binary_intact`（用 `zen_binary_expected` 表）|
+| 集群 zen 版本不齐 | R018 + `zen_version_consistent` |
+| http.sys URL 预留未做 | `apply-config` 内联 urlacl + 独立 `zen urlacl list` 排错 |
+| operator 同时启 legacy + zen 双配置 | R014 检测 + 强制提示先 disable 一边 |
+| 远端 zen 端口被防火墙挡 | M2 enable 流程加 `New-NetFirewallRule` |
+| lua datadir 指到系统盘 | `apply-config` 校验 datadir 不在 `C:\Windows` / `C:\Program Files` 下 |
+| zen schema drift（API 变了）| raw_json 优先 + schema_version + release 时跑 drift detection |
+| port 实际 ≠ declared | probe 必读 lockfile 拿 effective_port |
+| service install --full 误用 | PS 脚本 hard-block `--full`；CLI 不暴露这个 flag |
+| 拍摄现场断网 upstream zen 不可达 | 本机 zen 仍可用；Health Check 用降级状态而非 CRITICAL |
+| UECM crash 时未完成 enable | `operations.status='running'` 超 1 小时自动标 `interrupted`，UI 提示重跑 |
+| 多 editor 同启 zen 抢锁 | zen 本身 sponsor 机制处理 |
+| secret 泄露 | §12 红线 + `zen/redaction.rs` |
+| UE 新主版本（5.8 / 5.9）配置真改了 | YAML `overrides` 加 entry；`unverified_policy=refuse` 兜底 |
+>>>>>>> Stashed changes
 
 ---
 
 ## 12. Red Lines
 
 1. **禁 `zen service install --full`**——会拷 binary 进系统目录，违背"用 UE 自带 zen"
+<<<<<<< Updated upstream
 2. **现有 3 个 flat extract 列冻结**——`zen_cache_stats.cache_hit_ratio` / `cache_disk_size_bytes` / `cache_memory_size_bytes` 是 baseline indexed columns；**未来不加新 flat metric 列**，新指标走 `raw_cb` BLOB + mini-parser 现取
 3. **禁 port 硬编码**——所有 probe / register 必须接受显式 port 或读 lockfile（v4: 用 Rust CB mini-parser 解 `.lock`）
 4. **禁绕过 DPAPI/cmdkey**——zen 远程操作必须走现有 `core/credentials.rs` + cmdkey 注入
 5. **禁 secret 入日志**——zen `--access-token` / `--password` / `--api-key` 必须经 `zen/redaction.rs` 处理才进 operations.log_text
 6. **禁动 install 路径和 InTree 路径下的任何 zen binary**——v4: 两个位置都只读，UECM 仅监测 hash 漂移不修复。install 路径（`%LOCALAPPDATA%\UnrealEngine\Common\Zen\Install\`）漂移触发 R016；InTree 路径（`Engine\Binaries\Win64\`）漂移仅日志
+=======
+2. **现有 3 个 flat extract 列冻结**——`zen_cache_stats.cache_hit_ratio` / `cache_disk_size_bytes` / `cache_memory_size_bytes` 是 baseline indexed columns；**未来不加新 flat metric 列**，新指标走 `raw_json` + SQLite JSON1 extension 现取
+3. **禁 port 硬编码**——所有 probe / register 必须接受显式 port 或读 lockfile
+4. **禁绕过 DPAPI/cmdkey**——zen 远程操作必须走现有 `core/credentials.rs` + cmdkey 注入
+5. **禁 secret 入日志**——zen `--access-token` / `--password` / `--api-key` 必须经 `zen/redaction.rs` 处理才进 operations.log_text
+6. **禁动 `Engine\Binaries\Win64\zen.exe` 和 `zenserver.exe`**——两个 binary 都只读，发现 hash 不一致只告警不修
+>>>>>>> Stashed changes
 7. **禁在 YAML 没标 verified 的 UE 版本上 enable**（policy=refuse 时）
 
 ---
@@ -696,4 +886,8 @@ uecm-cli zen verify-rules --ue-version 5.8 --ue-install C:\UE\5.8 --write-verifi
 
 ## 15. One-line Summary
 
+<<<<<<< Updated upstream
 把 zen 当成 UECM 管的一种新 cache 后端。**zen 二进制零部署**（5.4+ UE editor 自带 sponsor 启动）、**实际工作 = 配置 ZenShared upstream + 清理 legacy SMB/Pak**（v4 实测修订）、**配置 YAML 化**（一份 5.4+ 通用规则 + verified 版本列表）、**未验证版本默认拒绝**、**老 SMB+Pak 路径完全保留**、**Rust CB mini-parser** 直接解 zen CB API + lockfile（v4）、**CLI 全暴露**（agent 直接 spawn 可用）。**总 6 周单人交付**（v4 因 CB parser 多半周），UE 新版本维护成本压到半天。
+=======
+把 zen 当成 UECM 管的一种新 cache 后端。**zen 二进制零部署**、**配置 YAML 化**（一份 5.4+ 通用规则 + verified 版本列表）、**未验证版本默认拒绝**、**老 SMB+Pak 路径完全保留**、**CLI 全暴露**（agent 直接 spawn 可用）。**总 5.5 周单人交付**，UE 新版本维护成本压到半天。
+>>>>>>> Stashed changes

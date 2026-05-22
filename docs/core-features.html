@@ -403,6 +403,320 @@
     border-radius: 9999px;
   }
 
+  /* === Deep dive (F01 · WinRM Bootstrap) ==================== */
+  .deepdive { margin-top: 88px; scroll-margin-top: 24px; }
+  .deepdive-head {
+    display: grid; grid-template-columns: 110px 1fr;
+    gap: 32px; align-items: baseline;
+    padding-bottom: 22px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 28px;
+  }
+  .deepdive .ref {
+    font-family: "Manrope", sans-serif; font-weight: 800;
+    font-size: 56px; line-height: 0.9;
+    color: var(--primary);
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+  }
+  .deepdive .heading { display: flex; flex-direction: column; gap: 10px; }
+  .deepdive .heading h2 { font-family: "Manrope", sans-serif; font-weight: 800; font-size: 24px; margin: 0; line-height: 1.2; letter-spacing: -0.005em; }
+  .deepdive .lede { font-size: 15.5px; line-height: 1.7; max-width: 70ch; margin: 0 0 40px; }
+  .deepdive .lede strong { font-weight: 700; color: var(--fg); }
+
+  .section-label {
+    font-family: ui-monospace, monospace;
+    font-size: 11px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--primary);
+    margin: 0 0 14px;
+    display: block;
+  }
+  .section-block { margin: 0 0 40px; }
+  .section-block:last-child { margin-bottom: 0; }
+
+  /* Script roster */
+  .script-roster {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .script-roster .row { padding: 18px 20px; background: var(--card); }
+  .script-roster .row.bordered-l { border-left: 1px solid var(--border); }
+  .script-roster .row.bordered-t { border-top: 1px solid var(--border); }
+  .script-roster .role {
+    font-family: ui-monospace, monospace;
+    font-size: 10.5px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted-fg);
+    margin-bottom: 8px;
+  }
+  .script-roster .name {
+    font-family: ui-monospace, monospace;
+    font-size: 13px; font-weight: 700;
+    color: var(--fg);
+    margin-bottom: 6px;
+    word-break: break-all;
+  }
+  .script-roster .desc { font-size: 12.5px; line-height: 1.6; color: var(--muted-fg); margin: 0; }
+
+  /* Ledger (action table) */
+  .ledger {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--card);
+    overflow: hidden;
+  }
+  .ledger .ledger-row {
+    display: grid;
+    grid-template-columns: 220px 1fr 90px;
+    gap: 24px;
+    padding: 14px 20px;
+    align-items: baseline;
+  }
+  .ledger .ledger-row + .ledger-row { border-top: 1px solid var(--border); }
+  .ledger .switch {
+    font-family: ui-monospace, monospace;
+    font-size: 12px; font-weight: 700;
+    color: var(--primary);
+    word-break: break-all;
+  }
+  .ledger .switch.default { color: var(--muted-fg); font-weight: 500; }
+  .ledger .effect { font-size: 13px; line-height: 1.65; }
+  .ledger .effect .k {
+    font-family: ui-monospace, monospace;
+    background: var(--muted); padding: 1px 6px; border-radius: 4px;
+    color: var(--fg); font-size: 12px;
+  }
+  .ledger .tag {
+    justify-self: end;
+    font-family: ui-monospace, monospace;
+    font-size: 10.5px; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--muted-fg);
+    padding: 3px 8px;
+    background: var(--muted);
+    border-radius: 9999px;
+    white-space: nowrap;
+  }
+  .ledger .tag.on { color: var(--healthy); background: oklch(0.55 0.15 152 / 0.10); }
+
+  /* Preflight ladder */
+  .preflight {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--card);
+    overflow: hidden;
+  }
+  .preflight .step-row {
+    display: grid;
+    grid-template-columns: 56px 200px 1fr;
+    gap: 20px;
+    padding: 16px 20px;
+    align-items: baseline;
+  }
+  .preflight .step-row + .step-row { border-top: 1px solid var(--border); }
+  .preflight .n {
+    font-family: "Manrope", sans-serif; font-weight: 800;
+    font-size: 22px; color: var(--primary);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+  .preflight .probe {
+    font-family: ui-monospace, monospace;
+    font-size: 12.5px; font-weight: 700;
+    color: var(--fg);
+  }
+  .preflight .what { font-size: 13px; line-height: 1.6; color: var(--muted-fg); }
+  .preflight .what strong { color: var(--fg); font-weight: 600; }
+  .preflight .what .k { font-family: ui-monospace, monospace; background: var(--muted); padding: 1px 6px; border-radius: 4px; color: var(--fg); font-size: 12px; }
+
+  /* Verdicts strip */
+  .verdicts {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    margin-top: 18px;
+  }
+  .verdicts .v { padding: 16px 18px; }
+  .verdicts .v + .v { border-left: 1px solid var(--border); }
+  .verdicts .v .vname {
+    font-family: ui-monospace, monospace;
+    font-size: 11.5px; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .verdicts .v.viable .vname { color: var(--healthy); }
+  .verdicts .v.likely .vname { color: var(--primary); }
+  .verdicts .v.blocked .vname { color: var(--warning); }
+  .verdicts .v.uncertain .vname { color: var(--muted-fg); }
+  .verdicts .v p { font-size: 12.5px; line-height: 1.6; color: var(--muted-fg); margin: 0; }
+
+  /* Path B mechanics */
+  .pathb {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--card);
+    padding: 22px 24px;
+  }
+  .pathb h4 {
+    font-family: "Manrope", sans-serif; font-weight: 800;
+    font-size: 14px; margin: 0 0 6px;
+  }
+  .pathb p { font-size: 13px; line-height: 1.65; margin: 0 0 14px; color: var(--fg); }
+  .pathb p:last-child { margin-bottom: 0; }
+  .pathb .k { font-family: ui-monospace, monospace; background: var(--muted); padding: 1px 6px; border-radius: 4px; color: var(--fg); font-size: 12px; }
+  .pathb .pathb-steps {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin: 8px 0 0;
+  }
+  .pathb .pathb-step {
+    background: var(--muted);
+    padding: 12px 14px;
+    border-radius: 8px;
+  }
+  .pathb .pathb-step .nm {
+    font-family: ui-monospace, monospace;
+    font-size: 11px; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--primary);
+    margin-bottom: 6px;
+  }
+  .pathb .pathb-step .tx { font-size: 12.5px; line-height: 1.55; color: var(--muted-fg); margin: 0; }
+  .pathb .pathb-step .tx strong { color: var(--fg); font-weight: 600; }
+
+  /* Deployment channels */
+  .deploy-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+  }
+  .deploy-card {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--card);
+    padding: 18px 20px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .deploy-card .order {
+    font-family: ui-monospace, monospace;
+    font-size: 10.5px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted-fg);
+  }
+  .deploy-card .channel {
+    font-family: "Manrope", sans-serif; font-weight: 800;
+    font-size: 15px; margin: 0;
+  }
+  .deploy-card .when { font-size: 12.5px; line-height: 1.6; color: var(--muted-fg); margin: 4px 0 0; }
+  .deploy-card .when .k { font-family: ui-monospace, monospace; background: var(--muted); padding: 1px 6px; border-radius: 4px; color: var(--fg); font-size: 12px; }
+
+  /* CLI reference */
+  .cli-ref { border-top: 1px solid var(--border); }
+  .cli-ref .cli-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    padding: 14px 0;
+    gap: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  .cli-ref .cli-cmd {
+    font-family: ui-monospace, monospace;
+    font-size: 13px;
+    color: var(--fg);
+    line-height: 1.5;
+  }
+  .cli-ref .cli-cmd .arg { color: var(--primary); }
+  .cli-ref .cli-cmd .opt { color: var(--muted-fg); }
+  .cli-ref .cli-desc { font-size: 12.5px; line-height: 1.6; color: var(--muted-fg); }
+  .cli-ref .cli-desc .k { font-family: ui-monospace, monospace; background: var(--muted); padding: 1px 6px; border-radius: 4px; color: var(--fg); font-size: 12px; }
+
+  /* Non-actions */
+  .non-actions {
+    background: var(--muted);
+    border-radius: 10px;
+    padding: 18px 22px;
+  }
+  .non-actions .nl {
+    font-family: ui-monospace, monospace;
+    font-size: 11px; font-weight: 700;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted-fg);
+    margin: 0 0 12px;
+    display: block;
+  }
+  .non-actions ul {
+    margin: 0; padding: 0;
+    list-style: none;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px 28px;
+  }
+  .non-actions li {
+    font-size: 12.5px; line-height: 1.6;
+    color: var(--muted-fg);
+    padding-left: 16px;
+    position: relative;
+  }
+  .non-actions li::before {
+    content: "·";
+    position: absolute;
+    left: 4px;
+    color: var(--primary);
+    font-weight: 700;
+  }
+  .non-actions li strong { color: var(--fg); font-weight: 600; }
+
+  /* Operator caveat */
+  .op-caveat {
+    background: var(--warning-soft);
+    border: 1px solid var(--warning-line);
+    border-radius: 10px;
+    padding: 16px 20px;
+    display: grid; grid-template-columns: 24px 1fr; gap: 12px;
+    align-items: start;
+  }
+  .op-caveat .glyph { color: var(--warning); margin-top: 2px; }
+  .op-caveat .glyph svg { width: 16px; height: 16px; }
+  .op-caveat .body { font-size: 13px; line-height: 1.65; }
+  .op-caveat .body strong { color: var(--fg); font-weight: 700; }
+  .op-caveat .body .k {
+    font-family: ui-monospace, monospace;
+    background: var(--card); padding: 1px 6px; border-radius: 4px;
+    color: var(--fg); font-size: 12px;
+  }
+  .op-caveat .body code {
+    display: block;
+    margin-top: 10px;
+    background: var(--card);
+    padding: 10px 12px;
+    border-radius: 6px;
+    font-family: ui-monospace, monospace;
+    font-size: 12px; line-height: 1.7;
+    color: var(--fg);
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  /* Jump hint inside Feature 01 */
+  .jump-deepdive {
+    display: inline-flex; align-items: center; gap: 8px;
+    margin-top: 18px;
+    padding: 8px 14px;
+    background: var(--muted);
+    border-radius: 9999px;
+    font-size: 12.5px;
+    color: var(--muted-fg);
+  }
+  .jump-deepdive .arrow { color: var(--primary); display: inline-flex; }
+  .jump-deepdive .arrow svg { width: 14px; height: 14px; }
+  .jump-deepdive { color: var(--muted-fg); text-decoration: none; }
+  .jump-deepdive:hover { text-decoration: none; }
+  .jump-deepdive strong { color: var(--primary); font-weight: 700; }
+  .jump-deepdive:hover strong { text-decoration: underline; text-underline-offset: 3px; }
+
   /* Colophon */
   .colophon {
     margin-top: 56px;
@@ -427,6 +741,22 @@
     .feature-num { font-size: 56px; }
     .modes, .split { grid-template-columns: 1fr; }
     .mode + .mode, .split .pane + .pane { border-left: 0; border-top: 1px solid var(--border); }
+    .deepdive-head { grid-template-columns: 1fr; gap: 8px; }
+    .deepdive .ref { font-size: 40px; }
+    .script-roster { grid-template-columns: 1fr; }
+    .script-roster .row.bordered-l { border-left: 0; }
+    .script-roster .row + .row { border-top: 1px solid var(--border); }
+    .ledger .ledger-row { grid-template-columns: 1fr; gap: 6px; padding: 14px 18px; }
+    .ledger .tag { justify-self: start; }
+    .preflight .step-row { grid-template-columns: 40px 1fr; gap: 12px; padding: 14px 16px; }
+    .preflight .what { grid-column: 1 / -1; }
+    .verdicts { grid-template-columns: 1fr 1fr; }
+    .verdicts .v:nth-child(3) { border-top: 1px solid var(--border); }
+    .verdicts .v:nth-child(4) { border-top: 1px solid var(--border); }
+    .verdicts .v:nth-child(odd) { border-left: 0; }
+    .pathb .pathb-steps { grid-template-columns: 1fr; }
+    .deploy-grid { grid-template-columns: 1fr 1fr; }
+    .non-actions ul { grid-template-columns: 1fr; }
   }
 </style>
 </head>
@@ -735,8 +1065,365 @@
       <span class="to">5 min</span>
       <span class="src">PRODUCT.md · 成功标准</span>
     </div>
+
+    <a href="#winrm-deep" class="jump-deepdive">
+      <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"></path><path d="M6 13l6 6 6-6"></path></svg></span>
+      <span><strong>Deep dive · WinRM Bootstrap</strong> · 5 个脚本 / 10 个动作 / 5 步 preflight / 6 种部署通道</span>
+    </a>
   </article>
 
+<<<<<<< Updated upstream
+=======
+  <!-- Deep dive · F01 · WinRM Bootstrap -->
+  <section class="deepdive" id="winrm-deep" aria-labelledby="winrm-deep-title">
+    <header class="deepdive-head">
+      <div class="ref">01<span style="font-size:0.55em;letter-spacing:-0.04em;">a</span></div>
+      <div class="heading">
+        <span class="label">Deep dive · F01 子系统</span>
+        <h2 id="winrm-deep-title">WinRM Bootstrap 内部分解</h2>
+      </div>
+    </header>
+
+    <p class="lede">
+      从「这台机器是空盒子」走到「UECM 能远程跑 PowerShell」的全过程拆开看：
+      <strong>5 个脚本协同 2 条路径，10 个系统修改全部幂等，preflight 输出 4 种判定</strong>。
+      下面每一块都对应 <span class="mono">ps-scripts/</span> 里的真实源码。
+    </p>
+
+    <!-- 1. Script roster -->
+    <div class="section-block">
+      <span class="section-label">1 · 脚本清单 · ps-scripts/</span>
+      <div class="script-roster">
+        <div class="row">
+          <div class="role">target · 本体</div>
+          <div class="name">enable-winrm.ps1</div>
+          <p class="desc">目标机本地以管理员身份运行。10 个动作 + 10 个开关，全部幂等，重跑无副作用。</p>
+        </div>
+        <div class="row bordered-l">
+          <div class="role">target · 启动器</div>
+          <div class="name">UECM-Bootstrap.cmd</div>
+          <p class="desc">双击入口，用 <code>fltmc</code>（不依赖 LanmanServer）检测 admin token 后自提升 UAC。</p>
+        </div>
+        <div class="row bordered-l">
+          <div class="role">operator · 远程推送</div>
+          <div class="name">bootstrap-winrm-remote.ps1</div>
+          <p class="desc">主控机用 PsExec64 把 enable-winrm.ps1 拷到目标 ADMIN$ 跑掉，顺手写 operator 端 TrustedHosts。</p>
+        </div>
+        <div class="row bordered-t">
+          <div class="role">operator · 体检</div>
+          <div class="name">preflight-path-b.ps1</div>
+          <p class="desc">主控机侧 5 步可达性检查，输出 viable / likely_viable / blocked / uncertain 四种判定。</p>
+        </div>
+        <div class="row bordered-l bordered-t">
+          <div class="role">build · U 盘包</div>
+          <div class="name">package-winrm-bootstrap.ps1</div>
+          <p class="desc">把 3 个文件打成可拷 USB 目录。中文 README 用 UTF-8 BOM 单独拷，绕开 PS 5.1 ANSI 重编码乱码。</p>
+        </div>
+        <div class="row bordered-l bordered-t">
+          <div class="role">cli · 入口</div>
+          <div class="name">uecm-cli winrm &lt;action&gt;</div>
+          <p class="desc">Rust 端 domain_winrm.rs 包了 4 个 action：probe / preflight / bootstrap-script / bootstrap。</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. enable-winrm ledger -->
+    <div class="section-block">
+      <span class="section-label">2 · enable-winrm.ps1 实际改了什么 · 10 个动作</span>
+      <div class="ledger" role="list">
+        <div class="ledger-row" role="listitem">
+          <span class="switch default">(默认)</span>
+          <span class="effect">WinRM 服务设 <span class="k">Automatic</span> + 启动，跑 <span class="k">Enable-PSRemoting -Force -SkipNetworkProfileCheck</span> 和 <span class="k">winrm quickconfig -q</span>，启用 Windows Remote Management 防火墙规则组（HTTP <span class="k">5985</span>）。</span>
+          <span class="tag on">always</span>
+        </div>
+        <div class="ledger-row" role="listitem">
+          <span class="switch">-NetworkCategory Private</span>
+          <span class="effect">把所有 active 网络从 <span class="k">Public</span> 改成 <span class="k">Private</span>，让 WinRM 防火墙规则在公网档不被默拒；传 <span class="k">Skip</span> 跳过。</span>
+          <span class="tag on">default on</span>
+        </div>
+        <div class="ledger-row" role="listitem">
+          <span class="switch">-AllowedRemoteAddress 1.2.3.4,...</span>
+          <span class="effect">把 Windows Remote Management 防火墙规则的 RemoteAddress 限制成指定 IP / CIDR，只放行 UECM 主控机网段。</span>
+          <span class="tag">opt-in</span>
+        </div>
+        <div class="ledger-row" role="listitem">
+          <span class="switch">-TrustedHosts host1,host2</span>
+          <span class="effect">写入本机 <span class="k">WSMan:\localhost\Client\TrustedHosts</span>，让这台机器自己也能反向连别的工作组节点。</span>
+          <span class="tag">opt-in</span>
+        </div>
+        <div class="ledger-row" role="listitem">
+          <span class="switch">-EnableLocalAccountRemoteAdmin</span>
+          <span class="effect">设 <span class="k">HKLM:\...\Policies\System\LocalAccountTokenFilterPolicy = 1</span>，让 workgroup 本地 Administrators 组成员远程拿到完整 admin token。域账号场景一般不需要。</span>
+          <span class="tag">opt-in</span>
+        </div>
+        <div class="ledger-row" role="listitem">
+          <span class="switch">-EnableSmbServer</span>
+          <span class="effect">把 <span class="k">LanmanServer</span> 设 Automatic 并启动，启用 <span class="k">FPS-SMB-In-TCP</span> 规则（只放 TCP 445，不开整组 File &amp; Printer Sharing 避免多余攻击面）。zh-CN 系统用 rule Name 而非本地化 DisplayName 查找。</span>
+          <span class="tag">opt-in</span>
+        </div>
+        <div class="ledger-row" role="listitem">
+          <span class="switch">-EnableWmi</span>
+          <span class="effect">把 <span class="k">Winmgmt</span> 设 Automatic 并启动，UECM 远程查 GPU / UE 版本依赖这个。</span>
+          <span class="tag">opt-in</span>
+        </div>
+        <div class="ledger-row" role="listitem">
+          <span class="switch">-SetExecutionPolicy RemoteSigned</span>
+          <span class="effect">在 LocalMachine 作用域设执行策略；被 GPO 锁住时只记 WARNING 不失败。可选 <span class="k">RemoteSigned</span> / <span class="k">Bypass</span> / <span class="k">Skip</span>。</span>
+          <span class="tag">opt-in</span>
+        </div>
+        <div class="ledger-row" role="listitem">
+          <span class="switch">-EnableLongPaths</span>
+          <span class="effect">设 <span class="k">HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled = 1</span>，让 UE 资源路径超过 260 字符不挂。</span>
+          <span class="tag">opt-in</span>
+        </div>
+        <div class="ledger-row" role="listitem">
+          <span class="switch">-PowerProfile HighPerformance</span>
+          <span class="effect">激活高性能电源计划。Win11 部分版本会隐藏 HighPerformance GUID，脚本会 <span class="k">powercfg /duplicatescheme</span> 还原并打 <span class="k">UECM-*</span> 标签，重复跑不会每次新建。</span>
+          <span class="tag">opt-in</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. UECM-Bootstrap.cmd default wrapper -->
+    <div class="section-block">
+      <span class="section-label">3 · UECM-Bootstrap.cmd 默认参数</span>
+      <p style="font-size:13.5px;line-height:1.7;color:var(--muted-fg);margin:0 0 14px;max-width:70ch;">
+        双击入口把所有 opt-in 全开。等价于在管理员 PowerShell 跑：
+      </p>
+      <div class="commands" aria-label="UECM-Bootstrap.cmd 等价命令">
+        <div class="line"><span class="prompt">PS&gt;</span><span class="cmd">.\UECM-Bootstrap-WinRM.ps1 <span class="arg">^</span></span></div>
+        <div class="line"><span class="prompt">&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="cmd"><span class="arg">-NetworkCategory Private -EnableLocalAccountRemoteAdmin ^</span></span></div>
+        <div class="line"><span class="prompt">&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="cmd"><span class="arg">-EnableSmbServer -EnableWmi ^</span></span></div>
+        <div class="line"><span class="prompt">&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="cmd"><span class="arg">-SetExecutionPolicy RemoteSigned ^</span></span></div>
+        <div class="line"><span class="prompt">&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="cmd"><span class="arg">-EnableLongPaths -PowerProfile HighPerformance</span></span></div>
+      </div>
+      <p style="font-size:12.5px;line-height:1.7;color:var(--muted-fg);margin:14px 0 0;max-width:70ch;">
+        <strong style="color:var(--fg);">UAC 自提权细节：</strong>用 <span class="mono">fltmc &gt;nul</span> 检测 admin token，不是 <span class="mono">NET SESSION</span>。后者依赖 LanmanServer，但 LanmanServer 没启动恰恰是 <span class="mono">-EnableSmbServer</span> 要修的状态，用 NET SESSION 会陷入 UAC 重启死循环。chcp 65001 强制 UTF-8 控制台保证 JSON 不乱码。
+      </p>
+    </div>
+
+    <!-- 4. Preflight ladder -->
+    <div class="section-block">
+      <span class="section-label">4 · preflight-path-b.ps1 · 5 步可达性检查</span>
+      <div class="preflight" role="list">
+        <div class="step-row" role="listitem">
+          <span class="n">1</span>
+          <span class="probe">tcp_135</span>
+          <span class="what">DCE/RPC Endpoint Mapper 端口。<strong>PsExec 走 SCM 必经</strong>。不通直接判 blocked。</span>
+        </div>
+        <div class="step-row" role="listitem">
+          <span class="n">2</span>
+          <span class="probe">tcp_445</span>
+          <span class="what">SMB 端口。PsExec 推 service binary 走这里，UECM SMB 共享分发也走这里。</span>
+        </div>
+        <div class="step-row" role="listitem">
+          <span class="n">3</span>
+          <span class="probe">admin_share_mount</span>
+          <span class="what">用传入凭据真挂 <span class="k">\\&lt;host&gt;\ADMIN$</span>。bare 用户名会自动改成 <span class="k">&lt;host&gt;\&lt;user&gt;</span>，强制按目标本地账号认证，不走主控机域。</span>
+        </div>
+        <div class="step-row" role="listitem">
+          <span class="n">4</span>
+          <span class="probe">admin_share_write</span>
+          <span class="what">在 ADMIN$\Temp 写 + 删 probe 文件。删失败仍判 ok，但消息里贴残留路径让人工清理。</span>
+        </div>
+        <div class="step-row" role="listitem">
+          <span class="n">5</span>
+          <span class="probe">psexec_probe<span style="color:var(--muted-fg);font-weight:500;"> (opt-in)</span></span>
+          <span class="what">需 <span class="k">--probe</span>。真跑 <span class="k">PsExec64 cmd /c exit 0</span>，会在目标写 Event 7045 (service install) + 7036 (service remove)。<strong>唯一能检出 UAC remote token filter 拦截的方式</strong>。</span>
+        </div>
+      </div>
+
+      <div class="verdicts" role="list" aria-label="preflight 四种判定">
+        <div class="v viable" role="listitem">
+          <div class="vname">viable</div>
+          <p>1–5 步全过，<strong style="color:var(--fg);">PsExec SCM 探针确认</strong>。Path B 可直接推。</p>
+        </div>
+        <div class="v likely" role="listitem">
+          <div class="vname">likely_viable</div>
+          <p>1–4 步过，5 跳过。网络 / SMB / ADMIN$ 都通，但没确认 SCM。建议加 <span style="font-family:ui-monospace,monospace;background:var(--muted);padding:1px 5px;border-radius:3px;color:var(--fg);font-size:12px;">--probe</span> 再跑一次。</p>
+        </div>
+        <div class="v blocked" role="listitem">
+          <div class="vname">blocked</div>
+          <p>1–4 任一失败，或 5 失败（UAC remote token filter 最可能）。改走 Path A USB。</p>
+        </div>
+        <div class="v uncertain" role="listitem">
+          <div class="vname">uncertain</div>
+          <p>主控机本身没有 PsExec64。目标侧无法判断，CLI 也算非零退出，自动化不能继续。</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 5. Path B mechanics -->
+    <div class="section-block">
+      <span class="section-label">5 · Path B · bootstrap-winrm-remote.ps1 运行机理</span>
+      <div class="pathb">
+        <h4>从主控机推 enable-winrm.ps1 到目标机的 4 个动作</h4>
+        <div class="pathb-steps">
+          <div class="pathb-step">
+            <div class="nm">1 · mount admin$</div>
+            <p class="tx"><strong>New-PSDrive</strong> 以传入凭据挂 <span class="k">\\&lt;host&gt;\ADMIN$</span>，drive 名用随机 GUID 后缀防冲突。</p>
+          </div>
+          <div class="pathb-step">
+            <div class="nm">2 · copy script</div>
+            <p class="tx"><strong>Copy-Item</strong> 把本地 enable-winrm.ps1 拷到 <span class="k">ADMIN$\Temp\UECM-Bootstrap-WinRM.ps1</span>。</p>
+          </div>
+          <div class="pathb-step">
+            <div class="nm">3 · psexec invoke</div>
+            <p class="tx">用 <strong>PsExec64</strong> 以 SYSTEM (<span class="k">-h</span> 提升) 跑 <span class="k">cmd.exe /c powershell.exe -File %SystemRoot%\Temp\UECM-Bootstrap-WinRM.ps1</span>。</p>
+          </div>
+          <div class="pathb-step">
+            <div class="nm">4 · operator trustedhosts</div>
+            <p class="tx">把目标 host / IP 追加进主控机 <span class="k">WSMan:\localhost\Client\TrustedHosts</span>，后续带凭据 WinRM 才能用。</p>
+          </div>
+        </div>
+        <p style="margin-top:16px;color:var(--muted-fg);font-size:12.5px;line-height:1.65;">
+          失败模式：finally 块清掉 drive 和 remote 脚本；操作员可以选 <span class="k">--enable-local-admin</span> 把 LocalAccountTokenFilterPolicy 一起改了，给 workgroup 场景免去额外一步。
+        </p>
+      </div>
+    </div>
+
+    <!-- 6. Deployment channels -->
+    <div class="section-block">
+      <span class="section-label">6 · 部署通道 · 6 种把脚本送到目标机的方式</span>
+      <div class="deploy-grid">
+        <div class="deploy-card">
+          <div class="order">通道 01 · 推荐</div>
+          <h4 class="channel">UECM 自动 bootstrap</h4>
+          <p class="when">ADMIN$ + RPC + SCM 全通时直接走。<strong style="color:var(--fg);font-weight:600;">CLI: uecm-cli winrm bootstrap</strong>。UECM 用 bundled PsExec64.exe 走 Path B，并把 TrustedHosts 一起写好。</p>
+        </div>
+        <div class="deploy-card">
+          <div class="order">通道 02 · 兜底</div>
+          <h4 class="channel">USB 一键</h4>
+          <p class="when">远程不可达 / 机器在工作组孤岛。<strong style="color:var(--fg);font-weight:600;">package-winrm-bootstrap.ps1</strong> 生成目录，拷 U 盘，目标机双击 UECM-Bootstrap.cmd。</p>
+        </div>
+        <div class="deploy-card">
+          <div class="order">通道 03</div>
+          <h4 class="channel">共享盘</h4>
+          <p class="when">目标机能访问 NAS / 网盘但主控机管不到。把 USB 包丢上去，让现场人员到目标机本地跑一次。</p>
+        </div>
+        <div class="deploy-card">
+          <div class="order">通道 04</div>
+          <h4 class="channel">Golden image</h4>
+          <p class="when">机器走统一镜像部署时，把 enable-winrm.ps1 合进 sysprep 后的初始化流程。新机开机即可被 UECM scan。</p>
+        </div>
+        <div class="deploy-card">
+          <div class="order">通道 05</div>
+          <h4 class="channel">GPO startup script</h4>
+          <p class="when">域环境推荐。GPO 计算机启动脚本下发 enable-winrm.ps1，批量 render node 一次到位。</p>
+        </div>
+        <div class="deploy-card">
+          <div class="order">通道 06</div>
+          <h4 class="channel">Intune / SCCM / RMM</h4>
+          <p class="when">已有企业设备管理时，把 enable-winrm.ps1 当 remediation script 或 one-shot package 下发。</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 7. CLI reference -->
+    <div class="section-block">
+      <span class="section-label">7 · CLI 命令参考 · uecm-cli winrm</span>
+      <div class="cli-ref" role="list">
+        <div class="cli-row" role="listitem">
+          <div class="cli-cmd">uecm-cli winrm probe <span class="arg">&lt;host&gt;</span></div>
+          <div class="cli-desc">单机 WinRM 端点探测，返回 <span class="k">ok</span> / <span class="k">message</span> / <span class="k">latency_ms</span>。失败时 CLI 非零退出。</div>
+        </div>
+        <div class="cli-row" role="listitem">
+          <div class="cli-cmd">uecm-cli winrm preflight <span class="arg">&lt;host&gt;</span> <span class="opt">--user</span> <span class="arg">admin</span> <span class="opt">--pass-stdin</span> <span class="opt">[--probe]</span></div>
+          <div class="cli-desc">跑 5 步 preflight。默认 <strong>Shallow 零痕迹</strong>，加 <span class="k">--probe</span> 切 <strong>Deep</strong>（写 2 条 Event）。verdict=blocked 或 uncertain 时 CLI 非零退出，避免自动化盲跑下一步。</div>
+        </div>
+        <div class="cli-row" role="listitem">
+          <div class="cli-cmd">uecm-cli winrm bootstrap-script <span class="opt">[--output setup.ps1]</span></div>
+          <div class="cli-desc">把 enable-winrm.ps1 的源码原样输出到 stdout 或文件，给现场人员当离线参考 / GPO 输入用。</div>
+        </div>
+        <div class="cli-row" role="listitem">
+          <div class="cli-cmd">uecm-cli winrm bootstrap <span class="arg">&lt;host&gt;</span> <span class="opt">--user</span> <span class="arg">admin</span> <span class="opt">--pass-stdin</span> <span class="opt">[--enable-local-admin]</span></div>
+          <div class="cli-desc">触发 Path B 远程推送。内部调 bootstrap-winrm-remote.ps1，需要 bundled PsExec64.exe 可达。Workgroup 场景加 <span class="k">--enable-local-admin</span>。</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 8. Non-actions -->
+    <div class="section-block">
+      <span class="section-label">8 · 不会动的东西 · 显式声明</span>
+      <div class="non-actions">
+        <span class="nl">bootstrap 不做以下任何一件事</span>
+        <ul>
+          <li><strong>不开 SSH</strong> · UECM 只走 WinRM</li>
+          <li><strong>不开 Basic auth</strong> · 全部 NTLM / Kerberos</li>
+          <li><strong>不开 CredSSP</strong> · 不引入凭据委派</li>
+          <li><strong>不开 HTTPS 5986</strong> · 只用 HTTP 5985</li>
+          <li><strong>不设 AllowUnencrypted</strong> · WinRM 默认加密</li>
+          <li><strong>不创建 / 修改用户账号</strong> · 不动密码</li>
+          <li><strong>不重启机器</strong> · 30 秒内跑完</li>
+          <li><strong>不装任何软件</strong> · 没有常驻 agent</li>
+          <li><strong>不动 Defender / EDR</strong> · 不放行病毒例外</li>
+          <li><strong>不改 RDP / 域账号 / 已有共享</strong> · 边界外不碰</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- 9. Operator-side caveat -->
+    <div class="section-block">
+      <span class="section-label">9 · 主控机侧首次连接前的一步</span>
+      <div class="op-caveat" role="note">
+        <span class="glyph" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+        </span>
+        <div class="body">
+          <strong>workgroup / IP 直连场景需在主控机加 TrustedHosts。</strong>
+          目标机 bootstrap 成功不等于主控机能立刻连过去。WinRM 客户端默认拒绝带凭据连 IP 形式的目标，需要在主控机管理员 PowerShell 下跑一次。
+          <strong>Path B（<span class="k">winrm bootstrap</span>）会自动处理这一步</strong>；Path A（USB）跑完后需要手动跑：
+          <code>Set-Item WSMan:\localhost\Client\TrustedHosts `
+    -Value '192.168.10.50,192.168.10.51' -Force</code>
+          替换成所有目标机 IP（逗号分隔），或用 <span class="k">192.168.10.*</span> 覆盖整段。只需做一次。
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Feature 02 -->
+  <article class="feature" id="f2">
+    <header class="feature-head">
+      <div class="feature-num">02</div>
+      <div class="feature-title">
+        <h2>SMB 共享配置</h2>
+        <div class="domains">
+          <span class="domain accent">share</span>
+        </div>
+      </div>
+    </header>
+
+    <p class="gist">
+      在目标机上把 DDC 路径开成 SMB 共享，<strong>是后面所有缓存分发的物理基础</strong>。两种模式按集群信任度选：
+    </p>
+
+    <div class="modes" role="list" aria-label="两种共享模式">
+      <div class="mode" role="listitem">
+        <div class="mkind">Mode A</div>
+        <h3 class="mtitle">信任内网</h3>
+        <p class="msub">最快上手，适合封闭 VP 棚。</p>
+        <p class="mech">开启 <span class="k">Guest</span> 账户，把目标目录的 NTFS / Share 权限都开成 <span class="k">Everyone : Full</span>。集群内任何机器、任何用户都能直接读写。</p>
+      </div>
+      <div class="mode" role="listitem">
+        <div class="mkind">Mode B</div>
+        <h3 class="mtitle">严格凭据 + SYSTEM 注入</h3>
+        <p class="msub">区别于「手撕 net share」的关键能力。</p>
+        <p class="mech">新建本地账号 <span class="k">ddc-svc</span>，把凭据同时写到当前用户 Credential Manager 和 <strong>SYSTEM 凭据空间</strong>，让 LocalSystem 启动的服务（如 RenderStream Service）也能在无人登录时挂载共享。</p>
+      </div>
+    </div>
+
+    <p class="mode-note">
+      <strong>选择依据：</strong>如果集群里跑了 RenderStream 这类 SYSTEM 服务，必须用 Mode B；否则服务进程拿不到任何用户凭据，路径会被解析为本地不存在。
+    </p>
+
+    <div class="commands" aria-label="典型命令" style="margin-top:24px">
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli share create <span class="arg">--host lanpc --mode A</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli share inject-system-cred <span class="arg">--host lanpc --user ddc-svc</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli share list <span class="arg">--all</span></span></div>
+    </div>
+  </article>
+
+>>>>>>> Stashed changes
   <!-- Feature 03 -->
   <article class="feature" id="f3">
     <header class="feature-head">
