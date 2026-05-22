@@ -144,6 +144,7 @@ if ($WithPsExec) {
         # operator-side case. Still record it for transparency in the results list.
         Add-Result 'psexec_probe' 'fail' "operator-side: PsExec64.exe not found at '$PsExecPath'"
     } else {
+        $prevEap = $ErrorActionPreference
         try {
             # Use the SAME normalized username as the SMB mount above so the
             # two probes converge on identical credentials. Otherwise the same
@@ -160,16 +161,34 @@ if ($WithPsExec) {
                 '/c',
                 'exit 0'
             )
+            # PsExec writes its progress banner ("Connecting to...", "Starting
+            # PSEXESVC service...") to STDERR even on success. Under the script-wide
+            # $ErrorActionPreference='Stop', `2>&1` turns that first stderr line into
+            # a terminating error -> we'd land in catch with message "Connecting to
+            # <host>..." and never read the real exit code, misreporting a probe that
+            # actually progressed as a thrown exception. Drop to Continue for the
+            # call and judge the outcome by $LASTEXITCODE instead.
+            $ErrorActionPreference = 'Continue'
             $stdoutAndErr = & $PsExecPath @psExecArgs 2>&1
             $exitCode = $LASTEXITCODE
+            $ErrorActionPreference = $prevEap
             if ($exitCode -eq 0) {
                 Add-Result 'psexec_probe' 'ok' 'PsExec registered SCM service + ran cmd /c exit 0 successfully'
             } else {
-                $combined = ($stdoutAndErr -join ' | ')
-                Add-Result 'psexec_probe' 'fail' "PsExec exit=$exitCode (likely UAC remote token filter blocking SCM): $combined"
+                # $stdoutAndErr mixes plain stdout strings with ErrorRecord objects
+                # (the stderr lines captured via 2>&1). Stringify the ErrorRecords to
+                # their underlying text so the message shows PsExec's real output
+                # ("Connecting to...", the logon-failure line) instead of the bare
+                # type name "System.Management.Automation.RemoteException".
+                $combined = (($stdoutAndErr | ForEach-Object {
+                    if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { [string]$_ }
+                }) -join ' | ')
+                Add-Result 'psexec_probe' 'fail' "PsExec exit=$exitCode (PSEXESVC may register fine; the remote process logon was rejected - e.g. a Microsoft-account user or a bad credential): $combined"
             }
         } catch {
             Add-Result 'psexec_probe' 'fail' "PsExec invocation threw: $($_.Exception.Message)"
+        } finally {
+            $ErrorActionPreference = $prevEap
         }
     }
 } else {
@@ -220,7 +239,7 @@ if (-not $PsExecAvailable) {
         $reason  = "SCM probe could not run: $($probeResult.message). Target appears reachable but Path B viability cannot be confirmed without a working PsExec64."
     } else {
         $verdict = 'blocked'
-        $reason  = 'TCP + SMB + ADMIN$ all OK but PsExec SCM probe failed - UAC remote token filter is the most likely cause; use Path A (USB bootstrap)'
+        $reason  = 'TCP + SMB + ADMIN$ all OK but the PsExec probe could not start the remote process - PSEXESVC may register fine while the credential logon is rejected (Microsoft-account user, or UAC remote token filter). Path B unusable with this credential; use a local-admin account or Path A (USB bootstrap).'
     }
 } else {
     # probe was 'skipped' (user did not pass -WithPsExec). All non-probe checks ok.

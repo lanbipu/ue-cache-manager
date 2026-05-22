@@ -494,13 +494,28 @@ fn deep_scan(
 pub(crate) enum AuthorizeStep {
     Bootstrap,
     UsbFallback,
+    /// Shallow preflight returned likely_viable — confirm with a deep SCM probe
+    /// before committing to bootstrap.
+    DeepProbe,
 }
 
-/// Pure mapping: Path B preflight verdict -> next action. `viable` / `likely_viable`
-/// proceed to bootstrap; everything else (`blocked` / `uncertain`) falls back to USB.
-pub(crate) fn authorize_decision(verdict: &str) -> AuthorizeStep {
+/// Shallow preflight verdict -> next step. `likely_viable` is NOT trusted for
+/// bootstrap: shallow skips the SCM probe, which is exactly where MSA accounts /
+/// UAC-token-filter machines fail. So likely_viable triggers a deep probe rather
+/// than bootstrapping blind (which would surface as a confusing `failed`).
+pub(crate) fn authorize_decision_shallow(verdict: &str) -> AuthorizeStep {
     match verdict {
-        "viable" | "likely_viable" => AuthorizeStep::Bootstrap,
+        "viable" => AuthorizeStep::Bootstrap,
+        "likely_viable" => AuthorizeStep::DeepProbe,
+        _ => AuthorizeStep::UsbFallback,
+    }
+}
+
+/// Deep preflight verdict (after the SCM probe) -> final step. No more probing:
+/// only a definitive `viable` proceeds; everything else falls back to USB.
+pub(crate) fn authorize_decision_deep(verdict: &str) -> AuthorizeStep {
+    match verdict {
+        "viable" => AuthorizeStep::Bootstrap,
         _ => AuthorizeStep::UsbFallback,
     }
 }
@@ -561,8 +576,8 @@ fn authorize(
             }
         };
 
-        // Preflight (Shallow; no SCM probe) — classify the verdict.
-        let pf = match crate::core::preflight::preflight_path_b(&host, &user, &pass, false) {
+        // Preflight: shallow first (zero-trace on target — TCP + ADMIN$ only).
+        let pf_shallow = match crate::core::preflight::preflight_path_b(&host, &user, &pass, false) {
             Ok(r) => r,
             Err(e) => {
                 failed += 1;
@@ -575,7 +590,28 @@ fn authorize(
             }
         };
 
-        match authorize_decision(&pf.verdict) {
+        // Shallow likely_viable is not trusted (it skips the SCM probe). Confirm
+        // with a deep probe before bootstrapping; `pf` ends up holding whichever
+        // verdict/reason is authoritative for the final decision.
+        let (final_step, pf) = match authorize_decision_shallow(&pf_shallow.verdict) {
+            AuthorizeStep::DeepProbe => {
+                match crate::core::preflight::preflight_path_b(&host, &user, &pass, true) {
+                    Ok(deep) => (authorize_decision_deep(&deep.verdict), deep),
+                    Err(e) => {
+                        failed += 1;
+                        ctx.emitter
+                            .emit_event(&Event::Completed {
+                                summary: json!({ "machine_id": id, "host": host, "step": "preflight_probe", "error": e.to_string() }),
+                            })
+                            .ok();
+                        continue;
+                    }
+                }
+            }
+            step => (step, pf_shallow),
+        };
+
+        match final_step {
             AuthorizeStep::Bootstrap => {
                 // Full render-node provisioning: local-admin token filter + SMB/WMI/
                 // LongPaths/ExecutionPolicy/HighPerformance.
@@ -621,6 +657,7 @@ fn authorize(
                     })
                     .ok();
             }
+            AuthorizeStep::DeepProbe => unreachable!("deep decision never yields DeepProbe"),
         }
     }
 
@@ -719,12 +756,26 @@ mod tests {
     }
 
     #[test]
-    fn authorize_decision_maps_verdict() {
-        assert_eq!(authorize_decision("viable"), AuthorizeStep::Bootstrap);
-        assert_eq!(authorize_decision("likely_viable"), AuthorizeStep::Bootstrap);
-        assert_eq!(authorize_decision("blocked"), AuthorizeStep::UsbFallback);
-        assert_eq!(authorize_decision("uncertain"), AuthorizeStep::UsbFallback);
-        assert_eq!(authorize_decision("anything-else"), AuthorizeStep::UsbFallback);
+    fn shallow_likely_viable_triggers_deep_probe_not_bootstrap() {
+        // Shallow preflight skips the SCM probe — the one check MSA / UAC-token-filter
+        // machines fail. So likely_viable must NOT bootstrap blind; it must trigger a
+        // deep probe to get a definitive verdict first.
+        assert_eq!(authorize_decision_shallow("likely_viable"), AuthorizeStep::DeepProbe);
+        assert_eq!(authorize_decision_shallow("viable"), AuthorizeStep::Bootstrap);
+        assert_eq!(authorize_decision_shallow("blocked"), AuthorizeStep::UsbFallback);
+        assert_eq!(authorize_decision_shallow("uncertain"), AuthorizeStep::UsbFallback);
+        assert_eq!(authorize_decision_shallow("anything-else"), AuthorizeStep::UsbFallback);
+    }
+
+    #[test]
+    fn deep_verdict_only_viable_bootstraps() {
+        // After the deep SCM probe there is no more probing: only a definitive
+        // `viable` proceeds; everything else (including a lingering likely_viable)
+        // falls back to USB.
+        assert_eq!(authorize_decision_deep("viable"), AuthorizeStep::Bootstrap);
+        assert_eq!(authorize_decision_deep("likely_viable"), AuthorizeStep::UsbFallback);
+        assert_eq!(authorize_decision_deep("blocked"), AuthorizeStep::UsbFallback);
+        assert_eq!(authorize_decision_deep("uncertain"), AuthorizeStep::UsbFallback);
     }
 
     #[test]
