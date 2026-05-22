@@ -11,11 +11,15 @@ operator 主机就可以通过局域网远程管理这台机器的 UE 缓存、
 
 使用步骤
 --------
+0.（可选但强烈建议）想让 UECM 之后能远程接管这台机器，先用记事本
+   打开 UECM-Bootstrap.cmd，找到顶部 UECM_LOCAL_ADMIN_PASSWORD=
+   这一行，在等号后填一个强密码（账号名默认 uecm-svc，可改）。
+   不填 = 只开 WinRM/SMB/WMI，不创建账号（之后没有可远程登录的账号）。
 1. 把整个文件夹（U 盘 / 网盘 / 共享文件夹皆可）拷到目标机器。
 2. 双击 UECM-Bootstrap.cmd。
 3. 系统弹出 UAC 提示（"是否允许此应用对你的设备进行更改"），
    点击 "是"。
-4. 看到窗口提示 "UECM Bootstrap done." 后即可关闭窗口。
+4. 看到窗口出现醒目的 "[ OK ] UECM 部署成功" 提示后即可关闭窗口。
 
 整个过程通常 30 秒以内。
 
@@ -30,10 +34,14 @@ operator 主机就可以通过局域网远程管理这台机器的 UE 缓存、
 - PowerShell 远程执行策略调为 RemoteSigned
 - 启用 Windows 长路径支持（UE 工程必备）
 - 电源计划切换为 "高性能"
+- 若填了密码：创建（或重置）一个本地管理员账号（账号名见 .cmd 里的
+  UECM_LOCAL_ADMIN，默认 uecm-svc）并加入 Administrators 组——这
+  就是 UECM 远程登录用的那把"钥匙"
 
 跑完之后不会改的：
 - 不会装任何软件
-- 不会改用户账号 / 密码
+- 不会动你现有的用户账号 / 密码（只有你主动在 .cmd 里填了密码时，才会
+  创建 / 重置 .cmd 里指定的那一个本地管理员账号，别的账号一概不碰）
 - 不会重启系统
 - 不会动 Defender / 反病毒 / EDR
 - 不会改 RDP / 域账号 / 已有共享
@@ -54,7 +62,14 @@ operator 端首次连接前还需要做一步（重要）
 只需要做一次。之后 operator 上的 UECM CLI（uecm-cli machine
 refresh / share create / 等）就能正常使用带凭据的 WinRM 调用。
 
-如果不做这一步，常见的错误信息是：
+连接时用哪个账号？就是你在 .cmd 里填的那一组（账号名见 .cmd 顶部
+UECM_LOCAL_ADMIN 那行，默认 uecm-svc；密码就是你设的那个）。在
+UECM 里把它存成一个凭据别名，
+这台机器的所有远程操作都用它。MSA（Microsoft 账户）和不知道
+密码的内置 Administrator 都没法用于 WinRM 远程认证，所以才要
+专门建这个本地管理员账号。
+
+如果不做 TrustedHosts 这一步，常见的错误信息是：
     "The WinRM client cannot process the request. Default
     authentication may be used with an IP address under the
     following conditions: ..."

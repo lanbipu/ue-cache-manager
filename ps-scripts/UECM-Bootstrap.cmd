@@ -32,6 +32,19 @@ if not exist "%PS1%" (
     exit /b 1
 )
 
+REM ====== UECM local admin account (required for remote management) ======
+REM  To let UECM manage this machine remotely, it needs a local admin account
+REM  it can log in as. Put a strong password below (leave empty = only open
+REM  WinRM/SMB/WMI, do NOT create an account). Account name defaults to uecm-svc.
+REM  Afterwards, register the SAME name/password as a credential in UECM.
+REM  Avoid % " ^ in the password (cmd parsing); letters + digits are safest.
+set "UECM_LOCAL_ADMIN=uecm-svc"
+set "UECM_LOCAL_ADMIN_PASSWORD="
+REM =======================================================================
+
+set "ADMIN_ARGS="
+if not "%UECM_LOCAL_ADMIN_PASSWORD%"=="" set ADMIN_ARGS=-CreateLocalAdmin -LocalAdminName "%UECM_LOCAL_ADMIN%" -LocalAdminPassword "%UECM_LOCAL_ADMIN_PASSWORD%"
+
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS1%" ^
     -NetworkCategory Private ^
     -EnableLocalAccountRemoteAdmin ^
@@ -39,19 +52,29 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS1%" ^
     -EnableWmi ^
     -SetExecutionPolicy RemoteSigned ^
     -EnableLongPaths ^
-    -PowerProfile HighPerformance
+    -PowerProfile HighPerformance ^
+    %ADMIN_ARGS%
 
 set "PS_EXIT=%ERRORLEVEL%"
 
 echo.
-echo ============================================
 if "%PS_EXIT%"=="0" (
-    echo  UECM Bootstrap done. You can close this window.
+    echo ================================================================
+    echo.
+    echo     [ OK ]  UECM 部署成功,环境已就绪,可以关闭此窗口。
+    echo.
+    echo     上面那一坨 JSON 是给程序读的状态,不用管它。
+    echo     若填了账号密码,记得回 operator 端把同一组凭据录入 UECM。
+    echo.
+    echo ================================================================
 ) else (
-    echo  UECM Bootstrap failed with exit code %PS_EXIT%.
-    echo  Check the JSON message above for details.
+    echo ================================================================
+    echo.
+    echo     [ 失败 ]  UECM 部署未完成,退出码 %PS_EXIT%。
+    echo     看上方 JSON 里的 message / missing_critical 字段排查原因。
+    echo.
+    echo ================================================================
 )
-echo ============================================
 echo.
 REM Auto-close so unattended / scripted runs don't hang on a key press.
 REM A real key press still closes it immediately; no /nobreak on purpose.

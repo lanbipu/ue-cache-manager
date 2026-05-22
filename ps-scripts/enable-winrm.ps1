@@ -20,6 +20,11 @@
 # - -PowerProfile <HighPerformance|Balanced|Skip> activates a built-in power scheme;
 #   HighPerformance is hidden on some Win11 builds - the script restores it via
 #   powercfg /duplicatescheme before activating.
+# - -CreateLocalAdmin creates (or resets) a local administrator account named by
+#   -LocalAdminName (default 'uecm-svc') with -LocalAdminPassword, and adds it to the
+#   local Administrators group. This is the credential UECM uses for WinRM auth - a
+#   fresh node otherwise has WinRM open but no usable login (a Microsoft-account user
+#   or an unknown built-in Administrator password cannot authenticate remotely).
 #
 # This script does not enable SSH, Basic auth, CredSSP, AllowUnencrypted, or WinRM HTTPS.
 
@@ -44,6 +49,12 @@ param(
 
     [ValidateSet('HighPerformance', 'Balanced', 'Skip')]
     [string]$PowerProfile = 'Skip',
+
+    [switch]$CreateLocalAdmin,
+
+    [string]$LocalAdminName = 'uecm-svc',
+
+    [string]$LocalAdminPassword = '',
 
     [switch]$CheckOnly,
 
@@ -92,10 +103,24 @@ function Get-UecmCriticalVerdict {
     if ($State.lanman_server_running -ne $true)            { $missing.Add('lanman_server')  | Out-Null }
     if ($State.winmgmt_running -ne $true)                  { $missing.Add('winmgmt')        | Out-Null }
     if ($State.fps_smb_in_tcp_enabled -ne $true)           { $missing.Add('firewall_445')   | Out-Null }
+    if ($State.create_local_admin_requested -and -not ($State.local_admin_exists -and $State.local_admin_enabled -and $State.local_admin_in_admins)) {
+        $missing.Add('local_admin') | Out-Null
+    }
     return @{
         verdict = $(if ($missing.Count -eq 0) { 'SUCCESS' } else { 'FAILED' })
         missing = $missing.ToArray()
     }
+}
+
+function Get-UecmFinalVerdict {
+    # The state-based verdict can read SUCCESS even when a critical step threw: e.g.
+    # the local-admin account already exists/enabled/in-Administrators (so state looks
+    # ok) but Set-LocalUser -Password failed this run, leaving the password unchanged.
+    # Any failed CRITICAL step must drag the overall verdict to FAILED too.
+    param([string]$CriticalVerdict, [string[]]$CriticalFailedSteps)
+    if ($CriticalVerdict -ne 'SUCCESS') { return 'FAILED' }
+    if (@($CriticalFailedSteps).Count -gt 0) { return 'FAILED' }
+    return 'SUCCESS'
 }
 
 function Build-UecmStepTable {
@@ -116,7 +141,7 @@ function Build-UecmStepTable {
         @{ Key='winrm_psremoting'; Critical=$false; Label='Enable-PSRemoting (may fail if firewall disabled; listener usually already up)';
            Action={ param($c) Enable-PSRemoting -Force -SkipNetworkProfileCheck | Out-Null; Add-UecmChange $c 'PSRemoting enabled' } }
         @{ Key='quickconfig';      Critical=$false; Label='winrm quickconfig convenience wrapper (non-fatal)';
-           Action={ param($c) & winrm quickconfig -q | Out-Null; Add-UecmChange $c 'winrm quickconfig done' } }
+           Action={ param($c) & winrm quickconfig -q 2>$null | Out-Null; Add-UecmChange $c 'winrm quickconfig done' } }
         @{ Key='winrm_fw_rule';    Critical=$false; Label='Enable WinRM HTTP-In firewall rule';
            Action={ param($c) Enable-NetFirewallRule -DisplayGroup 'Windows Remote Management' -ErrorAction Stop | Out-Null; Add-UecmChange $c 'WinRM firewall rules enabled' } }
         @{ Key='firewall_scope';   Critical=$false; Label='Restrict WinRM firewall to allowed source IPs (optional)';
@@ -133,6 +158,8 @@ function Build-UecmStepTable {
            Action={ param($c) Set-UecmLocalExecutionPolicy -Changes $c } }
         @{ Key='long_paths';       Critical=$true;  Label='LongPathsEnabled=1';
            Action={ param($c) Enable-UecmLongPaths -Changes $c } }
+        @{ Key='local_admin';      Critical=$true;  Label='Create UECM local admin account (opt-in via -CreateLocalAdmin)';
+           Action={ param($c) Enable-UecmLocalAdmin -Changes $c } }
         @{ Key='power_plan';       Critical=$false; Label='Power plan';
            Action={ param($c) Set-UecmPowerPlan -Changes $c } }
     )
@@ -273,6 +300,23 @@ function Get-UecmWinRmState {
         }
     }
 
+    $laName = $LocalAdminName
+    $laUser = $null
+    $laInAdmins = $false
+    # Only probe local accounts when account creation was requested, and tolerate the
+    # Microsoft.PowerShell.LocalAccounts module being unavailable (Domain Controllers,
+    # 32-bit PowerShell on 64-bit Windows) - so a plain WinRM bootstrap that does not
+    # touch local accounts never gains a hard dependency on that module.
+    if ($CreateLocalAdmin) {
+        try {
+            $laUser = Get-LocalUser -Name $laName -ErrorAction SilentlyContinue
+            if ($laUser) {
+                $laInAdmins = [bool](@(Get-LocalGroupMember -SID 'S-1-5-32-544' -ErrorAction Stop) |
+                    Where-Object { $_.SID -eq $laUser.SID })
+            }
+        } catch { $laUser = $null; $laInAdmins = $false }
+    }
+
     return @{
         computer_name = $env:COMPUTERNAME
         is_admin = Test-UecmAdministrator
@@ -290,6 +334,11 @@ function Get-UecmWinRmState {
         lanman_server_running = ((Get-Service -Name LanmanServer -ErrorAction SilentlyContinue).Status -eq 'Running')
         winmgmt_running = ((Get-Service -Name Winmgmt -ErrorAction SilentlyContinue).Status -eq 'Running')
         fps_smb_in_tcp_enabled = ((Get-NetFirewallRule -Name 'FPS-SMB-In-TCP' -ErrorAction SilentlyContinue).Enabled -eq 'True')
+        create_local_admin_requested = [bool]$CreateLocalAdmin
+        local_admin_name = $laName
+        local_admin_exists = [bool]$laUser
+        local_admin_enabled = [bool]($laUser -and $laUser.Enabled)
+        local_admin_in_admins = $laInAdmins
     }
 }
 
@@ -360,6 +409,59 @@ function Enable-UecmLocalAccountRemoteAdmin {
         -Value 1 `
         -Force | Out-Null
     Add-UecmChange $Changes 'LocalAccountTokenFilterPolicy set to 1'
+}
+
+function Enable-UecmLocalAdmin {
+    param([System.Collections.Generic.List[string]]$Changes)
+
+    if (-not $CreateLocalAdmin) {
+        Add-UecmChange $Changes 'local admin account creation skipped (pass -CreateLocalAdmin to enable)'
+        return
+    }
+
+    $name = $LocalAdminName
+    if ([string]::IsNullOrWhiteSpace($name)) {
+        throw 'CreateLocalAdmin requested but -LocalAdminName is empty'
+    }
+    if ([string]::IsNullOrWhiteSpace($LocalAdminPassword)) {
+        throw "CreateLocalAdmin requested but -LocalAdminPassword is empty for account '$name'"
+    }
+    $secure = ConvertTo-SecureString $LocalAdminPassword -AsPlainText -Force
+
+    $existing = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
+    if ($existing) {
+        Set-LocalUser -Name $name -Password $secure -PasswordNeverExpires $true -AccountNeverExpires -ErrorAction Stop
+        if (-not $existing.Enabled) {
+            Enable-LocalUser -Name $name -ErrorAction Stop
+            Add-UecmChange $Changes "enabled existing local account '$name'"
+        }
+        Add-UecmChange $Changes "reset password for existing local account '$name'"
+    } else {
+        New-LocalUser -Name $name -Password $secure `
+            -FullName 'UECM Service Account' `
+            -Description 'UECM remote management service account' `
+            -PasswordNeverExpires -AccountNeverExpires -ErrorAction Stop | Out-Null
+        Add-UecmChange $Changes "created local admin account '$name'"
+    }
+
+    # Resolve the Administrators group by its well-known SID S-1-5-32-544 - on a
+    # localized Windows the group DisplayName is translated (zh-CN: "管理员") but the
+    # SID is invariant, so a hard-coded 'Administrators' name would silently fail there.
+    # Add the member by the LOCAL account's SID (not the bare name): on a domain-joined
+    # box a domain principal of the same name could otherwise be resolved and granted
+    # admin instead of this local SAM account. Get-LocalUser only returns local accounts.
+    $localSid = (Get-LocalUser -Name $name -ErrorAction Stop).SID.Value
+    $adminGroup = (Get-LocalGroup -SID 'S-1-5-32-544' -ErrorAction Stop).Name
+    try {
+        Add-LocalGroupMember -Group $adminGroup -Member $localSid -ErrorAction Stop
+        Add-UecmChange $Changes "added '$name' to local '$adminGroup' group"
+    } catch {
+        if ($_.FullyQualifiedErrorId -match 'MemberExists') {
+            Add-UecmChange $Changes "'$name' already in local '$adminGroup' group"
+        } else {
+            throw
+        }
+    }
 }
 
 function Enable-UecmSmbServer {
@@ -583,24 +685,37 @@ try {
         throw 'Administrator privileges are required. Start PowerShell with Run as Administrator.'
     }
 
+    $criticalFailed = New-Object 'System.Collections.Generic.List[string]'
     foreach ($step in (Build-UecmStepTable)) {
         $r = Invoke-UecmStep -Step $step -Changes $changes -LogState $logState
-        if ($r.status -ne 'ok') { $failed.Add($r.key) | Out-Null }
+        if ($r.status -ne 'ok') {
+            $failed.Add($r.key) | Out-Null
+            if ($r.critical) { $criticalFailed.Add($r.key) | Out-Null }
+        }
     }
 
     $state = Get-UecmWinRmState
     $fwProfilesDisabled = -not ((Get-NetFirewallProfile -ErrorAction SilentlyContinue | Where-Object { $_.Enabled -eq $true }).Count -gt 0)
     $verdictInfo = Get-UecmCriticalVerdict -State $state
-    $ok = ($verdictInfo.verdict -eq 'SUCCESS')
+    $finalVerdict = Get-UecmFinalVerdict -CriticalVerdict $verdictInfo.verdict -CriticalFailedSteps $criticalFailed.ToArray()
+    $ok = ($finalVerdict -eq 'SUCCESS')
 
-    $summaryLine = "verdict=$($verdictInfo.verdict)  failed_steps=[$($failed -join ',')]  missing_critical=[$($verdictInfo.missing -join ',')]  log_write_ok=$($logState.WriteOk)"
+    $summaryLine = "verdict=$finalVerdict  failed_steps=[$($failed -join ',')]  critical_failed=[$($criticalFailed -join ',')]  missing_critical=[$($verdictInfo.missing -join ',')]  log_write_ok=$($logState.WriteOk)"
     Write-UecmLogLine -LogState $logState -Status 'sumry' -Key 'SUMMARY' -Message $summaryLine
 
     @{
         ok = $ok
-        message = $(if ($ok) { 'UECM WinRM bootstrap completed' } else { "bootstrap finished with unmet critical items: $($verdictInfo.missing -join ',')" })
+        message = $(if ($ok) {
+            'UECM WinRM bootstrap completed'
+        } else {
+            $reasons = @()
+            if ($verdictInfo.missing.Count -gt 0) { $reasons += "unmet critical items: $($verdictInfo.missing -join ',')" }
+            if ($criticalFailed.Count -gt 0)      { $reasons += "critical steps failed: $($criticalFailed -join ',')" }
+            "bootstrap finished with problems - $($reasons -join '; ')"
+        })
         changed = @($changes)
         failed = @($failed)
+        critical_failed = @($criticalFailed)
         missing_critical = @($verdictInfo.missing)
         log_path = $logState.Path
         log_write_ok = $logState.WriteOk
