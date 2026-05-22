@@ -24,6 +24,17 @@ UECM ↔ Zen 全链路集成已合 main（PR #10，2026-05-20）。改 zen 相�
 
 后续凡是要引用 uecm-cli 命令、或在文档 / 代码 / 回复里写任何 CLI 相关命令，都必须先查 `uecm-cli <域> --help`（或读 `src-tauri/src/cli/args.rs`）核对真实 flag，不能凭印象写。注意 `src-tauri/target/release` 里的二进制可能比源码旧，核对以 args.rs / 重新 build 出的 help 为准。
 
+## 渲染节点纳管 / 默认凭据
+
+新机器纳管走 `ps-scripts/UECM-Bootstrap.cmd`（双击即开 WinRM/SMB/WMI + 建本地管理员账号）。**渲染节点统一运维凭据**（也就是 UECM 凭据别名要录入的那一组）：
+
+- 账号：`uecm-svc`
+- 密码：`UecmRender@2026`
+
+这组凭据已明文预填在 `UECM-Bootstrap.cmd`（home lab 内网统一运维，已接受明文进 git）；现场双击 bootstrap 即建该账号并加入 Administrators 组。operator 端用同一组在 UECM 里录凭据别名，远程管理所有节点。bootstrap 包标准位置：`C:\Tools\UECM\UECM-WinRM-Bootstrap`（lanPC）。
+
+**改 `.cmd` 注意**：必须 CRLF 换行 + 纯 ASCII，中文只能放 `README.txt`，否则 Windows 双击会报 `'xxx' is not recognized` 乱码且账号不建。
+
 <!-- DOCSMITH:KNOWLEDGE:BEGIN -->
 **任何新增功能从设计阶段就必须考虑 CLI 暴露**
 
