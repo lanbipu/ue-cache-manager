@@ -39,7 +39,7 @@ REM  WinRM/SMB/WMI, do NOT create an account). Account name defaults to uecm-svc
 REM  Afterwards, register the SAME name/password as a credential in UECM.
 REM  Avoid % " ^ in the password (cmd parsing); letters + digits are safest.
 set "UECM_LOCAL_ADMIN=uecm-svc"
-set "UECM_LOCAL_ADMIN_PASSWORD="
+set "UECM_LOCAL_ADMIN_PASSWORD=UecmRender@2026"
 REM =======================================================================
 
 set "ADMIN_ARGS="
