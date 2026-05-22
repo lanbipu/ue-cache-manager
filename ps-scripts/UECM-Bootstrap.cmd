@@ -53,5 +53,10 @@ if "%PS_EXIT%"=="0" (
 )
 echo ============================================
 echo.
-pause
+REM Auto-close so unattended / scripted runs don't hang on a key press.
+REM A real key press still closes it immediately; no /nobreak on purpose.
+REM 2>nul: if stdin is redirected (non-interactive) timeout errors out and we
+REM just fall through to exit instead of blocking like pause did.
+echo This window auto-closes in 20s. Press any key to close now...
+timeout /t 20 >nul 2>nul
 exit /b %PS_EXIT%
