@@ -338,14 +338,23 @@ function Set-UecmTrustedHosts {
 
 function Enable-UecmLocalAccountRemoteAdmin {
     param(
-        [System.Collections.Generic.List[string]]$Changes
+        [System.Collections.Generic.List[string]]$Changes,
+        [string]$RegistryPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
     )
     if (-not $EnableLocalAccountRemoteAdmin) { return }
 
-    $path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
-    New-Item -Path $path -Force | Out-Null
+    # Policies\System always exists on Windows and holds critical UAC/logon policy
+    # values (EnableLUA, ConsentPromptBehaviorAdmin, PromptOnSecureDesktop, ...).
+    # New-Item -Force on an EXISTING registry key DELETES and recreates it, wiping
+    # every value -- and on machines where Administrators lack delete rights on this
+    # key it instead throws "Attempted to perform an unauthorized operation". So only
+    # create the key if it is genuinely missing; otherwise just set the value
+    # (New-ItemProperty needs only SetValue rights, which an admin always has here).
+    if (-not (Test-Path -LiteralPath $RegistryPath)) {
+        New-Item -Path $RegistryPath -Force | Out-Null
+    }
     New-ItemProperty `
-        -Path $path `
+        -Path $RegistryPath `
         -Name 'LocalAccountTokenFilterPolicy' `
         -PropertyType DWord `
         -Value 1 `

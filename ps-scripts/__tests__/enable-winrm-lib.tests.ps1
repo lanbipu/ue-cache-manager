@@ -96,4 +96,23 @@ if ($r2.status -ne 'fail') { throw "fail step should be fail, got $($r2.status)"
 if ($r2.message -notmatch 'boom') { throw "fail step should capture exception message" }
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 
+# Enable-UecmLocalAccountRemoteAdmin: 只能设值, 绝不能 New-Item -Force 删键重建.
+# 真实目标是 HKLM\...\Policies\System (装着 EnableLUA 等系统策略), New-Item -Force
+# 会把整个键清空 -- 这里用 HKCU 临时键 + 预置一个兄弟值, 跑完断言兄弟值还在 + LATFP=1.
+$EnableLocalAccountRemoteAdmin = $true   # dot-source 下默认 $false 会 early-return
+$latfpKey = "HKCU:\Software\UECM_LIBTEST_$([guid]::NewGuid().ToString('N'))"
+try {
+    New-Item -Path $latfpKey -Force | Out-Null
+    New-ItemProperty -Path $latfpKey -Name 'SiblingValue' -PropertyType DWord -Value 42 -Force | Out-Null
+    $latfpChanges = New-Object 'System.Collections.Generic.List[string]'
+    Enable-UecmLocalAccountRemoteAdmin -Changes $latfpChanges -RegistryPath $latfpKey
+    $sib = (Get-ItemProperty -Path $latfpKey -Name 'SiblingValue' -ErrorAction SilentlyContinue).SiblingValue
+    if ($sib -ne 42) { throw "Enable-UecmLocalAccountRemoteAdmin clobbered sibling values (got '$sib', expected 42) -- New-Item -Force wiped the key" }
+    $latfpVal = (Get-ItemProperty -Path $latfpKey -Name 'LocalAccountTokenFilterPolicy' -ErrorAction SilentlyContinue).LocalAccountTokenFilterPolicy
+    if ($latfpVal -ne 1) { throw "LocalAccountTokenFilterPolicy should be 1, got '$latfpVal'" }
+} finally {
+    Remove-Item -Path $latfpKey -Recurse -Force -ErrorAction SilentlyContinue
+    $EnableLocalAccountRemoteAdmin = $false
+}
+
 "OK"
