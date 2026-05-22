@@ -61,17 +61,18 @@ echo.
 if "%PS_EXIT%"=="0" (
     echo ================================================================
     echo.
-    echo     [ OK ]  UECM 部署成功,环境已就绪,可以关闭此窗口。
+    echo     [ OK ]  UECM bootstrap SUCCEEDED - this machine is ready.
     echo.
-    echo     上面那一坨 JSON 是给程序读的状态,不用管它。
-    echo     若填了账号密码,记得回 operator 端把同一组凭据录入 UECM。
+    echo     The JSON above is machine-readable status; you can ignore it.
+    echo     If a password was set, register the same uecm-svc credential
+    echo     in UECM on the operator side.
     echo.
     echo ================================================================
 ) else (
     echo ================================================================
     echo.
-    echo     [ 失败 ]  UECM 部署未完成,退出码 %PS_EXIT%。
-    echo     看上方 JSON 里的 message / missing_critical 字段排查原因。
+    echo     [ FAILED ]  UECM bootstrap did not complete, exit code %PS_EXIT%.
+    echo     Check the JSON 'message' / 'missing_critical' fields above.
     echo.
     echo ================================================================
 )
