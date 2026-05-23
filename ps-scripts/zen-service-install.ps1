@@ -42,42 +42,31 @@
 #       -ServiceName "ZenServer" `
 #       -DataDir "D:\ZenData"
 
-[CmdletBinding()]
-param(
-    [Parameter(Mandatory = $true)][string]$ZenExePath,
-    [string]$ServiceName = 'ZenServer',
-    [Parameter(Mandatory = $true)][string]$DataDir,
-    # Optional: account the service runs as. Applied via `sc.exe config
-    # <SvcName> obj= <user>` AFTER `zen service install` succeeds. Default
-    # (parameter unset / empty) leaves zen's hardcoded NT AUTHORITY\LocalService
-    # in place.
-    #
-    # NOTE: Zen's Windows installer (zenutil/service.cpp:441-453) hardcodes
-    # CreateService with `NT AUTHORITY\LocalService` and ignores its own
-    # `-u` install option. So we can't change the account via zen and must
-    # patch the SCM record after the install lands. Acceptance on lanPC
-    # 2026-05-19 showed LocalService can't read zen.exe under a user
-    # profile (`%LOCALAPPDATA%\...\Common\Zen\Install\`), motivating this
-    # post-install patch.
-    #
-    # Common values:
-    #   "LocalSystem"               — full machine privileges, can read user profile
-    #   ".\\uecm-test"              — local account (must exist on the host)
-    #   "DOMAIN\\renderfarm-svc"    — domain account
-    #   "NT AUTHORITY\\NetworkService" — narrower than LocalSystem
-    [string]$ServiceUser = '',
-    # Optional password for ServiceUser. Required for non-built-in accounts
-    # (built-in ones like LocalSystem / LocalService / NetworkService have
-    # no password). Note: ends up in sc.exe argv, visible via Process
-    # Explorer for the duration of the post-install patch call — acceptable
-    # for an admin-driven one-shot but documented here for transparency.
-    [string]$ServicePassword = ''
-)
-
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 chcp 65001 | Out-Null
 
 $ErrorActionPreference = 'Stop'
+
+# Read named parameters from stdin (JSON). Bound here BEFORE the pre-try
+# `--full` hard-block so that block still inspects the real values. The
+# mandatory ZenExePath / DataDir get a null-guard; ServiceName falls back to
+# its old default; ServiceUser / ServicePassword default to empty string
+# (zen keeps its hardcoded NT AUTHORITY\LocalService when both are empty).
+# ServicePassword is a SECRET — never interpolate it into any error / log line.
+$p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+if ([string]::IsNullOrWhiteSpace($p.ZenExePath)) {
+    @{ ok = $false; message = "ZenExePath is required" } | ConvertTo-Json -Compress
+    exit 0
+}
+if ([string]::IsNullOrWhiteSpace($p.DataDir)) {
+    @{ ok = $false; message = "DataDir is required" } | ConvertTo-Json -Compress
+    exit 0
+}
+$ZenExePath = $p.ZenExePath
+$ServiceName = if ($p.ServiceName) { $p.ServiceName } else { 'ZenServer' }
+$DataDir = $p.DataDir
+$ServiceUser = if ($p.ServiceUser) { $p.ServiceUser } else { '' }
+$ServicePassword = if ($p.ServicePassword) { $p.ServicePassword } else { '' }
 
 # ----------------------------------------------------------------------------
 # Helpers (script scope so both the idempotency path and the post-install

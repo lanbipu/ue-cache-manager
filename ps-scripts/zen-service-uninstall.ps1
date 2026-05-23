@@ -24,18 +24,19 @@
 #       -ZenExePath "C:\Users\me\AppData\Local\UnrealEngine\Common\Zen\Install\zen.exe" `
 #       -ServiceName "ZenServer"
 
-[CmdletBinding()]
-param(
-    [Parameter(Mandatory = $true)][string]$ZenExePath,
-    [string]$ServiceName = 'ZenServer'
-)
-
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 chcp 65001 | Out-Null
 
 $ErrorActionPreference = 'Stop'
 
 try {
+    $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    # ZenExePath is only required when the service is actually installed; the
+    # body short-circuits "service not installed" before touching it, so we
+    # bind it here without a hard null-guard and let the body's conditional
+    # IsNullOrWhiteSpace check (below) enforce it on the install-present path.
+    $ZenExePath = $p.ZenExePath
+    $ServiceName = if ($p.ServiceName) { $p.ServiceName } else { 'ZenServer' }
     # Validate ServiceName FIRST so the "service not installed" idempotent
     # short-circuit works even on hosts where zen.exe has been cleaned up
     # (a fresh box or after a partial uninstall).

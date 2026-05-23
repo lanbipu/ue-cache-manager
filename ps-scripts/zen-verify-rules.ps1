@@ -67,23 +67,6 @@
 #                  -UprojectPath "E:\RenderStream Projects\test_0311\test_0311.uproject" `
 #                  -TimeoutSeconds 300 -ExpectedHost "127.0.0.1" -ExpectedNamespace "ue.ddc"
 
-[CmdletBinding()]
-param(
-    [Parameter(Mandatory = $true)]
-    [string]$UeRoot,
-
-    [Parameter(Mandatory = $true)]
-    [string]$UprojectPath,
-
-    [int]$TimeoutSeconds = 300,
-
-    [string]$ExpectedHost,
-
-    [int]$ExpectedPort = 0,
-
-    [string]$ExpectedNamespace = 'ue.ddc'
-)
-
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 chcp 65001 | Out-Null
 
@@ -246,6 +229,15 @@ $proc = $null
 $startTime = Get-Date
 
 try {
+    $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    if ([string]::IsNullOrWhiteSpace($p.UeRoot)) { throw "UeRoot is required" }
+    if ([string]::IsNullOrWhiteSpace($p.UprojectPath)) { throw "UprojectPath is required" }
+    $UeRoot = $p.UeRoot
+    $UprojectPath = $p.UprojectPath
+    $TimeoutSeconds = if ($null -ne $p.TimeoutSeconds) { [int]$p.TimeoutSeconds } else { 300 }
+    $ExpectedHost = $p.ExpectedHost
+    $ExpectedPort = if ($null -ne $p.ExpectedPort) { [int]$p.ExpectedPort } else { 0 }
+    $ExpectedNamespace = if ($p.ExpectedNamespace) { $p.ExpectedNamespace } else { 'ue.ddc' }
     if ([string]::IsNullOrWhiteSpace($UeRoot)) {
         throw "UeRoot must be non-empty"
     }

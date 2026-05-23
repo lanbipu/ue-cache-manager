@@ -21,17 +21,15 @@
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File zen-urlacl-remove.ps1 `
 #       -UrlPrefix "http://+:8558/"
 
-[CmdletBinding()]
-param(
-    [Parameter(Mandatory = $true)][string]$UrlPrefix
-)
-
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 chcp 65001 | Out-Null
 
 $ErrorActionPreference = 'Stop'
 
 try {
+    $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    if ([string]::IsNullOrWhiteSpace($p.UrlPrefix)) { throw "UrlPrefix is required" }
+    $UrlPrefix = $p.UrlPrefix
     if ([string]::IsNullOrWhiteSpace($UrlPrefix)) {
         throw "UrlPrefix must be non-empty"
     }

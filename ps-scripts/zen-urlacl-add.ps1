@@ -33,18 +33,17 @@
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File zen-urlacl-add.ps1 `
 #       -UrlPrefix "http://+:8558/" -UserAccount "NT SERVICE\ZenServer"
 
-[CmdletBinding()]
-param(
-    [Parameter(Mandatory = $true)][string]$UrlPrefix,
-    [Parameter(Mandatory = $true)][string]$UserAccount
-)
-
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 chcp 65001 | Out-Null
 
 $ErrorActionPreference = 'Stop'
 
 try {
+    $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    if ([string]::IsNullOrWhiteSpace($p.UrlPrefix)) { throw "UrlPrefix is required" }
+    if ([string]::IsNullOrWhiteSpace($p.UserAccount)) { throw "UserAccount is required" }
+    $UrlPrefix = $p.UrlPrefix
+    $UserAccount = $p.UserAccount
     if ([string]::IsNullOrWhiteSpace($UrlPrefix)) {
         throw "UrlPrefix must be non-empty"
     }

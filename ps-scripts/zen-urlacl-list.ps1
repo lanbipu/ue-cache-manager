@@ -37,11 +37,6 @@
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File zen-urlacl-list.ps1
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File zen-urlacl-list.ps1 -PortFilter 8558
 
-[CmdletBinding()]
-param(
-    [string]$PortFilter = $null
-)
-
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 chcp 65001 | Out-Null
 
@@ -83,6 +78,8 @@ function Add-ReservationIfZen {
 }
 
 try {
+    $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    $PortFilter = $p.PortFilter
     $stdoutFile = [System.IO.Path]::GetTempFileName()
     $stderrFile = [System.IO.Path]::GetTempFileName()
     $proc = Start-Process -FilePath 'netsh.exe' `

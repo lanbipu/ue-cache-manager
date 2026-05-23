@@ -1214,11 +1214,13 @@ pub(crate) fn invoke_write_lua(
     creds: Option<&(String, String)>,
     auth_method: &str,
 ) -> UecmResult<serde_json::Value> {
-    let body = build_param_script(
+    // SSH key auth (uecm-svc); operator creds/auth_method ignored.
+    let _ = (creds, auth_method);
+    let raw = run_node(
+        host,
         "zen-write-lua-config.ps1",
-        &[("LuaText", lua_text), ("DestPath", dest_path)],
+        serde_json::json!({ "LuaText": lua_text, "DestPath": dest_path }),
     )?;
-    let raw = run_remote(host, &body, creds, auth_method)?;
     parse_envelope(&raw, "zen-write-lua-config")
 }
 
@@ -1349,7 +1351,9 @@ fn service_install(
     };
     let service_pass = resolved_pass.as_deref();
 
+    // SSH key auth (uecm-svc); operator creds/auth_method ignored.
     let creds = cred.resolve(&db)?;
+    let _ = &creds;
     // Build the invocation string for log_text. ServicePassword is wrapped
     // in `--password <REDACTED>`-shape to leverage the existing redactor —
     // the actual flag we pass to PS is `-ServicePassword` which the
@@ -1368,25 +1372,24 @@ fn service_install(
     ));
     let op_id = operations::start(&db, "zen.service_install", &[ep.machine_id])?;
 
-    // Build the parameter list. ServiceUser / ServicePassword only added
-    // when supplied — zen.exe defaults to LocalService when omitted.
-    let mut params: Vec<(&str, &str)> = vec![
-        ("ZenExePath", zen_exe.as_str()),
-        ("ServiceName", DEFAULT_SERVICE_NAME),
-        ("DataDir", ep.data_dir.as_str()),
-    ];
-    if let Some(u) = service_user {
-        params.push(("ServiceUser", u));
+    // Build the parameter object. ServiceUser / ServicePassword only added
+    // when supplied — the node script defaults to '' (zen keeps LocalService)
+    // when the field is absent.
+    let mut args = serde_json::json!({
+        "ZenExePath": zen_exe,
+        "ServiceName": DEFAULT_SERVICE_NAME,
+        "DataDir": ep.data_dir,
+    });
+    if let Some(obj) = args.as_object_mut() {
+        if let Some(u) = service_user {
+            obj.insert("ServiceUser".into(), serde_json::Value::String(u.to_string()));
+        }
+        if let Some(p) = service_pass {
+            obj.insert("ServicePassword".into(), serde_json::Value::String(p.to_string()));
+        }
     }
-    if let Some(p) = service_pass {
-        params.push(("ServicePassword", p));
-    }
-    let body = build_param_script("zen-service-install.ps1", &params);
-    let result = match body {
-        Ok(body) => run_remote(&machine.ip, &body, creds.as_ref(), cred.auth_method.as_str())
-            .and_then(|raw| parse_envelope(&raw, "zen-service-install")),
-        Err(e) => Err(e),
-    };
+    let result = run_node(&machine.ip, "zen-service-install.ps1", args)
+        .and_then(|raw| parse_envelope(&raw, "zen-service-install"));
     finalize_op(&db, op_id, &result, &invocation);
     let response = result?;
 
@@ -1454,23 +1457,19 @@ fn service_uninstall(
         return Ok(());
     }
 
+    // SSH key auth (uecm-svc); operator creds/auth_method ignored.
     let creds = cred.resolve(&db)?;
+    let _ = &creds;
     let invocation = redact(&format!(
         "zen-service-uninstall.ps1 -ZenExePath {zen_exe} -ServiceName {DEFAULT_SERVICE_NAME}"
     ));
     let op_id = operations::start(&db, "zen.service_uninstall", &[ep.machine_id])?;
-    let body = build_param_script(
+    let result = run_node(
+        &machine.ip,
         "zen-service-uninstall.ps1",
-        &[
-            ("ZenExePath", zen_exe.as_str()),
-            ("ServiceName", DEFAULT_SERVICE_NAME),
-        ],
-    );
-    let result = match body {
-        Ok(body) => run_remote(&machine.ip, &body, creds.as_ref(), cred.auth_method.as_str())
-            .and_then(|raw| parse_envelope(&raw, "zen-service-uninstall")),
-        Err(e) => Err(e),
-    };
+        serde_json::json!({ "ZenExePath": zen_exe, "ServiceName": DEFAULT_SERVICE_NAME }),
+    )
+    .and_then(|raw| parse_envelope(&raw, "zen-service-uninstall"));
     finalize_op(&db, op_id, &result, &invocation);
     let response = result?;
     let summary = serde_json::json!({
@@ -1535,16 +1534,18 @@ fn service_simple(
         }
     }
 
+    // SSH key auth (uecm-svc); operator creds/auth_method ignored.
     let creds = cred.resolve(&db)?;
+    let _ = &creds;
 
     let invocation = redact(&format!("{script} -ServiceName {DEFAULT_SERVICE_NAME}"));
     let op_id = operations::start(&db, op_kind, &[ep.machine_id])?;
-    let body = build_param_script(script, &[("ServiceName", DEFAULT_SERVICE_NAME)]);
-    let result = match body {
-        Ok(body) => run_remote(&machine.ip, &body, creds.as_ref(), cred.auth_method.as_str())
-            .and_then(|raw| parse_envelope(&raw, script)),
-        Err(e) => Err(e),
-    };
+    let result = run_node(
+        &machine.ip,
+        script,
+        serde_json::json!({ "ServiceName": DEFAULT_SERVICE_NAME }),
+    )
+    .and_then(|raw| parse_envelope(&raw, script));
     finalize_op(&db, op_id, &result, &invocation);
     let response = result?;
     let summary = serde_json::json!({
@@ -1568,11 +1569,15 @@ fn service_status(
     cred.preflight(&db)?;
     let ep = require_endpoint(&db, endpoint_id)?;
     let machine = require_machine(&db, ep.machine_id)?;
+    // SSH key auth (uecm-svc); operator creds/auth_method ignored.
     let creds = cred.resolve(&db)?;
+    let _ = &creds;
 
-    let body =
-        build_param_script("zen-service-status.ps1", &[("ServiceName", DEFAULT_SERVICE_NAME)])?;
-    let raw = run_remote(&machine.ip, &body, creds.as_ref(), cred.auth_method.as_str())?;
+    let raw = run_node(
+        &machine.ip,
+        "zen-service-status.ps1",
+        serde_json::json!({ "ServiceName": DEFAULT_SERVICE_NAME }),
+    )?;
     let response = parse_envelope(&raw, "zen-service-status")?;
     let doc = serde_json::json!({
         "ok": true,
@@ -1633,21 +1638,20 @@ fn urlacl_add(
         return Ok(());
     }
 
+    // SSH key auth (uecm-svc); operator creds/auth_method ignored.
     let creds = cred.resolve(&db)?;
+    let _ = &creds;
 
     let invocation = redact(&format!(
         "zen-urlacl-add.ps1 -UrlPrefix {url_prefix} -UserAccount {principal}"
     ));
     let op_id = operations::start(&db, "zen.urlacl_add", &[ep.machine_id])?;
-    let body = build_param_script(
+    let result = run_node(
+        &machine.ip,
         "zen-urlacl-add.ps1",
-        &[("UrlPrefix", url_prefix.as_str()), ("UserAccount", principal)],
-    );
-    let result = match body {
-        Ok(body) => run_remote(&machine.ip, &body, creds.as_ref(), cred.auth_method.as_str())
-            .and_then(|raw| parse_envelope(&raw, "zen-urlacl-add")),
-        Err(e) => Err(e),
-    };
+        serde_json::json!({ "UrlPrefix": url_prefix, "UserAccount": principal }),
+    )
+    .and_then(|raw| parse_envelope(&raw, "zen-urlacl-add"));
     finalize_op(&db, op_id, &result, &invocation);
     let response = result?;
     let summary = serde_json::json!({
@@ -1672,14 +1676,17 @@ fn urlacl_list(
     let db = ctx.require_db()?.clone();
     cred.preflight(&db)?;
     let m = require_machine(&db, machine)?;
+    // SSH key auth (uecm-svc); operator creds/auth_method ignored.
     let creds = cred.resolve(&db)?;
+    let _ = &creds;
 
-    let mut args: Vec<(&str, &str)> = Vec::new();
-    if let Some(p) = port_filter {
-        args.push(("PortFilter", p));
-    }
-    let body = build_param_script("zen-urlacl-list.ps1", &args)?;
-    let raw = run_remote(&m.ip, &body, creds.as_ref(), cred.auth_method.as_str())?;
+    // PortFilter optional — null when no filter; the node script treats
+    // null / empty as "list all reservations".
+    let raw = run_node(
+        &m.ip,
+        "zen-urlacl-list.ps1",
+        serde_json::json!({ "PortFilter": port_filter }),
+    )?;
     let response = parse_envelope(&raw, "zen-urlacl-list")?;
     let doc = serde_json::json!({
         "ok": true,
@@ -1720,19 +1727,18 @@ fn urlacl_remove(
         return Ok(());
     }
 
+    // SSH key auth (uecm-svc); operator creds/auth_method ignored.
     let creds = cred.resolve(&db)?;
+    let _ = &creds;
 
     let invocation = redact(&format!("zen-urlacl-remove.ps1 -UrlPrefix {url_prefix}"));
     let op_id = operations::start(&db, "zen.urlacl_remove", &[ep.machine_id])?;
-    let body = build_param_script(
+    let result = run_node(
+        &machine.ip,
         "zen-urlacl-remove.ps1",
-        &[("UrlPrefix", url_prefix.as_str())],
-    );
-    let result = match body {
-        Ok(body) => run_remote(&machine.ip, &body, creds.as_ref(), cred.auth_method.as_str())
-            .and_then(|raw| parse_envelope(&raw, "zen-urlacl-remove")),
-        Err(e) => Err(e),
-    };
+        serde_json::json!({ "UrlPrefix": url_prefix }),
+    )
+    .and_then(|raw| parse_envelope(&raw, "zen-urlacl-remove"));
     finalize_op(&db, op_id, &result, &invocation);
     let response = result?;
     let summary = serde_json::json!({
@@ -2355,9 +2361,8 @@ fn resolve_cluster_master(
 }
 
 /// Invoke `zen-env-cleanup.ps1` once for a single (var, scope) pair. Returns
-/// the parsed JSON envelope on success. Routes through the same WinRM bridge
-/// (`run_remote`) the rest of M2 uses, so loopback handling / credential
-/// handling stay uniform.
+/// the parsed JSON envelope on success. Routes through the same SSH bridge
+/// (`run_node`) the rest of the migrated zen domain uses.
 fn invoke_env_cleanup(
     host: &str,
     var: &str,
@@ -2365,11 +2370,15 @@ fn invoke_env_cleanup(
     creds: Option<&(String, String)>,
     auth_method: &str,
 ) -> UecmResult<serde_json::Value> {
-    let body = build_param_script(
+    // SSH key auth (uecm-svc); operator creds/auth_method ignored.
+    let _ = (creds, auth_method);
+    // Scopes is an array on the node side (`foreach ($s in $Scopes)`); we fan
+    // out one scope per call, so pass a single-element JSON array.
+    let raw = run_node(
+        host,
         "zen-env-cleanup.ps1",
-        &[("Name", var), ("Scopes", scope)],
+        serde_json::json!({ "Name": var, "Scopes": [scope] }),
     )?;
-    let raw = run_remote(host, &body, creds, auth_method)?;
     let envelope = parse_envelope(&raw, "zen-env-cleanup")?;
 
     // Codex P1: zen-env-cleanup.ps1 returns top-level ok=true even when an

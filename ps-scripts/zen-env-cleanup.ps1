@@ -45,12 +45,6 @@
 #   still process whichever scope succeeded. Set `-Scopes "user"` for
 #   non-admin contexts.
 
-[CmdletBinding()]
-param(
-    [Parameter(Mandatory = $true)][string]$Name,
-    [string[]]$Scopes = @('machine', 'user')
-)
-
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 chcp 65001 | Out-Null
 
@@ -66,6 +60,10 @@ function Normalize-Scope {
 }
 
 try {
+    $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    if ([string]::IsNullOrWhiteSpace($p.Name)) { throw "Name is required" }
+    $Name = $p.Name
+    $Scopes = if ($null -ne $p.Scopes) { $p.Scopes } else { @('machine', 'user') }
     if ([string]::IsNullOrWhiteSpace($Name)) {
         throw "Name must be non-empty"
     }

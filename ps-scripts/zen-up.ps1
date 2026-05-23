@@ -26,17 +26,14 @@
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File zen-up.ps1
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File zen-up.ps1 -ServiceName "ZenServer"
 
-[CmdletBinding()]
-param(
-    [string]$ServiceName = 'ZenServer'
-)
-
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 chcp 65001 | Out-Null
 
 $ErrorActionPreference = 'Stop'
 
 try {
+    $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    $ServiceName = if ($p.ServiceName) { $p.ServiceName } else { 'ZenServer' }
     if ([string]::IsNullOrWhiteSpace($ServiceName)) {
         throw "ServiceName must be non-empty"
     }

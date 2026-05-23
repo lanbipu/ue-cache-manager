@@ -114,12 +114,45 @@ pub fn verify_endpoint(
         }
     }
 
-    let body = build_invoke_script(input)?;
-    let raw = match cred {
-        Some((u, p)) => crate::core::winrm::invoke_with_credential(host, &body, u, p, auth_method)?,
-        None => crate::core::winrm::invoke(host, &body)?,
-    };
+    // SSH key auth (uecm-svc); operator cred/auth_method ignored. The node
+    // script reads its named params from stdin JSON and supplies its own
+    // defaults (TimeoutSeconds=300, ExpectedNamespace='ue.ddc', ExpectedPort=0)
+    // when a field is absent, so we only emit the fields we have.
+    let _ = (cred, auth_method);
+    let raw = run_verify_node(host, input)?;
     parse_outcome_json(&raw)
+}
+
+/// Run the node-pure `zen-verify-rules.ps1` over SSH, passing `input` as the
+/// stdin JSON parameter object. Returns the raw stdout envelope so
+/// `parse_outcome_json` can apply the same `ok`-flag hardening as before.
+fn run_verify_node(host: &str, input: &VerifyInput) -> UecmResult<String> {
+    use crate::core::ssh::{NodeScript, RemoteExecutor, SshExecutor};
+    let mut args = serde_json::json!({
+        "UeRoot": input.ue_root,
+        "UprojectPath": input.uproject_path,
+        "TimeoutSeconds": input.timeout_seconds,
+    });
+    if let Some(obj) = args.as_object_mut() {
+        if let Some(h) = &input.expected_host {
+            obj.insert("ExpectedHost".into(), serde_json::Value::String(h.clone()));
+        }
+        if let Some(p) = input.expected_port {
+            obj.insert("ExpectedPort".into(), serde_json::json!(p));
+        }
+        if let Some(n) = &input.expected_namespace {
+            obj.insert("ExpectedNamespace".into(), serde_json::Value::String(n.clone()));
+        }
+    }
+    let exec = SshExecutor::from_config()?;
+    let out = exec.run(
+        host,
+        &NodeScript { name: "zen-verify-rules.ps1", args, ssh_user: None },
+    )?;
+    if out.stdout.trim().is_empty() && out.exit_code != 0 {
+        return Err(crate::core::ssh::map_exit(out.exit_code, &out.stderr));
+    }
+    Ok(out.stdout)
 }
 
 // -----------------------------------------------------------------------------

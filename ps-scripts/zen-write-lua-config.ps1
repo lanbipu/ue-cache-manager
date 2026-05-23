@@ -34,18 +34,17 @@
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File zen-write-lua-config.ps1 `
 #       -LuaText "..." -DestPath "C:\Users\me\AppData\Local\UnrealEngine\Common\Zen\Install\zen.lua"
 
-[CmdletBinding()]
-param(
-    [Parameter(Mandatory = $true)][string]$LuaText,
-    [Parameter(Mandatory = $true)][string]$DestPath
-)
-
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 chcp 65001 | Out-Null
 
 $ErrorActionPreference = 'Stop'
 
 try {
+    $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    if ($null -eq $p.LuaText) { throw "LuaText is required" }
+    if ([string]::IsNullOrWhiteSpace($p.DestPath)) { throw "DestPath is required" }
+    $LuaText = $p.LuaText
+    $DestPath = $p.DestPath
     # --- Validate DestPath is absolute and not under a system location -------
     if ([string]::IsNullOrWhiteSpace($DestPath)) {
         throw "DestPath must be a non-empty absolute path"
