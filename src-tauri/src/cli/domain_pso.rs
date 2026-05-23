@@ -290,17 +290,24 @@ fn distribute(
         UecmError::InvalidInput(format!("machine {} not found", source_machine_id))
     })?;
 
-    // Dry-run must not consume `--pass-stdin` or decrypt DPAPI; see
-    // `domain_ddc::distribute` for rationale.
+    // Dry-run resolves the same share/UNC + validation but skips the secret
+    // read (see `domain_ddc::distribute`).
     let (op_user, op_pass, smb) = if dry_run {
         cred.preflight(db)?;
-        (None, None, crate::core::pak_distribute::SourceSmb::default())
+        let smb = crate::core::pak_distribute::resolve_source_smb(
+            db,
+            source_machine_id,
+            source_smb_cred_alias,
+            false,
+        )?;
+        (None, None, smb)
     } else {
         let (op_user, op_pass) = resolve_creds(db, cred)?;
         let smb = crate::core::pak_distribute::resolve_source_smb(
             db,
             source_machine_id,
             source_smb_cred_alias,
+            true,
         )?;
         (op_user, op_pass, smb)
     };

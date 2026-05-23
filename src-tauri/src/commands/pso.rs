@@ -310,6 +310,7 @@ pub async fn distribute_pso_cache(
         &db,
         file.source_machine_id,
         request.source_smb_credential_alias.as_deref(),
+        true,
     )?;
     let (source_smb_user, source_smb_pass) = (smb.user, smb.pass);
 

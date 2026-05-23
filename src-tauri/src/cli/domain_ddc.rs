@@ -406,23 +406,28 @@ fn distribute(
                 ))
             })?;
 
-    // Dry-run must not consume `--pass-stdin` or decrypt DPAPI — preview
-    // paths are required to avoid any secret-reading side effects so they
-    // stay safe to run from CI / AI agents. `plan()` accepts None for the
-    // credential snippets without altering its validation logic; the result
-    // we emit back to the user lists target machines and UNC paths, never
-    // resolved passwords.
-    // Dry-run must not read secrets, so source SMB cred is resolved only on the
-    // real path. source SMB now comes from the SecretStore (via explicit alias
-    // or auto-derived from the source host's Mode B share), not the operator
-    // WinRM cred — the operator->target leg is SSH key auth.
+    // Source SMB now comes from the SecretStore (explicit alias or auto-derived
+    // from the source host's Mode B/A share), not the operator WinRM cred — the
+    // operator->target leg is SSH key auth. Dry-run resolves the same share/UNC
+    // and runs the same validation, but skips reading the secret (read_secret =
+    // false), so previews stay side-effect-free yet show the real source UNC.
     let (op_user, op_pass, smb) = if dry_run {
         cred.preflight(&db)?;
-        (None, None, pak_distribute::SourceSmb::default())
+        let smb = pak_distribute::resolve_source_smb(
+            &db,
+            source_machine_id,
+            source_smb_cred_alias,
+            false,
+        )?;
+        (None, None, smb)
     } else {
         let (op_user, op_pass) = resolve_creds(&db, cred)?;
-        let smb =
-            pak_distribute::resolve_source_smb(&db, source_machine_id, source_smb_cred_alias)?;
+        let smb = pak_distribute::resolve_source_smb(
+            &db,
+            source_machine_id,
+            source_smb_cred_alias,
+            true,
+        )?;
         (op_user, op_pass, smb)
     };
 
