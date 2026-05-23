@@ -218,6 +218,20 @@ pub struct SshExecutor {
 }
 
 impl SshExecutor {
+    /// 从 app config 构造默认 executor：UECM keystore（缺则自动生成 keypair）+
+    /// `uecm-svc` 登录 + 标准暂存根。所有 domain 迁移到 SSH 的统一入口。
+    pub fn from_config() -> UecmResult<Self> {
+        let dir = crate::startup::resolve_config_dir()?;
+        let ks = crate::core::keystore::KeyStore::at(&dir);
+        ks.ensure_keypair()?;
+        Ok(Self {
+            key_path: ks.private_key_path(),
+            known_hosts: ks.known_hosts_path(),
+            default_user: "uecm-svc".to_string(),
+            staging_root: STAGING_ROOT.to_string(),
+        })
+    }
+
     /// GBK 兜底解码（节点 PowerShell 5.1 在中文系统可能吐 CP936 stderr）。
     fn decode(bytes: &[u8]) -> String {
         match std::str::from_utf8(bytes) {
@@ -351,6 +365,19 @@ mod tests {
         let m2 = compute_manifest(dir.path()).unwrap();
         assert_ne!(m1["a.ps1"], m2["a.ps1"]);
         assert_eq!(m1["b.ps1"], m2["b.ps1"]);
+    }
+
+    #[test]
+    fn from_config_builds_executor_and_generates_keypair() {
+        let _lock = crate::ENV_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("UECM_DB_PATH", dir.path().join("uecm.sqlite"));
+        let exec = SshExecutor::from_config().unwrap();
+        std::env::remove_var("UECM_DB_PATH");
+        assert_eq!(exec.default_user, "uecm-svc");
+        assert_eq!(exec.staging_root, STAGING_ROOT);
+        assert!(exec.key_path.exists(), "ensure_keypair should have generated the key");
+        assert!(exec.key_path.ends_with("uecm_ed25519"));
     }
 
     #[test]
