@@ -100,10 +100,19 @@ try {
     #    message later if it was never staged.
     if (-not $CheckOnly) {
         $psexecSrc = Join-Path $StagingSourceDir 'PsExec64.exe'
+        $psexecDst = Join-Path $uecmDir 'PsExec64.exe'
         if (Test-Path -LiteralPath $psexecSrc) {
             if (-not (Test-Path $uecmDir)) { New-Item -ItemType Directory -Path $uecmDir -Force | Out-Null }
-            Copy-Item -LiteralPath $psexecSrc -Destination (Join-Path $uecmDir 'PsExec64.exe') -Force
-            Note "installed PsExec64 -> $uecmDir"
+            # Staging from C:\ProgramData\UECM itself makes src == dst; Copy-Item
+            # -Force errors on copy-onto-itself, so skip when paths resolve equal
+            # (keeps re-runs idempotent for that valid layout).
+            if ([System.IO.Path]::GetFullPath($psexecSrc) -ieq [System.IO.Path]::GetFullPath($psexecDst)) {
+                Note "PsExec64 already at $uecmDir (staging source is the UECM dir); skipped copy"
+            }
+            else {
+                Copy-Item -LiteralPath $psexecSrc -Destination $psexecDst -Force
+                Note "installed PsExec64 -> $uecmDir"
+            }
         }
         else {
             Note "WARNING: PsExec64.exe not in bootstrap package; SYSTEM credential injection unavailable until staged"
