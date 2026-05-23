@@ -157,6 +157,54 @@ pub fn drifted_files(
     out
 }
 
+/// 解析节点回传的 manifest JSON（`{ "<name>": "<sha256>", ... }`）。
+pub fn remote_manifest_from_json(s: &str) -> UecmResult<BTreeMap<String, String>> {
+    serde_json::from_str(s).map_err(|e| UecmError::NodeScript {
+        exit: 0,
+        stderr: format!("bad remote manifest JSON: {e}"),
+    })
+}
+
+/// scp 把本地文件推到节点暂存目录（用系统 scp，复用同一把 key/known_hosts）。
+/// 配合 `compute_manifest` + `drifted_files`：只推漂移的脚本。
+pub fn scp_push(
+    key_path: &Path,
+    known_hosts: &Path,
+    ssh_user: &str,
+    host: &str,
+    local_files: &[PathBuf],
+    remote_dir: &str,
+) -> UecmResult<()> {
+    if local_files.is_empty() {
+        return Ok(());
+    }
+    let mut cmd = Command::new("scp");
+    cmd.arg("-i")
+        .arg(key_path)
+        .arg("-o")
+        .arg("IdentitiesOnly=yes")
+        .arg("-o")
+        .arg(format!("UserKnownHostsFile={}", known_hosts.to_string_lossy()))
+        .arg("-o")
+        .arg("StrictHostKeyChecking=accept-new")
+        .arg("-o")
+        .arg("BatchMode=yes");
+    for f in local_files {
+        cmd.arg(f);
+    }
+    cmd.arg(format!("{ssh_user}@{host}:{remote_dir}/"));
+    let out = cmd
+        .output()
+        .map_err(|e| UecmError::ScriptStaging(format!("spawn scp failed: {e}")))?;
+    if !out.status.success() {
+        return Err(UecmError::ScriptStaging(format!(
+            "scp failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    Ok(())
+}
+
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -303,6 +351,13 @@ mod tests {
         let m2 = compute_manifest(dir.path()).unwrap();
         assert_ne!(m1["a.ps1"], m2["a.ps1"]);
         assert_eq!(m1["b.ps1"], m2["b.ps1"]);
+    }
+
+    #[test]
+    fn remote_manifest_parses_node_json() {
+        let m = remote_manifest_from_json(r#"{"a.ps1":"AAA","b.ps1":"BBB"}"#).unwrap();
+        assert_eq!(m.get("a.ps1"), Some(&"AAA".to_string()));
+        assert_eq!(m.len(), 2);
     }
 
     #[test]
