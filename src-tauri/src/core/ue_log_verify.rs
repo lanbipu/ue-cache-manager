@@ -1,7 +1,8 @@
 //! Pull a verbose DDC startup log from one host and convert it to a summary
 //! report. Calls parse-ue-log.ps1 sidecar; parses content via ue_log_parser.
 
-use crate::core::{powershell, ue_log_parser::{self, DdcEvent}};
+use crate::core::ssh::{run_json, NodeScript, SshExecutor};
+use crate::core::ue_log_parser::{self, DdcEvent};
 use crate::error::{UecmError, UecmResult};
 use serde::{Deserialize, Serialize};
 
@@ -83,19 +84,20 @@ pub fn run_for_host(
     timeout_seconds: u32,
     creds: Option<(&str, &str)>,
 ) -> UecmResult<VerifyReport> {
-    let mut args: Vec<String> = vec![
-        "-HostName".into(), host.into(),
-        "-EditorExe".into(), editor_exe.into(),
-        "-ProjectPath".into(), project_path.into(),
-        "-TimeoutSeconds".into(), timeout_seconds.to_string(),
-    ];
-    if let Some((u, p)) = creds {
-        args.extend(["-Username".into(), u.into(), "-Password".into(), p.into()]);
-    }
-    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
-    let result: ScriptResult = powershell::run_json(
-        &powershell::script_path("parse-ue-log.ps1"),
-        &args_ref,
+    let _ = creds; // SSH key auth; per-call WinRM cred no longer used (kept until A5).
+    let exec = SshExecutor::from_config()?;
+    let result: ScriptResult = run_json(
+        &exec,
+        host,
+        &NodeScript {
+            name: "parse-ue-log.ps1",
+            args: serde_json::json!({
+                "EditorExe": editor_exe,
+                "ProjectPath": project_path,
+                "TimeoutSeconds": timeout_seconds,
+            }),
+            ssh_user: None,
+        },
     )?;
     if !result.ok {
         return Err(UecmError::OperationFailed(

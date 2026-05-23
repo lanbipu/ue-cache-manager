@@ -1,19 +1,20 @@
 # Runs UnrealEditor.exe in nullrhi mode with DDC verbose logging, captures the
-# log file path, and returns the parsed log contents up to a configurable size
-# cap. Designed to be called over WinRM via run_json.
-param(
-    [Parameter(Mandatory=$true)] [string]$HostName,
-    [Parameter(Mandatory=$true)] [string]$EditorExe,
-    [Parameter(Mandatory=$true)] [string]$ProjectPath,
-    [int]$TimeoutSeconds = 180,
-    [int]$MaxLogBytes = 2097152,
-    [string]$Username,
-    [string]$Password
-)
+# log file path, and returns the parsed log contents up to a configurable size cap.
+#
+# Node-pure: runs locally on the target (shipped + executed via SSH -File).
+# stdin: JSON { "EditorExe", "ProjectPath", "TimeoutSeconds", "MaxLogBytes" }
+# Output: JSON { ok, log_path, size, truncated, content, exit_code }
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
+# Fail-fast verify: editor / project must exist; explicit throws -> ok:false.
 $ErrorActionPreference = 'Stop'
 
-$script = {
-    param($EditorExe, $ProjectPath, $TimeoutSeconds, $MaxLogBytes)
+try {
+    $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    $EditorExe = $p.EditorExe
+    $ProjectPath = $p.ProjectPath
+    $TimeoutSeconds = if ($null -ne $p.TimeoutSeconds) { [int]$p.TimeoutSeconds } else { 180 }
+    $MaxLogBytes = if ($null -ne $p.MaxLogBytes) { [int]$p.MaxLogBytes } else { 2097152 }
+
     if (-not (Test-Path -LiteralPath $EditorExe)) { throw "editor not found: $EditorExe" }
     if (-not (Test-Path -LiteralPath $ProjectPath)) { throw "project not found: $ProjectPath" }
 
@@ -21,7 +22,7 @@ $script = {
     New-Item -ItemType Directory -Path $logDir -Force | Out-Null
     $logFile = Join-Path $logDir 'verify.log'
 
-    $args = @(
+    $ueArgs = @(
         $ProjectPath,
         '-nullrhi',
         '-nosound',
@@ -31,7 +32,7 @@ $script = {
         '-logcmds=LogDerivedDataCache Verbose',
         "-abslog=$logFile"
     )
-    $proc = Start-Process -FilePath $EditorExe -ArgumentList $args -PassThru -WindowStyle Hidden
+    $proc = Start-Process -FilePath $EditorExe -ArgumentList $ueArgs -PassThru -WindowStyle Hidden
     if (-not $proc.WaitForExit($TimeoutSeconds * 1000)) {
         try { $proc.Kill() } catch {}
         throw "editor did not exit within $TimeoutSeconds s"
@@ -46,32 +47,15 @@ $script = {
         [System.Text.Encoding]::UTF8.GetString($tail)
     }
     @{
-        log_path = $logFile
-        size = $size
+        ok        = $true
+        log_path  = $logFile
+        size      = $size
         truncated = ($size -gt $MaxLogBytes)
-        content = $content
+        content   = $content
         exit_code = $proc.ExitCode
-    }
-}
-
-try {
-    $result = if ($Username) {
-        $pass = ConvertTo-SecureString $Password -AsPlainText -Force
-        $cred = New-Object System.Management.Automation.PSCredential($Username, $pass)
-        Invoke-Command -ComputerName $HostName -Credential $cred -Authentication Default `
-            -ScriptBlock $script -ArgumentList $EditorExe, $ProjectPath, $TimeoutSeconds, $MaxLogBytes
-    } else {
-        Invoke-Command -ComputerName $HostName -ScriptBlock $script `
-            -ArgumentList $EditorExe, $ProjectPath, $TimeoutSeconds, $MaxLogBytes
-    }
-    @{
-        ok = $true
-        log_path = $result.log_path
-        size = $result.size
-        truncated = $result.truncated
-        content = $result.content
-        exit_code = $result.exit_code
     } | ConvertTo-Json -Compress -Depth 4
-} catch {
+}
+catch {
     @{ ok = $false; message = $_.Exception.Message } | ConvertTo-Json -Compress
+    exit 1
 }
