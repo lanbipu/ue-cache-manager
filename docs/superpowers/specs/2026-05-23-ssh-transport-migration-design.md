@@ -20,6 +20,7 @@
 - **`enable-ssh.ps1` 成为完整独立 onboarder**(建 `uecm-svc` 账号 + SMB/LongPaths/HighPerformance/ExecutionPolicy 节点 prep),`UECM-Bootstrap.cmd` 转纯 SSH。
 - 所有节点操作走 `ssh::run_json` + 节点纯脚本;连通性探测走 `ssh::probe`(含 loopback 旁路)。
 - 所有需持久化的 secret 走 `SecretStore`;SQLite `credentials` 表仅存别名元数据(无密码)。
+- **CLI 覆盖不退化(各 phase 落地见 §6:P1 起 `ssh` 域、P4 `secret` 域、P5a 退役 `winrm`+`machine authorize`)**:每个迁移域保留其 CLI 命令;退役的 `winrm` 命令域 + `machine authorize` 由**新 `ssh` 域**(`package-bootstrap`/`probe`/`authorize`)替代;退役的 `cred` 域由**新 `secret` 域**(`set`/`get`/`list`/`delete` SecretStore)替代。terminal/agent 能从命令行驱动纳管 + 管密钥(CLAUDE.md「所有功能 CLI 暴露」)。
 - **core fn + CLI** 不再带 operator WinRM cred 参数 / 不再 `resolve_password`。**Tauri 命令(`commands/*`)保持向后兼容**:保留 optional cred 参数 shim,**WinRM-原生命令(`bootstrap_winrm` 等)repoint 成 SSH 信息 shim 而非删除**(见 §5)。Tauri 表面参数清理 + Vue 清理 = 子项目 B。
 - `cargo test --lib` 全绿 + `pnpm tauri build --no-bundle` 通过 + lanPC 真节点抽验 + 受影响 Tauri 命令 UI/命令级 smoke。
 
@@ -98,6 +99,7 @@ zen 12 传输脚本:detect-binary / down / env-cleanup / service-install / servi
   - `ssh::probe` 是 `uecm-svc` 认证登录(非 `Test-WSMan` 无认证连通):只开了 WinRM 没开 SSH 的节点会判 offline——P0 之后这是**预期**(WinRM 退役),但 `deep_scan` 的「run `machine authorize` 开 WinRM」提示要改成 SSH 纳管提示。
   - `Ok(ok=false)` vs `Err`:winrm 返 `Ok{ok:false}`,ssh 返 `Err`;`Ok(_)=>offline` 分支变 dead,offline 经 `Err` 仍达成,核实落库一致。
 - 命令签名/响应不变(`winrm_ok` 字段冻结,契约 §5.3)。不删 winrm.rs。
+- **新建 `ssh` CLI 域(args.rs `Domain::Ssh` + `SshAction`)** 起步:`ssh probe <host>`(走 `ssh::probe`,作 `winrm probe` 的替代)。`package-bootstrap`/`authorize` 在 P5a 补全(那时一并退役 `winrm` 域)。这样 CLI 纳管能力在 P5 删 `winrm` 域前已就位,不留真空。
 
 ### P2 — zen 域迁移
 - **先完整 trace**:确认 12 传输脚本(literal name → `run_remote`)+ 3 孤儿(`probe-cache-stats/probe-health/read-lockfile` = 0 Rust 引用,功能在 `core/zen/{probe,cache_stats}.rs` 走 reqwest HTTP)。**孤儿不属于传输迁移**:删除或标 manual-debug,不改成 node-pure。
@@ -119,7 +121,8 @@ zen 12 传输脚本:detect-binary / down / env-cleanup / service-install / servi
 - `cli/credential_args.rs`:删 `--cred-alias` 的 DPAPI resolve 路径;**删 `AuthMethod` enum + `auth_method` 参数**(zen/env/ini/share/machine 全线,仅服务 winrm)。
 - core fn:删 `let _=(user,pass)` + `_with_credential` 变体;更新 CLI 调用方;Tauri 层留 shim。
 - **deploy 凭据门**(review 坐实):`core/deploy_workflow.rs:324,400` 的 `ok_or_else("creds required")`——SSH leaf 已忽略密码,故去掉这两个门(或确认 SSH 路径不需要),否则 no-op shim 传 None 会运行时崩。
-- **凭据子系统**(契约 §5.5):`save_credential` repoint DPAPI→`SecretStore::put`;`from_sql` 容错未知 kind + 保留 `CredentialKind::Winrm`;`domain_cred` CLI:`save` 改 SecretStore 或删,`list/delete` 指向 SQLite/SecretStore。
+- **凭据子系统**(契约 §5.5):`save_credential`(Tauri)repoint DPAPI→`SecretStore::put`;`from_sql` 容错未知 kind + 保留 `CredentialKind::Winrm`;`listCredentials` 读 SQLite 元数据。
+- **新建 `secret` CLI 域(args.rs `Domain::Secret` + `SecretAction`)**:`secret set <alias>`(`--value`/stdin)、`secret get <alias>`、`secret list`、`secret delete <alias>`,直管 `core::secrets::SecretStore`(put/get/delete + 列表源用 SQLite 别名元数据或新增 `SecretStore::list`)。`cred` CLI 域退役(其 DPAPI `save` 无意义);保留只读兼容或删,二选一实现时定。terminal/agent 由此能管密钥。
 - 不删 DPAPI 实现。
 
 ### P5 — 拆除(删,门禁:前置完成 + grep 清零 + §5.6 UI smoke)
@@ -127,6 +130,7 @@ zen 12 传输脚本:detect-binary / down / env-cleanup / service-install / servi
 - **5a 退役远程推送纳管(不删 Vue 命令)**:
   - `commands/bootstrap.rs` 两命令 **repoint**(契约 §5.4):`bootstrap_winrm`→graceful「远程推送退役,用 `UECM-Bootstrap.cmd`」结果;`get_winrm_bootstrap_script`→返回 SSH 纳管脚本/说明;保留 `WinrmBootstrapResult` 兼容形状。
   - `cli/domain_machine.rs::authorize`/`deep_scan` + `MachineAction::Authorize`:退役或 repoint 成 SSH 纳管提示(不再调已删的 bootstrap/preflight)。
+- **5a 补全 `ssh` CLI 域(替代退役的 `winrm` 域 + `machine authorize`)**:`ssh package-bootstrap [--out <dir>]`(打包含当前 keystore 公钥的 SSH USB 纳管包 = `UECM-Bootstrap.cmd`+`enable-ssh.ps1`+`uecm.pub`+`PsExec64.exe`,取代裸 PS `package-winrm-bootstrap.ps1` + `winrm bootstrap-script`)、`ssh authorize <host>`(向已开 SSH 的节点重推当前公钥)。`ssh probe` 已在 P1 落地。**先补 `ssh` 域命令、再删 `winrm` 域**(同 phase 内,build 绿,CLI 覆盖不断档)。
 - `UECM-Bootstrap.cmd` 转纯 SSH;`package-winrm-bootstrap.ps1` 转 SSH-only;顺手更新 health remediation 文案(`health_check.rs:89-106`)+ health-probes remediation,去掉 `winrm bootstrap` 指向。
 - **5b 删 DPAPI(门禁 P3+P4)**:`core/credentials.rs` store/resolve/list_aliases、`cred-set/cred-delete/cred-list/dpapi.ps1`;确认 `save_credential` 已 repoint、`list_credentials`/`from_sql` 仍工作(legacy winrm 行不报错)。
 - 每删一项先 `grep` 零活引用。收尾:全量 build + lanPC E2E(health + zen 全链 + share/distribute)+ §5.6 受影响 Tauri 命令 smoke。
