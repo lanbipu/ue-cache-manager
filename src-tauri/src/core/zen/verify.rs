@@ -84,7 +84,6 @@ pub fn verify_endpoint(
     host: &str,
     cred: Option<(&str, &str)>,
     input: &VerifyInput,
-    auth_method: &str,
 ) -> UecmResult<VerifyOutcome> {
     // Same validation the sidecar will do, but failing here gives a clearer
     // error than waiting for the WinRM round-trip to return `ok:false`.
@@ -114,11 +113,11 @@ pub fn verify_endpoint(
         }
     }
 
-    // SSH key auth (uecm-svc); operator cred/auth_method ignored. The node
-    // script reads its named params from stdin JSON and supplies its own
+    // SSH key auth (uecm-svc); operator cred ignored (param kept as a shim). The
+    // node script reads its named params from stdin JSON and supplies its own
     // defaults (TimeoutSeconds=300, ExpectedNamespace='ue.ddc', ExpectedPort=0)
     // when a field is absent, so we only emit the fields we have.
-    let _ = (cred, auth_method);
+    let _ = cred;
     let raw = run_verify_node(host, input)?;
     parse_outcome_json(&raw)
 }
@@ -289,7 +288,7 @@ mod tests {
     fn verify_endpoint_rejects_empty_ue_root() {
         let mut i = full_input();
         i.ue_root = "  ".into();
-        let e = verify_endpoint("10.0.0.1", None, &i, "Negotiate").unwrap_err();
+        let e = verify_endpoint("10.0.0.1", None, &i).unwrap_err();
         assert!(matches!(e, UecmError::InvalidInput(_)));
     }
 
@@ -297,7 +296,7 @@ mod tests {
     fn verify_endpoint_rejects_empty_uproject_path() {
         let mut i = full_input();
         i.uproject_path = "".into();
-        let e = verify_endpoint("10.0.0.1", None, &i, "Negotiate").unwrap_err();
+        let e = verify_endpoint("10.0.0.1", None, &i).unwrap_err();
         assert!(matches!(e, UecmError::InvalidInput(_)));
     }
 
@@ -305,7 +304,7 @@ mod tests {
     fn verify_endpoint_rejects_zero_timeout() {
         let mut i = full_input();
         i.timeout_seconds = 0;
-        let e = verify_endpoint("10.0.0.1", None, &i, "Negotiate").unwrap_err();
+        let e = verify_endpoint("10.0.0.1", None, &i).unwrap_err();
         assert!(matches!(e, UecmError::InvalidInput(_)));
     }
 

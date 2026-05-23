@@ -338,7 +338,7 @@ mod tests {
         let db = fresh_db();
         let mut buf: Vec<u8> = Vec::new();
         let mut ctx = make_ctx(&mut buf, &db);
-        let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false, auth_method: crate::cli::credential_args::AuthMethod::Negotiate };
+        let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false };
         let r = create(&mut ctx, "z", "host", "share", "C:\\path", &cred);
         assert!(matches!(r, Err(UecmError::InvalidInput(_))));
     }
@@ -361,7 +361,7 @@ mod tests {
         let db = fresh_db();
         let mut buf: Vec<u8> = Vec::new();
         let mut ctx = make_ctx(&mut buf, &db);
-        let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false, auth_method: crate::cli::credential_args::AuthMethod::Negotiate };
+        let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false };
         let r = inject_system_cred(&mut ctx, "client", "192.0.2.2", "ddc-svc", &cred);
         assert!(matches!(r, Err(UecmError::InvalidInput(_))));
     }

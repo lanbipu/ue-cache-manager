@@ -544,7 +544,7 @@ fn detect_binary(
     for (idx, m) in target_machines.iter().enumerate() {
         let machine_id = m.id.expect("machine in inventory always has id");
         let host = &m.ip;
-        let detection_result = invoke_detect_binary(host, creds.as_ref(), cred.auth_method.as_str());
+        let detection_result = invoke_detect_binary(host, creds.as_ref());
         match detection_result {
             Ok(detection) => {
                 let report = zen_binary::persist(&db, machine_id, &detection)?;
@@ -605,11 +605,10 @@ fn detect_binary(
 fn invoke_detect_binary(
     host: &str,
     creds: Option<&(String, String)>,
-    auth_method: &str,
 ) -> UecmResult<zen_binary::BinaryDetection> {
-    // SSH key auth (uecm-svc); operator creds/auth_method ignored (P4 removes the
-    // params). zen-detect-binary takes no args (param-less; ignores stdin).
-    let _ = (creds, auth_method);
+    // SSH key auth (uecm-svc); operator creds ignored (param kept as a shim).
+    // zen-detect-binary takes no args (param-less; ignores stdin).
+    let _ = creds;
     let raw: String = run_node(host, "zen-detect-binary.ps1", serde_json::json!({}))?;
 
     // PS sidecars emit exit 0 even on expected failures, with `{ok:false,
@@ -1144,7 +1143,7 @@ fn apply_config(
     let op_id = operations::start(&db, "zen.apply_config", &[ep.machine_id])?;
 
     let expected_sha = sha256_hex_of(&lua);
-    let result = invoke_write_lua(&machine.ip, &lua, dest_path, creds.as_ref(), cred.auth_method.as_str())
+    let result = invoke_write_lua(&machine.ip, &lua, dest_path, creds.as_ref())
         .and_then(|response| verify_write_response(&response, &expected_sha, lua.len()));
     finalize_op(&db, op_id, &result, &invocation);
 
@@ -1212,10 +1211,9 @@ pub(crate) fn invoke_write_lua(
     lua_text: &str,
     dest_path: &str,
     creds: Option<&(String, String)>,
-    auth_method: &str,
 ) -> UecmResult<serde_json::Value> {
-    // SSH key auth (uecm-svc); operator creds/auth_method ignored.
-    let _ = (creds, auth_method);
+    // SSH key auth (uecm-svc); operator creds ignored (param kept as a shim).
+    let _ = creds;
     let raw = run_node(
         host,
         "zen-write-lua-config.ps1",
@@ -2309,10 +2307,9 @@ fn invoke_env_cleanup(
     var: &str,
     scope: &str,
     creds: Option<&(String, String)>,
-    auth_method: &str,
 ) -> UecmResult<serde_json::Value> {
-    // SSH key auth (uecm-svc); operator creds/auth_method ignored.
-    let _ = (creds, auth_method);
+    // SSH key auth (uecm-svc); operator creds ignored (param kept as a shim).
+    let _ = creds;
     // Scopes is an array on the node side (`foreach ($s in $Scopes)`); we fan
     // out one scope per call, so pass a single-element JSON array.
     let raw = run_node(
@@ -2505,7 +2502,7 @@ fn project_enable(
                         // fan out one call per scope so a per-scope failure
                         // (e.g. non-admin session) is captured precisely.
                         for scope in &req.scopes {
-                            match invoke_env_cleanup(host, &req.var, scope, creds.as_ref(), cred.auth_method.as_str()) {
+                            match invoke_env_cleanup(host, &req.var, scope, creds.as_ref()) {
                                 Ok(remote) => {
                                     env_results.push(EnvCleanupResultView {
                                         var: req.var.clone(),
@@ -3190,7 +3187,7 @@ fn run_verify_editor(
     let op_id = operations::start(&db, "zen.verify_rules.run_editor", &[machine_id])?;
 
     let cred_ref = creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str()));
-    let result = crate::core::zen::verify::verify_endpoint(&m.ip, cred_ref, &input, cred.auth_method.as_str());
+    let result = crate::core::zen::verify::verify_endpoint(&m.ip, cred_ref, &input);
 
     let (outcome_json, op_result_for_log) = match result {
         Ok(outcome) => {
@@ -3491,9 +3488,7 @@ mod tests {
             cred_alias: None,
             user: None,
             pass: None,
-            pass_stdin: false,
-            auth_method: crate::cli::credential_args::AuthMethod::Negotiate,
-        };
+            pass_stdin: false,        };
         let err = probe(&mut ctx, Some(9999), false, 2, &cred).unwrap_err();
         assert!(matches!(err, UecmError::InvalidInput(_)));
     }
@@ -3820,9 +3815,7 @@ mod tests {
             cred_alias: None,
             user: None,
             pass: None,
-            pass_stdin: false,
-            auth_method: crate::cli::credential_args::AuthMethod::Negotiate,
-        };
+            pass_stdin: false,        };
         // --dry-run with editor_owned must still error out (DB state matters,
         // not the dry-run flag).
         let err = service_install(&mut ctx, endpoint_id, None, None, false, false, true, &cred).unwrap_err();
@@ -4255,9 +4248,7 @@ mod tests {
             cred_alias: None,
             user: None,
             pass: None,
-            pass_stdin: false,
-            auth_method: crate::cli::credential_args::AuthMethod::Negotiate,
-        };
+            pass_stdin: false,        };
         let err = project_enable(&mut ctx, 1, &[1], 1, "ue.ddc", false, false, &cred).unwrap_err();
         assert!(matches!(err, UecmError::InvalidInput(_)));
     }
@@ -4623,9 +4614,7 @@ overrides: {}
                 cred_alias: None,
                 user: None,
                 pass: None,
-                pass_stdin: false,
-                auth_method: crate::cli::credential_args::AuthMethod::Negotiate,
-            }
+                pass_stdin: false,            }
         }
     }
 

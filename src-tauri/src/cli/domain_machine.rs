@@ -420,7 +420,7 @@ fn deep_scan(
         let db = ctx.require_db()?;
         cred.resolve(db)?
     };
-    let sub_cred = crate::cli::credential_args::CredentialArgs::inline(resolved.clone(), cred.auth_method);
+    let sub_cred = crate::cli::credential_args::CredentialArgs::inline(resolved.clone());
 
     ctx.emitter
         .emit_event(&Event::Started {
@@ -801,7 +801,7 @@ mod tests {
         // Injected UnreachableExec makes every probe fail, so both machines are
         // skipped — but the batch must still complete with Ok. (Hermetic: no real
         // ssh / keystore touch.)
-        let cred = crate::cli::credential_args::CredentialArgs::inline(None, crate::cli::credential_args::AuthMethod::Negotiate);
+        let cred = crate::cli::credential_args::CredentialArgs::inline(None);
         let res = deep_scan(&mut ctx, vec![1, 2], false, &cred, &UnreachableExec);
         assert!(res.is_ok(), "batch must complete even when every machine is skipped");
     }
@@ -818,7 +818,7 @@ mod tests {
         };
         // id 999 does not exist → refresh returns InvalidInput → classified as a
         // failure (not a WinRM skip), but the batch still completes Ok.
-        let cred = crate::cli::credential_args::CredentialArgs::inline(None, crate::cli::credential_args::AuthMethod::Negotiate);
+        let cred = crate::cli::credential_args::CredentialArgs::inline(None);
         let res = deep_scan(&mut ctx, vec![999], false, &cred, &UnreachableExec);
         assert!(res.is_ok(), "batch completes; per-machine failure is reported in summary");
     }
@@ -858,7 +858,7 @@ mod tests {
         };
         add(&mut ctx, "10.0.0.1".to_string(), Some("m1".to_string())).unwrap();
         // inline(None) resolves to no credentials → authorize must reject.
-        let cred = crate::cli::credential_args::CredentialArgs::inline(None, crate::cli::credential_args::AuthMethod::Negotiate);
+        let cred = crate::cli::credential_args::CredentialArgs::inline(None);
         let res = authorize(&mut ctx, vec![1], false, None, &cred);
         assert!(matches!(res, Err(UecmError::InvalidInput(_))));
     }
@@ -873,7 +873,7 @@ mod tests {
             emitter,
             json_mode: true,
         };
-        let cred = crate::cli::credential_args::CredentialArgs::inline(None, crate::cli::credential_args::AuthMethod::Negotiate);
+        let cred = crate::cli::credential_args::CredentialArgs::inline(None);
         let res = deep_scan(&mut ctx, vec![], false, &cred, &UnreachableExec);
         assert!(res.is_err(), "no --machine-ids and no --all must error");
     }

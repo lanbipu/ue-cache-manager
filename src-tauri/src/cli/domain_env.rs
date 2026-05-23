@@ -259,7 +259,6 @@ mod tests {
             user: None,
             pass: None,
             pass_stdin: false,
-            auth_method: crate::cli::credential_args::AuthMethod::Negotiate,
         };
         let secret = "SECRET-VALUE-XYZ-NEVER-LEAK";
         let _ = set_batch(

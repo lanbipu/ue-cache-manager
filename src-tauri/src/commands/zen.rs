@@ -940,7 +940,7 @@ pub fn zen_apply_config(
     let op_id = operations::start(&db, "zen.apply_config", &[ep.machine_id])?;
 
     let expected_sha = zen_cli_shared::sha256_hex_of(&lua);
-    let result = zen_cli_shared::invoke_write_lua(&machine.ip, &lua, &dest_path, creds.as_ref(), "Negotiate")
+    let result = zen_cli_shared::invoke_write_lua(&machine.ip, &lua, &dest_path, creds.as_ref())
         .and_then(|response| {
             zen_cli_shared::verify_write_response(&response, &expected_sha, lua.len())
         });
@@ -1850,7 +1850,7 @@ fn zen_verify_rules_run_editor_leg(
     let op_id = operations::start(db, "zen.verify_rules.run_editor", &[rei.machine_id])?;
 
     let cred_ref = creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str()));
-    let result = crate::core::zen::verify::verify_endpoint(&m.ip, cred_ref, &input, "Negotiate");
+    let result = crate::core::zen::verify::verify_endpoint(&m.ip, cred_ref, &input);
 
     let (outcome_json, op_result_for_log) = match result {
         Ok(outcome) => {
