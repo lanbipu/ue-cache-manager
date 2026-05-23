@@ -96,6 +96,42 @@ pub fn failure_detail(stdout: &str, stderr: &str) -> String {
     }
 }
 
+use std::collections::BTreeMap;
+use std::path::Path;
+
+/// 算目录下所有 `.ps1` 文件的 SHA256（文件名 → 十六进制 hash），供节点脚本暂存
+/// 漂移检测用。
+pub fn compute_manifest(dir: &Path) -> UecmResult<BTreeMap<String, String>> {
+    use sha2::{Digest, Sha256};
+    let mut map = BTreeMap::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("ps1") {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let bytes = std::fs::read(&path)?;
+        let hash = Sha256::digest(&bytes);
+        map.insert(name, format!("{:x}", hash));
+    }
+    Ok(map)
+}
+
+/// 对比本地与节点 manifest，返回需要重推的文件名（变更 + 新增），排序稳定。
+pub fn drifted_files(
+    local: &BTreeMap<String, String>,
+    remote: &BTreeMap<String, String>,
+) -> Vec<String> {
+    let mut out: Vec<String> = local
+        .iter()
+        .filter(|(name, hash)| remote.get(*name) != Some(*hash))
+        .map(|(name, _)| name.clone())
+        .collect();
+    out.sort();
+    out
+}
+
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -226,6 +262,34 @@ mod tests {
             }
             other => panic!("expected NodeScript, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn manifest_lists_files_with_stable_hashes() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.ps1"), b"hello").unwrap();
+        std::fs::write(dir.path().join("b.ps1"), b"world").unwrap();
+        std::fs::write(dir.path().join("ignore.txt"), b"x").unwrap(); // 非 .ps1 不计入
+        let m1 = compute_manifest(dir.path()).unwrap();
+        assert_eq!(m1.len(), 2);
+        assert!(m1.contains_key("a.ps1") && m1.contains_key("b.ps1"));
+        std::fs::write(dir.path().join("a.ps1"), b"changed").unwrap();
+        let m2 = compute_manifest(dir.path()).unwrap();
+        assert_ne!(m1["a.ps1"], m2["a.ps1"]);
+        assert_eq!(m1["b.ps1"], m2["b.ps1"]);
+    }
+
+    #[test]
+    fn drifted_files_detects_only_changed() {
+        let mut remote = std::collections::BTreeMap::new();
+        remote.insert("a.ps1".to_string(), "AAA".to_string());
+        remote.insert("b.ps1".to_string(), "BBB".to_string());
+        let mut local = std::collections::BTreeMap::new();
+        local.insert("a.ps1".to_string(), "AAA".to_string()); // 同
+        local.insert("b.ps1".to_string(), "ZZZ".to_string()); // 变
+        local.insert("c.ps1".to_string(), "CCC".to_string()); // 新增
+        let drift = drifted_files(&local, &remote);
+        assert_eq!(drift, vec!["b.ps1".to_string(), "c.ps1".to_string()]);
     }
 
     struct FakeExec(String);
