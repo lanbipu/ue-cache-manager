@@ -57,6 +57,11 @@ pub enum Domain {
         #[command(subcommand)]
         action: WinrmAction,
     },
+    /// SSH transport onboarding + probe (replaces the retiring winrm domain).
+    Ssh {
+        #[command(subcommand)]
+        action: SshAction,
+    },
     /// Credential storage (DPAPI + cmdkey + SQLite metadata).
     Cred {
         #[command(subcommand)]
@@ -222,6 +227,13 @@ pub enum MachineAction {
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
+}
+
+// ---------- ssh ----------
+#[derive(Subcommand, Debug)]
+pub enum SshAction {
+    /// Probe a host's SSH reachability (uecm-svc key auth).
+    Probe { host: String },
 }
 
 // ---------- winrm ----------
