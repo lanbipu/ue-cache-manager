@@ -426,7 +426,7 @@ fn invoke_detect_binary(
     password: &str,
 ) -> UecmResult<zen_binary::BinaryDetection> {
     let body = powershell::read_script("zen-detect-binary.ps1")?;
-    let raw = winrm::invoke_with_credential(host, &body, username, password)?;
+    let raw = winrm::invoke_with_credential(host, &body, username, password, "Negotiate")?;
     let envelope: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
         UecmError::OperationFailed(format!(
             "zen-detect-binary returned non-JSON output: {e}; raw: {}",
@@ -942,7 +942,7 @@ pub fn zen_apply_config(
     let op_id = operations::start(&db, "zen.apply_config", &[ep.machine_id])?;
 
     let expected_sha = zen_cli_shared::sha256_hex_of(&lua);
-    let result = zen_cli_shared::invoke_write_lua(&machine.ip, &lua, &dest_path, creds.as_ref())
+    let result = zen_cli_shared::invoke_write_lua(&machine.ip, &lua, &dest_path, creds.as_ref(), "Negotiate")
         .and_then(|response| {
             zen_cli_shared::verify_write_response(&response, &expected_sha, lua.len())
         });
@@ -1128,7 +1128,7 @@ pub fn zen_service_install(
     }
     let body = zen_cli_shared::build_param_script("zen-service-install.ps1", &params);
     let result = match body {
-        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref())
+        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref(), "Negotiate")
             .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-service-install")),
         Err(e) => Err(e),
     };
@@ -1194,7 +1194,7 @@ pub fn zen_service_uninstall(
         ],
     );
     let result = match body {
-        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref())
+        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref(), "Negotiate")
             .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-service-uninstall")),
         Err(e) => Err(e),
     };
@@ -1239,7 +1239,7 @@ pub fn zen_service_start(
         &[("ServiceName", zen_cli_shared::DEFAULT_SERVICE_NAME)],
     );
     let result = match body {
-        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref())
+        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref(), "Negotiate")
             .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-up.ps1")),
         Err(e) => Err(e),
     };
@@ -1299,7 +1299,7 @@ pub fn zen_service_stop(
         &[("ServiceName", zen_cli_shared::DEFAULT_SERVICE_NAME)],
     );
     let result = match body {
-        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref())
+        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref(), "Negotiate")
             .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-down.ps1")),
         Err(e) => Err(e),
     };
@@ -1338,7 +1338,7 @@ pub fn zen_service_status(
         "zen-service-status.ps1",
         &[("ServiceName", zen_cli_shared::DEFAULT_SERVICE_NAME)],
     )?;
-    let raw = zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref())?;
+    let raw = zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref(), "Negotiate")?;
     let response = zen_cli_shared::parse_envelope(&raw, "zen-service-status")?;
     Ok(ZenServiceStatusResult {
         endpoint_id,
@@ -1426,7 +1426,7 @@ pub fn zen_urlacl_add(
         ],
     );
     let result = match body {
-        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref())
+        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref(), "Negotiate")
             .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-urlacl-add")),
         Err(e) => Err(e),
     };
@@ -1466,7 +1466,7 @@ pub fn zen_urlacl_list(
         args.push(("PortFilter", p));
     }
     let body = zen_cli_shared::build_param_script("zen-urlacl-list.ps1", &args)?;
-    let raw = zen_cli_shared::run_remote(&m.ip, &body, creds.as_ref())?;
+    let raw = zen_cli_shared::run_remote(&m.ip, &body, creds.as_ref(), "Negotiate")?;
     let response = zen_cli_shared::parse_envelope(&raw, "zen-urlacl-list")?;
     Ok(ZenUrlaclListResult {
         machine_id,
@@ -1509,7 +1509,7 @@ pub fn zen_urlacl_remove(
         &[("UrlPrefix", url_prefix.as_str())],
     );
     let result = match body {
-        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref())
+        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref(), "Negotiate")
             .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-urlacl-remove")),
         Err(e) => Err(e),
     };
@@ -1848,7 +1848,7 @@ fn zen_verify_rules_run_editor_leg(
     let op_id = operations::start(db, "zen.verify_rules.run_editor", &[rei.machine_id])?;
 
     let cred_ref = creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str()));
-    let result = crate::core::zen::verify::verify_endpoint(&m.ip, cred_ref, &input);
+    let result = crate::core::zen::verify::verify_endpoint(&m.ip, cred_ref, &input, "Negotiate");
 
     let (outcome_json, op_result_for_log) = match result {
         Ok(outcome) => {

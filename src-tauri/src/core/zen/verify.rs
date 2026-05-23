@@ -84,6 +84,7 @@ pub fn verify_endpoint(
     host: &str,
     cred: Option<(&str, &str)>,
     input: &VerifyInput,
+    auth_method: &str,
 ) -> UecmResult<VerifyOutcome> {
     // Same validation the sidecar will do, but failing here gives a clearer
     // error than waiting for the WinRM round-trip to return `ok:false`.
@@ -115,7 +116,7 @@ pub fn verify_endpoint(
 
     let body = build_invoke_script(input)?;
     let raw = match cred {
-        Some((u, p)) => crate::core::winrm::invoke_with_credential(host, &body, u, p)?,
+        Some((u, p)) => crate::core::winrm::invoke_with_credential(host, &body, u, p, auth_method)?,
         None => crate::core::winrm::invoke(host, &body)?,
     };
     parse_outcome_json(&raw)
@@ -284,7 +285,7 @@ mod tests {
     fn verify_endpoint_rejects_empty_ue_root() {
         let mut i = full_input();
         i.ue_root = "  ".into();
-        let e = verify_endpoint("10.0.0.1", None, &i).unwrap_err();
+        let e = verify_endpoint("10.0.0.1", None, &i, "Negotiate").unwrap_err();
         assert!(matches!(e, UecmError::InvalidInput(_)));
     }
 
@@ -292,7 +293,7 @@ mod tests {
     fn verify_endpoint_rejects_empty_uproject_path() {
         let mut i = full_input();
         i.uproject_path = "".into();
-        let e = verify_endpoint("10.0.0.1", None, &i).unwrap_err();
+        let e = verify_endpoint("10.0.0.1", None, &i, "Negotiate").unwrap_err();
         assert!(matches!(e, UecmError::InvalidInput(_)));
     }
 
@@ -300,7 +301,7 @@ mod tests {
     fn verify_endpoint_rejects_zero_timeout() {
         let mut i = full_input();
         i.timeout_seconds = 0;
-        let e = verify_endpoint("10.0.0.1", None, &i).unwrap_err();
+        let e = verify_endpoint("10.0.0.1", None, &i, "Negotiate").unwrap_err();
         assert!(matches!(e, UecmError::InvalidInput(_)));
     }
 

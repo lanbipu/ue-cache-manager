@@ -11,7 +11,9 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$HostName,
     [string]$Username,
-    [string]$Password
+    [string]$Password,
+    [ValidateSet('Negotiate','Basic','Kerberos','CredSSP','Digest')]
+    [string]$AuthMethod = 'Negotiate'
 )
 
 [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
@@ -44,7 +46,7 @@ try {
         ComputerName = $HostName
         ScriptBlock  = $scriptBlock
         ErrorAction  = 'Stop'
-        Authentication = 'Negotiate'
+        Authentication = $AuthMethod
     }
     if ($cred) { $invokeArgs['Credential'] = $cred }
     Invoke-Command @invokeArgs

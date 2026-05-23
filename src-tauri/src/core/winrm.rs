@@ -109,12 +109,13 @@ pub fn invoke_with_credential(
     script_body: &str,
     username: &str,
     password: &str,
+    auth_method: &str,
 ) -> UecmResult<String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
     if loopback::is_loopback_target(host) {
-        let _ = (username, password);
+        let _ = (username, password, auth_method);
         return invoke_local(script_body);
     }
 
@@ -132,6 +133,8 @@ pub fn invoke_with_credential(
         .arg(username)
         .arg("-Password")
         .arg(password)
+        .arg("-AuthMethod")
+        .arg(auth_method)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -170,8 +173,9 @@ pub fn invoke_with_credential(
     script_body: &str,
     username: &str,
     password: &str,
+    auth_method: &str,
 ) -> UecmResult<String> {
-    let _ = (host, script_body, username, password);
+    let _ = (host, script_body, username, password, auth_method);
     Err(UecmError::PowerShell(
         "WinRM is Windows-only".to_string(),
     ))
@@ -294,8 +298,9 @@ pub fn invoke_json_with_credential<T: serde::de::DeserializeOwned>(
     script_body: &str,
     username: &str,
     password: &str,
+    auth_method: &str,
 ) -> UecmResult<T> {
-    let raw = invoke_with_credential(host, script_body, username, password)?;
+    let raw = invoke_with_credential(host, script_body, username, password, auth_method)?;
     serde_json::from_str(&raw).map_err(|e| {
         UecmError::PowerShell(format!("failed to parse remote JSON: {} (raw: {})", e, raw))
     })
@@ -321,7 +326,7 @@ mod tests {
 
     #[test]
     fn invoke_with_credential_returns_error_on_non_windows() {
-        let result = invoke_with_credential("RENDER-01", "Get-Date", "admin", "p@ss");
+        let result = invoke_with_credential("RENDER-01", "Get-Date", "admin", "p@ss", "Negotiate");
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), UecmError::PowerShell(_)));
     }

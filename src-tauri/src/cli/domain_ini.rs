@@ -938,7 +938,7 @@ mod tests {
         let db = fresh_db();
         let mut buf: Vec<u8> = Vec::new();
         let mut ctx = make_ctx(&mut buf, &db);
-        let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false };
+        let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false, auth_method: crate::cli::credential_args::AuthMethod::Negotiate };
         let secret = "INI-SECRET-NEVER-LEAK-VALUE";
         let _ = set_batch(&mut ctx, &["192.0.2.1".into()], "C:\\test.ini", "S", "K", secret, &cred);
         drop(ctx);
@@ -954,7 +954,7 @@ mod tests {
         let db = fresh_db();
         let mut buf: Vec<u8> = Vec::new();
         let mut ctx = make_ctx(&mut buf, &db);
-        let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false };
+        let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false, auth_method: crate::cli::credential_args::AuthMethod::Negotiate };
         let r = remove_single(&mut ctx, "host", "C:\\test.ini", "S", "K", &cred);
         assert!(matches!(r, Err(UecmError::InvalidInput(_))));
     }

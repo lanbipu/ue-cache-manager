@@ -4,8 +4,27 @@
 use crate::data::credentials as data_creds;
 use crate::data::Db;
 use crate::error::{UecmError, UecmResult};
-use clap::Args;
+use clap::{Args, ValueEnum};
 use std::io::{self, BufRead};
+
+/// WinRM authentication mechanism forwarded to `invoke-remote.ps1`.
+/// Use `Basic` on Microsoft Account PCs where `Negotiate` ignores the
+/// supplied credential and falls back to the current Windows session token.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum AuthMethod {
+    #[default]
+    Negotiate,
+    Basic,
+}
+
+impl AuthMethod {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AuthMethod::Negotiate => "Negotiate",
+            AuthMethod::Basic => "Basic",
+        }
+    }
+}
 
 #[derive(Args, Debug, Clone)]
 pub struct CredentialArgs {
@@ -34,6 +53,12 @@ pub struct CredentialArgs {
         conflicts_with_all = ["pass", "cred_alias"]
     )]
     pub pass_stdin: bool,
+
+    /// WinRM authentication method. Use `basic` on Microsoft Account PCs where
+    /// `negotiate` falls back to the Windows session token instead of the
+    /// supplied credential (requires AllowUnencrypted=true on both sides).
+    #[arg(long, value_name = "METHOD", default_value = "negotiate")]
+    pub auth_method: AuthMethod,
 }
 
 impl CredentialArgs {
@@ -69,19 +94,21 @@ impl CredentialArgs {
     /// Used by orchestration commands that resolve once then fan out to many
     /// sub-handlers — calling `resolve` repeatedly would re-read `--pass-stdin`
     /// (only readable once) or re-hit DPAPI per sub-call.
-    pub fn inline(resolved: Option<(String, String)>) -> Self {
+    pub fn inline(resolved: Option<(String, String)>, auth_method: AuthMethod) -> Self {
         match resolved {
             Some((user, pass)) => CredentialArgs {
                 cred_alias: None,
                 user: Some(user),
                 pass: Some(pass),
                 pass_stdin: false,
+                auth_method,
             },
             None => CredentialArgs {
                 cred_alias: None,
                 user: None,
                 pass: None,
                 pass_stdin: false,
+                auth_method,
             },
         }
     }
@@ -137,6 +164,7 @@ mod tests {
             user: None,
             pass: None,
             pass_stdin: false,
+            auth_method: AuthMethod::Negotiate,
         };
         let db = fresh_db();
         assert!(args.resolve(&db).unwrap().is_none());
@@ -144,12 +172,12 @@ mod tests {
 
     #[test]
     fn inline_from_resolved_roundtrips_without_stdin() {
-        let reused = CredentialArgs::inline(Some(("alice".into(), "pw".into())));
+        let reused = CredentialArgs::inline(Some(("alice".into(), "pw".into())), AuthMethod::Negotiate);
         let db = fresh_db();
         // resolve must not read stdin nor hit DPAPI — it just returns the inline pair.
         assert_eq!(reused.resolve(&db).unwrap(), Some(("alice".into(), "pw".into())));
 
-        let none = CredentialArgs::inline(None);
+        let none = CredentialArgs::inline(None, AuthMethod::Negotiate);
         assert!(none.resolve(&db).unwrap().is_none());
     }
 
@@ -160,6 +188,7 @@ mod tests {
             user: Some("alice".into()),
             pass: Some("hunter2".into()),
             pass_stdin: false,
+            auth_method: AuthMethod::Negotiate,
         };
         let db = fresh_db();
         assert_eq!(args.resolve(&db).unwrap(), Some(("alice".into(), "hunter2".into())));
@@ -172,6 +201,7 @@ mod tests {
             user: None,
             pass: None,
             pass_stdin: false,
+            auth_method: AuthMethod::Negotiate,
         };
         let db = fresh_db();
         let r = args.resolve(&db);
