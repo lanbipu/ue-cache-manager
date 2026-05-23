@@ -150,19 +150,35 @@ fn delete(ctx: &mut Ctx<'_>, alias: &str, yes: bool, dry_run: bool) -> UecmResul
             serde_json::json!({
                 "alias": alias,
                 "exists_in_db": exists,
-                "side_effects": ["cmdkey delete", "SQLite delete", "DPAPI delete (best-effort)"],
+                "side_effects": ["cmdkey delete", "SQLite delete", "SecretStore delete (best-effort)", "DPAPI delete (best-effort)"],
             }),
         );
         return Ok(());
     }
 
-    // Step 1: cmdkey delete — keep result, propagate at the end.
-    let cm_result = core_creds::delete(alias);
+    // Step 1: cmdkey delete — keep result, propagate at the end. cmdkey lives only
+    // in the Windows Credential Manager; on a non-Windows operator there is
+    // nothing to delete (and the PS sidecar is Windows-only, so an unconditional
+    // call would always "fail" after the row below is cleared). On Windows surface
+    // a genuine failure — cred-delete.ps1 is idempotent, so an alias with no entry
+    // (e.g. a SecretStore-backed Share) returns Ok.
+    let cm_result = if cfg!(target_os = "windows") {
+        core_creds::delete(alias)
+    } else {
+        Ok(())
+    };
 
     // Step 2: SQLite delete — environment error if this fails, propagate now.
     data_creds::delete_by_alias(db, alias)?;
 
-    // Step 3: DPAPI best-effort.
+    // Step 3: SecretStore delete (the Share svc-secret home since the SSH
+    // migration) — best-effort, mirrors the Tauri delete_credential cleanup so a
+    // CLI delete doesn't leave the AES secret orphaned on disk.
+    if let Err(e) = crate::core::secrets::SecretStore::from_config().and_then(|s| s.delete(alias)) {
+        tracing::warn!(alias = %alias, error = %e, "SecretStore delete failed; orphan secret may remain");
+    }
+
+    // Step 4: DPAPI best-effort.
     if let Err(e) = core_creds::delete_password(alias) {
         tracing::warn!(
             alias = %alias,
@@ -171,7 +187,7 @@ fn delete(ctx: &mut Ctx<'_>, alias: &str, yes: bool, dry_run: bool) -> UecmResul
         );
     }
 
-    // Step 4: surface cmdkey result.
+    // Step 5: surface cmdkey result.
     cm_result.map(|_| {
         let _ = ctx.emitter.emit_event(&crate::cli::output::Event::Completed {
             summary: serde_json::json!({ "alias": alias, "deleted": true }),
