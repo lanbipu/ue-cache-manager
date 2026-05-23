@@ -407,9 +407,10 @@ try {
     #    matching switch is passed. Per-step try/catch so prep failure degrades
     #    to a WARNING note instead of aborting onboarding (SSH itself is already
     #    up). Bridges the prep functions' Generic.List into the $changes ArrayList.
+    $localAdminOk = $true
     if (-not $CheckOnly) {
         $prep = New-Object 'System.Collections.Generic.List[string]'
-        try { Enable-UecmLocalAdmin -Changes $prep }        catch { Note "WARNING: local admin prep: $($_.Exception.Message)" }
+        try { Enable-UecmLocalAdmin -Changes $prep }        catch { $localAdminOk = $false; Note "WARNING: local admin prep: $($_.Exception.Message)" }
         try { Enable-UecmSmbServer  -Changes $prep }        catch { Note "WARNING: smb prep: $($_.Exception.Message)" }
         try { Enable-UecmWmi        -Changes $prep }        catch { Note "WARNING: wmi prep: $($_.Exception.Message)" }
         try { Enable-UecmLongPaths  -Changes $prep }        catch { Note "WARNING: longpaths prep: $($_.Exception.Message)" }
@@ -439,7 +440,11 @@ try {
                 $svcInAdmins = [bool](@(Get-LocalGroupMember -SID 'S-1-5-32-544' -ErrorAction SilentlyContinue) |
                     Where-Object { $_.SID -eq $svcUser.SID })
             }
-            $svcAccountReady = [bool]($svcUser -and $svcUser.Enabled -and $svcInAdmins)
+            # $localAdminOk folds in the prep STEP's success: if Enable-UecmLocalAdmin
+            # threw (e.g. Set-LocalUser -Password failed on an existing account due to
+            # password policy / min-age), the account may still be exists+enabled+in-admins
+            # yet the recorded password was never applied -> not ready.
+            $svcAccountReady = [bool]($localAdminOk -and $svcUser -and $svcUser.Enabled -and $svcInAdmins)
         } catch { $svcAccountReady = $false }
     }
     $ok = $capInstalled -and $sshdRunning -and $keyAuthorized -and $svcAccountReady
