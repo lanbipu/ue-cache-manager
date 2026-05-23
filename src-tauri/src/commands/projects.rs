@@ -3,7 +3,7 @@
 use crate::core::project_discovery::{self, DiscoveryResult};
 use crate::core::project_identity::stem_lower;
 use crate::data::{
-    credentials as data_credentials, machines as data_machines, project_locations, projects, Db,
+    machines as data_machines, project_locations, projects, Db,
     DiscoveryStatus, Project, ProjectLocation,
 };
 use crate::error::{UecmError, UecmResult};
@@ -17,19 +17,6 @@ pub struct ProjectSummary {
     pub display_name: Option<String>,
     pub uproject_guid: Option<String>,
     pub location_count: i64,
-}
-
-fn resolve_operator_creds(
-    db: &Db,
-    alias: Option<&str>,
-) -> UecmResult<(Option<String>, Option<String>)> {
-    let Some(alias) = alias else {
-        return Ok((None, None));
-    };
-    let cred = data_credentials::find_by_alias(db, alias)?
-        .ok_or_else(|| UecmError::InvalidInput(format!("credential '{}' not found", alias)))?;
-    let pass = crate::core::credentials::resolve_password(&cred.alias)?;
-    Ok((Some(cred.username), Some(pass)))
 }
 
 #[tauri::command]
@@ -66,15 +53,10 @@ pub fn discover_projects(
 ) -> UecmResult<Vec<DiscoveryResult>> {
     let machine = data_machines::find_by_id(&db, machine_id)?
         .ok_or_else(|| UecmError::InvalidInput(format!("machine {} not found", machine_id)))?;
-    let (user, pass) = resolve_operator_creds(&db, operator_credential_alias.as_deref())?;
-    project_discovery::run_discovery(
-        &db,
-        machine_id,
-        &machine.ip,
-        &search_roots,
-        user.as_deref(),
-        pass.as_deref(),
-    )
+    // SSH key auth: operator cred no longer used; param kept as accepted-ignored
+    // shim (Vue compat). run_discovery ignores the user/pass under SSH.
+    let _ = operator_credential_alias;
+    project_discovery::run_discovery(&db, machine_id, &machine.ip, &search_roots, None, None)
 }
 
 #[tauri::command]

@@ -13,7 +13,7 @@
 //! Persistence happens AFTER the PS script succeeds — a PS failure leaves
 //! SQLite untouched.
 
-use crate::core::{credentials as core_creds, psexec, shares as core_shares};
+use crate::core::{psexec, shares as core_shares};
 use crate::data::{
     credentials as data_creds, machines as data_machines, share_configs as data_shares,
     CredentialKind, CredentialRecord, Db, ShareConfig, ShareMode,
@@ -37,22 +37,6 @@ pub struct InjectionResult {
     pub message: String,
 }
 
-fn resolve_operator_creds(
-    db: &Db,
-    alias: Option<&str>,
-) -> UecmResult<(Option<String>, Option<String>)> {
-    let Some(alias) = alias else {
-        return Ok((None, None));
-    };
-    if alias.is_empty() {
-        return Ok((None, None));
-    }
-    let cred = data_creds::find_by_alias(db, alias)?.ok_or_else(|| {
-        UecmError::InvalidInput(format!("credential alias '{}' not found", alias))
-    })?;
-    let pwd = core_creds::resolve_password(alias)?;
-    Ok((Some(cred.username), Some(pwd)))
-}
 
 fn host_ip(db: &Db, machine_id: i64) -> UecmResult<String> {
     Ok(data_machines::find_by_id(db, machine_id)?
@@ -77,7 +61,9 @@ pub fn create_share(
     svc_username: Option<String>,
 ) -> UecmResult<CreateShareResponse> {
     let host_ip = host_ip(&db, host_machine_id)?;
-    let (op_user, op_pass) = resolve_operator_creds(&db, operator_credential_alias.as_deref())?;
+    // SSH key auth: operator cred vestigial (param kept as shim, Vue compat).
+    let _ = &operator_credential_alias;
+    let (op_user, op_pass): (Option<String>, Option<String>) = (None, None);
 
     let (unc_path, persisted_alias): (String, Option<String>) = match mode {
         ShareMode::Open => {
@@ -112,19 +98,11 @@ pub fn create_share(
             // injection calls can read the password back.
             let host_hn = host_hostname(&db, host_machine_id)?;
             let alias = format!("UECM:share:{}:{}", host_hn, svc_user);
-            // 1) cmdkey — persistent SMB transparent auth on this machine.
-            core_creds::store(&alias, &svc_user, &svc_pass)?;
-            // 2) DPAPI — per-call WinRM auth used by inject_share_credential_to_clients.
-            //    Best-effort: cmdkey already covers SMB on this host; logging is
-            //    enough so we don't wedge the whole flow.
-            if let Err(e) = core_creds::store_password(&alias, &svc_pass) {
-                tracing::warn!(
-                    alias = %alias,
-                    error = %e,
-                    "DPAPI store_password failed for share svc credential"
-                );
-            }
-            // 3) SQLite credential record — idempotent (skip if alias somehow
+            // Persist the svc password to the cross-platform SecretStore (AES-GCM)
+            // so inject_share_credential_to_clients reads it back from any operator
+            // OS — replaces the old cmdkey + DPAPI persistence.
+            crate::core::secrets::SecretStore::from_config()?.put(&alias, &svc_pass)?;
+            // SQLite credential record — idempotent (skip if alias somehow
             //    already exists from a prior partial run).
             if data_creds::find_by_alias(&db, &alias)?.is_none() {
                 data_creds::insert(
@@ -197,9 +175,20 @@ pub fn inject_share_credential_to_clients(
             svc_alias
         ))
     })?;
-    let svc_pass = core_creds::resolve_password(svc_alias)?;
+    // Mode B share svc password from the SecretStore (was DPAPI). Mirrors
+    // cli/domain_share.rs::find_share_svc_password.
+    let svc_pass = crate::core::secrets::SecretStore::from_config()?
+        .get(svc_alias)?
+        .ok_or_else(|| {
+            UecmError::InvalidInput(format!(
+                "no stored svc password for alias '{}'; re-create the share via `share create --mode b`",
+                svc_alias
+            ))
+        })?;
     let host_hn = host_hostname(&db, share.host_machine_id)?;
-    let (op_user, op_pass) = resolve_operator_creds(&db, operator_credential_alias.as_deref())?;
+    // SSH key auth: operator cred vestigial (param kept as shim, Vue compat).
+    let _ = &operator_credential_alias;
+    let (op_user, op_pass): (Option<String>, Option<String>) = (None, None);
 
     let mut results = Vec::with_capacity(client_machine_ids.len());
     for client_id in client_machine_ids {

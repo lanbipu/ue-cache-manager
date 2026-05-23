@@ -8,7 +8,7 @@ use crate::core::{
     ue_runner::{UeRunnerBackend, UeRunnerEvent},
 };
 use crate::data::{
-    credentials as data_credentials, machine_ue_installs, machines as data_machines,
+    machine_ue_installs, machines as data_machines,
     project_locations, pso_cache_files, pso_distributions, Db, DistributionStatus, PsoCacheFile,
     PsoDistribution,
 };
@@ -38,18 +38,6 @@ fn now_millis() -> u128 {
         .unwrap_or_default()
 }
 
-fn resolve_operator_creds(
-    db: &Db,
-    alias: Option<&str>,
-) -> UecmResult<(Option<String>, Option<String>)> {
-    let Some(alias) = alias else {
-        return Ok((None, None));
-    };
-    let credential = data_credentials::find_by_alias(db, alias)?
-        .ok_or_else(|| UecmError::InvalidInput(format!("credential '{}' not found", alias)))?;
-    let password = crate::core::credentials::resolve_password(alias)?;
-    Ok((Some(credential.username), Some(password)))
-}
 
 fn resolve_engine_path(
     db: &Db,
@@ -105,8 +93,9 @@ pub async fn start_pso_collection(
             ))
         })?;
     let engine_path = resolve_engine_path(&db, source_machine_id, ue_version.as_deref())?;
-    let (operator_user, operator_pass) =
-        resolve_operator_creds(&db, operator_credential_alias.as_deref())?;
+    // SSH key auth: operator cred no longer used (param kept as shim, Vue compat).
+    let _ = &operator_credential_alias;
+    let (operator_user, operator_pass): (Option<String>, Option<String>) = (None, None);
 
     let spec = PsoCollectSpec {
         project_id,
@@ -299,8 +288,9 @@ pub async fn distribute_pso_cache(
     let source_machine = data_machines::find_by_id(&db, file.source_machine_id)?.ok_or_else(|| {
         UecmError::InvalidInput(format!("source machine {} not found", file.source_machine_id))
     })?;
-    let (operator_user, operator_pass) =
-        resolve_operator_creds(&db, request.operator_credential_alias.as_deref())?;
+    // SSH key auth: operator cred no longer used (param kept as shim, Vue compat).
+    let _ = &request.operator_credential_alias;
+    let (operator_user, operator_pass): (Option<String>, Option<String>) = (None, None);
     // Source SMB access from the SecretStore: explicit alias, else auto-derived
     // from a Mode B share on the source host. No longer the operator WinRM cred.
     // NOTE (sub-project B): the UI's share-credential dropdown must pass a

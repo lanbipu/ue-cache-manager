@@ -3,7 +3,7 @@
 use crate::core::ue_runner::{RunnerCancel, UeRunnerBackend, UeRunnerEvent};
 use crate::core::{batch, ddc_pak, pak_distribute};
 use crate::data::{
-    credentials as data_credentials, machine_ue_installs, machines as data_machines, operations,
+    machine_ue_installs, machines as data_machines, operations,
     project_locations, Db,
 };
 use crate::error::{UecmError, UecmResult};
@@ -72,18 +72,6 @@ fn now_millis() -> u128 {
         .unwrap_or_default()
 }
 
-fn resolve_operator_creds(
-    db: &Db,
-    alias: Option<&str>,
-) -> UecmResult<(Option<String>, Option<String>)> {
-    let Some(alias) = alias else {
-        return Ok((None, None));
-    };
-    let cred = data_credentials::find_by_alias(db, alias)?
-        .ok_or_else(|| UecmError::InvalidInput(format!("credential '{}' not found", alias)))?;
-    let pass = crate::core::credentials::resolve_password(alias)?;
-    Ok((Some(cred.username), Some(pass)))
-}
 
 fn resolve_engine_path(
     db: &Db,
@@ -230,7 +218,9 @@ pub async fn generate_ddc_pak(
         }
     };
 
-    let (op_user, op_pass) = resolve_operator_creds(&db, operator_credential_alias.as_deref())?;
+    // SSH key auth: operator cred vestigial (param kept as shim, Vue compat).
+    let _ = &operator_credential_alias;
+    let (op_user, op_pass): (Option<String>, Option<String>) = (None, None);
     if matches!(runtime_backend, UeRunnerBackend::Remote) {
         ddc_pak::preflight(
             &host,
@@ -381,7 +371,8 @@ pub async fn verify_pak_output(
                 project_id, machine_id
             ))
         })?;
-    let (op_user, op_pass) = resolve_operator_creds(&db, operator_credential_alias.as_deref())?;
+    let _ = &operator_credential_alias;
+    let (op_user, op_pass): (Option<String>, Option<String>) = (None, None);
     let host = machine.ip;
     let project_dir = location.abs_path;
     tokio::task::spawn_blocking(move || {
@@ -417,12 +408,18 @@ pub async fn distribute_ddc_pak(
                     project_id, source_machine_id
                 ))
             })?;
-    let (op_user, op_pass) = resolve_operator_creds(&db, operator_credential_alias.as_deref())?;
-    let (smb_user, smb_pass) = if source_smb_credential_alias.is_some() {
-        resolve_operator_creds(&db, source_smb_credential_alias.as_deref())?
-    } else {
-        (op_user.clone(), op_pass.clone())
-    };
+    // SSH key auth: operator cred vestigial (param kept as shim). Source-SMB cred
+    // comes from the SecretStore (Mode B share), not DPAPI — mirror commands/pso.rs.
+    // `None` source_smb alias means "auto-derive from a Mode B share on the source".
+    let _ = &operator_credential_alias;
+    let smb = pak_distribute::resolve_source_smb(
+        &db,
+        source_machine_id,
+        source_smb_credential_alias.as_deref(),
+        true,
+    )?;
+    let effective_unc = named_share_unc.clone().or_else(|| smb.named_share_unc.clone());
+    let (smb_user, smb_pass) = (smb.user, smb.pass);
 
     let distribute_profile = pak_distribute::DistributeProfile::ddc_pak();
     let plan = pak_distribute::plan(
@@ -433,9 +430,9 @@ pub async fn distribute_ddc_pak(
         &source_location,
         &target_machine_ids,
         project_id,
-        named_share_unc.as_deref(),
-        op_user.clone(),
-        op_pass.clone(),
+        effective_unc.as_deref(),
+        None,
+        None,
         smb_user,
         smb_pass,
     )?;
