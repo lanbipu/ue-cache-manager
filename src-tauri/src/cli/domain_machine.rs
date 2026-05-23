@@ -493,7 +493,7 @@ fn deep_scan(
                         "host": host,
                         "step": "refresh",
                         "failed": true,
-                        "error": format!("WinRM reachable but refresh failed: {}", e),
+                        "error": format!("SSH reachable but refresh failed: {}", e),
                     }),
                 })
                 .ok();
