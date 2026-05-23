@@ -229,14 +229,13 @@ pub fn run_health_check(
         // PROBE_REGISTRY); it is computed here so we can detect both LocalSystem
         // service installs AND local interactive users. Probe failure leaves
         // any previous slot untouched.
-        if let Ok(rs_report) = crate::core::renderstream_service::report(
-            &machine.ip,
-            Some((cred_row.username.as_str(), password.as_str())),
-        ) {
-            row.insert(
-                "rs_service".into(),
-                crate::core::renderstream_service::into_check_outcome(&rs_report),
-            );
+        if let Ok(rs_exec) = crate::core::ssh::SshExecutor::from_config() {
+            if let Ok(rs_report) = crate::core::renderstream_service::report(&rs_exec, &machine.ip) {
+                row.insert(
+                    "rs_service".into(),
+                    crate::core::renderstream_service::into_check_outcome(&rs_report),
+                );
+            }
         }
 
         // L1 ports — creds-independent, always run.

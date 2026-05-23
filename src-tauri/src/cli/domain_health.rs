@@ -444,19 +444,15 @@ fn run_with_rt(
         // Augment with rs_service from core::renderstream_service (ps_emitted=false
         // in PROBE_REGISTRY, so the round-trip does not provide it). Probe failure
         // leaves the slot untouched.
-        let cred_opt_for_rs = if resolved_cred.is_some() {
-            Some((op_user.as_str(), op_pass.as_str()))
-        } else {
-            None
-        };
-        if let Ok(rs_report) = crate::core::renderstream_service::report(
-            &machine.ip,
-            cred_opt_for_rs,
-        ) {
-            row.insert(
-                "rs_service".into(),
-                crate::core::renderstream_service::into_check_outcome(&rs_report),
-            );
+        // RenderStream service probe runs over the SSH executor (key auth).
+        // Best-effort: a keystore or probe failure leaves the slot untouched.
+        if let Ok(rs_exec) = crate::core::ssh::SshExecutor::from_config() {
+            if let Ok(rs_report) = crate::core::renderstream_service::report(&rs_exec, &machine.ip) {
+                row.insert(
+                    "rs_service".into(),
+                    crate::core::renderstream_service::into_check_outcome(&rs_report),
+                );
+            }
         }
 
         let machine_checks = row.len() as i64;

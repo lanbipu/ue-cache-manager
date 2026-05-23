@@ -2,7 +2,7 @@
 //! account configurations (LocalSystem / local-interactive-user). Provides
 //! `into_check_outcome` for embedding in the health round-trip.
 
-use crate::core::powershell;
+use crate::core::ssh::{run_json, NodeScript, RemoteExecutor};
 use crate::error::{UecmError, UecmResult};
 use serde::{Deserialize, Serialize};
 
@@ -57,14 +57,15 @@ pub fn classify_risks(services: &[ServiceFact]) -> Vec<String> {
     out
 }
 
-pub fn report(host: &str, creds: Option<(&str, &str)>) -> UecmResult<RsServiceReport> {
-    let mut args: Vec<&str> = vec!["-HostName", host];
-    if let Some((u, p)) = creds {
-        args.extend(["-Username", u, "-Password", p]);
-    }
-    let r: ScriptResult = powershell::run_json(
-        &powershell::script_path("probe-renderstream-service.ps1"),
-        &args,
+pub fn report(exec: &dyn RemoteExecutor, host: &str) -> UecmResult<RsServiceReport> {
+    let r: ScriptResult = run_json(
+        exec,
+        host,
+        &NodeScript {
+            name: "probe-renderstream-service.ps1",
+            args: serde_json::json!({}),
+            ssh_user: None,
+        },
     )?;
     if !r.ok {
         return Err(UecmError::OperationFailed(
@@ -106,6 +107,29 @@ pub fn into_check_outcome(report: &RsServiceReport) -> crate::core::health_check
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ssh::{NodeScript, ProbeResult, RemoteExecutor, ScriptOutput};
+
+    struct FakeExec(String);
+    impl RemoteExecutor for FakeExec {
+        fn run(&self, _h: &str, _s: &NodeScript) -> UecmResult<ScriptOutput> {
+            Ok(ScriptOutput { stdout: self.0.clone(), stderr: String::new(), exit_code: 0 })
+        }
+        fn probe(&self, _h: &str, _u: Option<&str>) -> UecmResult<ProbeResult> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn report_parses_and_classifies() {
+        let exec = FakeExec(
+            r#"{"ok":true,"services":[{"Name":"d3service","DisplayName":"d3","StartName":"LocalSystem","State":"Running","StartMode":"Auto","PathName":"C:\\d3\\s.exe"}]}"#
+                .to_string(),
+        );
+        let rep = report(&exec, "RENDER-03").unwrap();
+        assert_eq!(rep.host, "RENDER-03");
+        assert_eq!(rep.services.len(), 1);
+        assert!(rep.risks.iter().any(|r| r.contains("LocalSystem")));
+    }
 
     fn svc(name: &str, start_name: &str, state: &str) -> ServiceFact {
         ServiceFact {
