@@ -67,10 +67,16 @@ pub fn delete_credential(db: State<'_, Db>, alias: String) -> UecmResult<()> {
         tracing::warn!(alias = %alias, error = %e, "DPAPI delete_password failed; orphan entry will remain in creds.bin");
     }
 
-    // cmdkey: surface a genuine delete failure (perms/cmdkey) for ANY kind so the
-    // UI never reports a credential gone while its Credential Manager entry
-    // lingers, unreclaimable. cred-delete.ps1 is idempotent — a missing entry
-    // (e.g. a SecretStore-backed Share alias that never wrote cmdkey) returns Ok,
-    // so this no longer mis-fires on aliases that simply have nothing to delete.
-    core_creds::delete(&alias)
+    // cmdkey lives only in the Windows Credential Manager. On the operator host
+    // (Windows) surface a genuine delete failure (perms/cmdkey) so the UI never
+    // reports a credential gone while its entry lingers, unreclaimable —
+    // cred-delete.ps1 is idempotent, so an alias with no entry (e.g. a
+    // SecretStore-only Share) returns Ok rather than a spurious failure. On a
+    // non-Windows operator there is no such store (and the PowerShell sidecar is
+    // Windows-only), so skip it — otherwise delete would always "fail" there
+    // after SQLite/SecretStore were already cleared.
+    if cfg!(target_os = "windows") {
+        core_creds::delete(&alias)?;
+    }
+    Ok(())
 }
