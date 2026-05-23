@@ -143,6 +143,21 @@ fn run_verify_node(host: &str, input: &VerifyInput) -> UecmResult<String> {
             obj.insert("ExpectedNamespace".into(), serde_json::Value::String(n.clone()));
         }
     }
+    // Loopback (`--run-editor` against the operator's own machine): run the
+    // verifier locally instead of SSH-to-self, so the operator host need not
+    // onboard its own OpenSSH/uecm-svc. Mirrors the distribute loopback path —
+    // the same node-pure script, fed its JSON args on stdin.
+    if crate::core::loopback::is_loopback_target(host) {
+        let result = crate::core::powershell::run_script_stdin(
+            &crate::core::powershell::script_path("zen-verify-rules.ps1"),
+            &args.to_string(),
+        )?;
+        if result.stdout.trim().is_empty() && result.exit_code != 0 {
+            return Err(crate::core::ssh::map_exit(result.exit_code, &result.stderr));
+        }
+        return Ok(result.stdout);
+    }
+
     let exec = SshExecutor::from_config()?;
     let out = exec.run(
         host,

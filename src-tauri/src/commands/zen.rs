@@ -856,13 +856,14 @@ impl ZenCredentialInput {
     /// `CredentialArgs::resolve` but without stdin support.
     fn resolve(&self, db: &Db) -> UecmResult<Option<(String, String)>> {
         if let Some(alias) = &self.cred_alias {
-            let user = data_creds::find_by_alias(db, alias)?
-                .ok_or_else(|| {
-                    UecmError::InvalidInput(format!("credential alias '{}' not found", alias))
-                })?
-                .username;
-            let pass = crate::core::credentials::resolve_password(alias)?;
-            return Ok(Some((user, pass)));
+            // SSH key auth: zen commands discard the operator credential, so don't
+            // read DPAPI (which fails on a non-Windows operator or a SQLite-only
+            // alias before the SSH call ever runs). Keep the existence check so a
+            // typo'd alias still errors early.
+            data_creds::find_by_alias(db, alias)?.ok_or_else(|| {
+                UecmError::InvalidInput(format!("credential alias '{}' not found", alias))
+            })?;
+            return Ok(None);
         }
         match (&self.user, &self.pass) {
             (Some(u), Some(p)) => Ok(Some((u.clone(), p.clone()))),

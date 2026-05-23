@@ -86,17 +86,22 @@ impl CredentialArgs {
         }
     }
 
-    /// Resolve to `(username, password)` if inline `--user/--pass[-stdin]` was
-    /// supplied; `None` means no operator credential. Under SSH key auth the
-    /// operator WinRM credential is vestigial (no remote transport consumes it),
-    /// so `--cred-alias` is accepted but resolves to no credential — its only
-    /// effect is the early existence check (a typo'd alias still errors).
+    /// Resolve to `(username, password)` if any credential was supplied;
+    /// `None` means inherit the caller's Kerberos/NTLM context.
+    ///
+    /// `--cred-alias` still resolves the DPAPI password: the WinRM/PsExec
+    /// onboarding path (`machine authorize`) is alive until P5a and needs the
+    /// real `(user, pass)`. SSH-migrated callers resolve then discard it
+    /// harmlessly. The DPAPI resolve retires with `authorize` in P5a.
     pub fn resolve(&self, db: &Db) -> UecmResult<Option<(String, String)>> {
         if let Some(alias) = &self.cred_alias {
-            data_creds::find_by_alias(db, alias)?.ok_or_else(|| {
-                UecmError::InvalidInput(format!("credential alias '{}' not found", alias))
-            })?;
-            return Ok(None);
+            let user = data_creds::find_by_alias(db, alias)?
+                .ok_or_else(|| {
+                    UecmError::InvalidInput(format!("credential alias '{}' not found", alias))
+                })?
+                .username;
+            let pass = crate::core::credentials::resolve_password(alias)?;
+            return Ok(Some((user, pass)));
         }
         match (&self.user, &self.pass, self.pass_stdin) {
             (Some(u), Some(p), false) => Ok(Some((u.clone(), p.clone()))),
