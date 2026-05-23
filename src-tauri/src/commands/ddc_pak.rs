@@ -437,7 +437,17 @@ pub async fn distribute_ddc_pak(
                         })?;
                     (Some(user), Some(pass))
                 }
-                None => (None, None),
+                // No explicit alias: best-effort auto-derive an SMB cred (a single
+                // Mode B share on the source) so a private share still mounts. The
+                // WinRM-era operator-credential fallback is gone (SSH key auth), so
+                // an ambiguous/absent derive means anonymous — fine for an open
+                // (Mode A) share; a private one then needs an explicit
+                // source_smb_credential_alias. The explicit UNC is still honored
+                // either way (we never propagate resolve_source_smb's pick error).
+                None => match pak_distribute::resolve_source_smb(&db, source_machine_id, None, true) {
+                    Ok(smb) => (smb.user, smb.pass),
+                    Err(_) => (None, None),
+                },
             };
             (Some(unc.clone()), user, pass)
         }
