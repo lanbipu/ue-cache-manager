@@ -9,8 +9,19 @@
 
 use crate::core::ssh::{run_json, NodeScript, RemoteExecutor};
 use crate::data::GpuVendor;
-use crate::error::UecmResult;
+use crate::error::{UecmError, UecmResult};
 use serde::Deserialize;
+
+/// SSH 连不上时给可操作提示：节点很可能没经 `UECM-Bootstrap.cmd` 做 SSH 纳管。
+/// SSH 纳管唯一路径是节点本地双击 bootstrap（operator 远程纳管已按 spec 退役）。
+fn with_onboarding_hint(host: &str, e: UecmError) -> UecmError {
+    match e {
+        UecmError::SshConnect(m) => UecmError::SshConnect(format!(
+            "{m} -- host {host} may not be SSH-onboarded; run UECM-Bootstrap.cmd on it"
+        )),
+        other => other,
+    }
+}
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct DetectedUe {
@@ -36,6 +47,7 @@ pub fn detect_ue_versions(exec: &dyn RemoteExecutor, host: &str) -> UecmResult<V
             ssh_user: None,
         },
     )
+    .map_err(|e| with_onboarding_hint(host, e))
 }
 
 pub fn detect_gpus(exec: &dyn RemoteExecutor, host: &str) -> UecmResult<Vec<DetectedGpu>> {
@@ -48,6 +60,7 @@ pub fn detect_gpus(exec: &dyn RemoteExecutor, host: &str) -> UecmResult<Vec<Dete
             ssh_user: None,
         },
     )
+    .map_err(|e| with_onboarding_hint(host, e))
 }
 
 #[cfg(test)]
@@ -105,6 +118,30 @@ mod tests {
         let g = detect_gpus(&exec, "RENDER-01").unwrap();
         assert_eq!(g.len(), 1);
         assert_eq!(g[0].gpu_model, "RTX 4090");
+    }
+
+    struct FailExec;
+    impl RemoteExecutor for FailExec {
+        fn run(&self, _h: &str, _s: &NodeScript) -> UecmResult<ScriptOutput> {
+            // exit 255 -> run_json maps to SshConnect
+            Ok(ScriptOutput {
+                stdout: String::new(),
+                stderr: "Connection refused".into(),
+                exit_code: 255,
+            })
+        }
+        fn probe(&self, _h: &str, _u: Option<&str>) -> UecmResult<ProbeResult> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn detect_adds_onboarding_hint_on_ssh_connect_failure() {
+        let err = detect_ue_versions(&FailExec, "RENDER-01").unwrap_err();
+        assert!(
+            err.to_string().contains("UECM-Bootstrap.cmd"),
+            "expected onboarding hint, got: {err}"
+        );
     }
 
     /// Real-node integration (default ignore). Needs query-ue-versions.ps1 +
