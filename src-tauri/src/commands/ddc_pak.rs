@@ -409,17 +409,32 @@ pub async fn distribute_ddc_pak(
                 ))
             })?;
     // SSH key auth: operator cred vestigial (param kept as shim). Source-SMB cred
-    // comes from the SecretStore (Mode B share), not DPAPI — mirror commands/pso.rs.
-    // `None` source_smb alias means "auto-derive from a Mode B share on the source".
+    // from the SecretStore (Mode B share), not DPAPI.
     let _ = &operator_credential_alias;
-    let smb = pak_distribute::resolve_source_smb(
-        &db,
-        source_machine_id,
-        source_smb_credential_alias.as_deref(),
-        true,
-    )?;
-    let effective_unc = named_share_unc.clone().or_else(|| smb.named_share_unc.clone());
-    let (smb_user, smb_pass) = (smb.user, smb.pass);
+    let (effective_unc, smb_user, smb_pass) = match &named_share_unc {
+        // Explicit UNC wins and bypasses share auto-pick (which errors when the
+        // source host has multiple registered shares) — preserve the old
+        // behavior of letting a manual/override UNC through. Cred from the
+        // SecretStore alias if given (Mode B svc = ddc-svc), else none (open share).
+        Some(unc) => {
+            let pass = match source_smb_credential_alias.as_deref() {
+                Some(a) => crate::core::secrets::SecretStore::from_config()?.get(a)?,
+                None => None,
+            };
+            let user = pass.as_ref().map(|_| "ddc-svc".to_string());
+            (Some(unc.clone()), user, pass)
+        }
+        // No explicit UNC: auto-derive the source share + cred from the SecretStore.
+        None => {
+            let smb = pak_distribute::resolve_source_smb(
+                &db,
+                source_machine_id,
+                source_smb_credential_alias.as_deref(),
+                true,
+            )?;
+            (smb.named_share_unc, smb.user, smb.pass)
+        }
+    };
 
     let distribute_profile = pak_distribute::DistributeProfile::ddc_pak();
     let plan = pak_distribute::plan(

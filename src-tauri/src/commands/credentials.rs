@@ -54,13 +54,21 @@ pub fn save_credential(
 
 #[tauri::command]
 pub fn delete_credential(db: State<'_, Db>, alias: String) -> UecmResult<()> {
-    // Try Credential Manager first; if delete fails, still clean SQLite so the
-    // UI doesn't display a phantom alias.
-    let cm_result = core_creds::delete(&alias);
+    // SQLite metadata is the source of truth for the UI list — always clear it.
     data_creds::delete_by_alias(&db, &alias)?;
 
-    // Best-effort DPAPI cleanup. A leftover entry is harmless (orphan key,
-    // never resolved) so don't fail the command on this.
+    // Best-effort secret cleanup across every store; a leftover entry is a
+    // harmless orphan, so none failing should wedge the delete (cmdkey is no
+    // longer the home for share-svc secrets, so its "no entry" failure is
+    // expected for SecretStore-backed aliases).
+    //   - SecretStore: current home for Mode B share-svc passwords (P3).
+    if let Err(e) = crate::core::secrets::SecretStore::from_config().and_then(|s| s.delete(&alias)) {
+        tracing::warn!(alias = %alias, error = %e, "SecretStore delete failed; orphan secret may remain");
+    }
+    //   - cmdkey / DPAPI: legacy stores for aliases created before the SecretStore move (retired in P5b).
+    if let Err(e) = core_creds::delete(&alias) {
+        tracing::debug!(alias = %alias, error = %e, "cmdkey delete failed (expected for SecretStore-backed aliases)");
+    }
     if let Err(e) = core_creds::delete_password(&alias) {
         tracing::warn!(
             alias = %alias,
@@ -69,5 +77,5 @@ pub fn delete_credential(db: State<'_, Db>, alias: String) -> UecmResult<()> {
         );
     }
 
-    cm_result
+    Ok(())
 }
