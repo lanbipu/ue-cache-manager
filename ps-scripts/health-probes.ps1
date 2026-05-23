@@ -134,10 +134,10 @@ try {
             if ([string]::IsNullOrEmpty($SvcUsername)) {
                 return @{ status='na'; message='no managed share'; sample=''; remediation='' }
             }
-            $vendor = Join-Path $env:LOCALAPPDATA 'UECM\PsExec64.exe'
+            $vendor = Join-Path $env:ProgramData 'UECM\PsExec64.exe'
             if (-not (Test-Path $vendor)) {
                 return @{ status='warning'; message='PsExec64 not staged on machine; cannot verify SYSTEM cred'; sample='';
-                          remediation='Re-run `uecm-cli winrm bootstrap <host>` (stages PsExec64 to %LOCALAPPDATA%\UECM). If AV/AppLocker blocks PsExec, exempt %LOCALAPPDATA%\UECM\PsExec64.exe.' }
+                          remediation='Re-run UECM-Bootstrap.cmd on this node (installs PsExec64 to %ProgramData%\UECM). If AV/AppLocker blocks PsExec, exempt %ProgramData%\UECM\PsExec64.exe.' }
             }
             try {
                 $out = & $vendor -accepteula -nobanner -s -i 0 cmdkey.exe /list 2>&1 | Out-String
@@ -147,7 +147,7 @@ try {
                    remediation = ($(if ($hasIt) {''} else {'Run `uecm-cli share inject-system-cred --host <host>` to push cred into SYSTEM credential store.'})) }
             } catch {
                 @{ status='warning'; message=$_.Exception.Message; sample='';
-                   remediation='PsExec invocation failed -- check %LOCALAPPDATA%\UECM\PsExec64.exe integrity and AV/AppLocker exclusions.' }
+                   remediation='PsExec invocation failed -- check %ProgramData%\UECM\PsExec64.exe integrity and AV/AppLocker exclusions.' }
             }
         }
 
@@ -196,10 +196,10 @@ try {
             if ([string]::IsNullOrEmpty($ShareUnc)) {
                 return @{ status='na'; message='no share configured'; sample=''; remediation='' }
             }
-            $vendor = Join-Path $env:LOCALAPPDATA 'UECM\PsExec64.exe'
+            $vendor = Join-Path $env:ProgramData 'UECM\PsExec64.exe'
             if (-not (Test-Path $vendor)) {
                 return @{ status='warning'; message='PsExec64 not staged; cannot SYSTEM-write probe'; sample='';
-                          remediation='Re-run `uecm-cli winrm bootstrap <host>` (stages PsExec64 into %LOCALAPPDATA%\UECM).' }
+                          remediation='Re-run UECM-Bootstrap.cmd on this node (installs PsExec64 into %ProgramData%\UECM).' }
             }
             try {
                 $probe = "uecm-probe-$(Get-Random).txt"

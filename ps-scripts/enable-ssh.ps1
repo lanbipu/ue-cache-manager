@@ -15,6 +15,7 @@ $ErrorActionPreference = 'Stop'
 $changes = New-Object System.Collections.ArrayList
 function Note($m) { [void]$changes.Add($m) }
 $adminKeys = 'C:\ProgramData\ssh\administrators_authorized_keys'
+$uecmDir = 'C:\ProgramData\UECM'
 $staging = 'C:\ProgramData\UECM\ps-scripts'
 
 try {
@@ -89,6 +90,24 @@ try {
             Where-Object { $_.Name -notlike 'enable-*' -and $_.FullName -ne $PSCommandPath } |
             ForEach-Object { Copy-Item $_.FullName -Destination $staging -Force }
         Note "staged node scripts -> $staging"
+    }
+
+    # 6. install PsExec64 (required by inject-system-credential.ps1 to write the
+    #    SYSTEM-account cmdkey). It ships in the bootstrap package next to this
+    #    script; copy it to the machine-wide UECM dir so node-pure scripts resolve
+    #    it deterministically at C:\ProgramData\UECM\PsExec64.exe. Missing PsExec
+    #    does not fail onboarding (SSH itself is up); inject fails with a clear
+    #    message later if it was never staged.
+    if (-not $CheckOnly) {
+        $psexecSrc = Join-Path $StagingSourceDir 'PsExec64.exe'
+        if (Test-Path -LiteralPath $psexecSrc) {
+            if (-not (Test-Path $uecmDir)) { New-Item -ItemType Directory -Path $uecmDir -Force | Out-Null }
+            Copy-Item -LiteralPath $psexecSrc -Destination (Join-Path $uecmDir 'PsExec64.exe') -Force
+            Note "installed PsExec64 -> $uecmDir"
+        }
+        else {
+            Note "WARNING: PsExec64.exe not in bootstrap package; SYSTEM credential injection unavailable until staged"
+        }
     }
 
     # Readiness reflects ACTUAL prerequisites (correct for -CheckOnly too, which

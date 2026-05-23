@@ -4,8 +4,9 @@
 # - UECM-Bootstrap-WinRM.ps1  (WinRM 脚本本体)
 # - README.txt                (中文使用说明)
 # 当传入 -UecmPublicKeyPath 时，额外打包 SSH 传输纳管文件：
-# - enable-ssh.ps1            (节点开 OpenSSH + 授权 UECM 公钥)
+# - enable-ssh.ps1            (节点开 OpenSSH + 授权 UECM 公钥 + 装 PsExec64)
 # - uecm.pub                  (UECM 传输公钥，明文随包)
+# - PsExec64.exe              (SYSTEM cmdkey 注入用，enable-ssh.ps1 装到节点)
 
 param(
     [string]$OutputDirectory = (Join-Path (Get-Location) 'UECM-WinRM-Bootstrap'),
@@ -90,12 +91,17 @@ try {
         $pub = (Get-Content -Raw $UecmPublicKeyPath).Trim()
         $encNoBom = New-Object System.Text.UTF8Encoding $false
         [System.IO.File]::WriteAllText((Join-Path $OutputDirectory 'uecm.pub'), $pub + "`n", $encNoBom)
+        # PsExec64 is required by inject-system-credential.ps1 to write the SYSTEM
+        # cmdkey; enable-ssh.ps1 installs it on the node from this package dir.
+        $sourcePsExec = Join-Path (Split-Path -Parent $scriptRoot) 'vendor\PsExec64.exe'
+        if (-not (Test-Path $sourcePsExec)) { throw "PsExec64.exe not found at $sourcePsExec (needed for SSH SYSTEM-cred injection)" }
+        Copy-Item -Path $sourcePsExec -Destination (Join-Path $OutputDirectory 'PsExec64.exe') -Force
         $sshIncluded = $true
     }
 
     $files = New-Object System.Collections.ArrayList
     [void]$files.AddRange(@('UECM-Bootstrap.cmd', 'UECM-Bootstrap-WinRM.ps1', 'README.txt'))
-    if ($sshIncluded) { [void]$files.AddRange(@('enable-ssh.ps1', 'uecm.pub')) }
+    if ($sshIncluded) { [void]$files.AddRange(@('enable-ssh.ps1', 'uecm.pub', 'PsExec64.exe')) }
 
     @{
         ok = $true
