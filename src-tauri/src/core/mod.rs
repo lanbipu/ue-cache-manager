@@ -20,6 +20,7 @@ pub mod ini_diagnostics;
 pub mod ini_diagnostics_zen;
 pub mod ini_editor;
 pub mod ini_scanner;
+pub mod keystore;
 pub mod local_cache;
 pub mod loopback;
 pub mod network;
