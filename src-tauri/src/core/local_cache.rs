@@ -1,6 +1,6 @@
 //! Provision a local DDC directory on a remote host: New-Item + icacls.
 
-use crate::core::powershell;
+use crate::core::ssh::{run_json, NodeScript, SshExecutor};
 use crate::error::{UecmError, UecmResult};
 use serde::Deserialize;
 
@@ -53,20 +53,20 @@ pub fn create(
     service_account: Option<&str>,
     operator: Option<(&str, &str)>,
 ) -> UecmResult<String> {
+    let _ = operator; // SSH key auth; per-call WinRM cred ignored (kept until A5).
     if crate::core::loopback::is_loopback_target(host) {
         return provision_local_cache_dir(local_path, service_account);
     }
 
-    let mut args: Vec<&str> = vec!["-HostName", host, "-LocalPath", local_path];
-    if let Some(sa) = service_account {
-        args.extend(["-ServiceAccount", sa]);
-    }
-    if let Some((u, p)) = operator {
-        args.extend(["-Username", u, "-Password", p]);
-    }
-    let r: CreateResult = powershell::run_json(
-        &powershell::script_path("create-local-cache-dir.ps1"),
-        &args,
+    let exec = SshExecutor::from_config()?;
+    let r: CreateResult = run_json(
+        &exec,
+        host,
+        &NodeScript {
+            name: "create-local-cache-dir.ps1",
+            args: serde_json::json!({ "LocalPath": local_path, "ServiceAccount": service_account }),
+            ssh_user: None,
+        },
     )?;
     if !r.ok {
         return Err(UecmError::OperationFailed(r.message));
@@ -77,12 +77,8 @@ pub fn create(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(not(windows))]
-    #[test]
-    fn returns_powershell_error_off_windows() {
-        let r = create("HOST", r"D:\UE-DDC-Local", None, None);
-        assert!(matches!(r, Err(UecmError::PowerShell(_))));
-    }
+    // (removed `returns_powershell_error_off_windows`: remote create now goes over
+    // SSH — errors at ssh connect, and from_config would touch the real config dir.)
 
     #[cfg(not(windows))]
     #[test]
