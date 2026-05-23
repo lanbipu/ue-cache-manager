@@ -159,35 +159,6 @@ fn run_verify_node(host: &str, input: &VerifyInput) -> UecmResult<String> {
 // Internal helpers (separated for unit-testability without WinRM)
 // -----------------------------------------------------------------------------
 
-/// Build the inline PowerShell payload that splats `input` into
-/// `zen-verify-rules.ps1`. Mirrors `cli::domain_zen::build_param_script`'s
-/// `$__uecm_zen_params = @{ ... }; & { <body> } @__uecm_zen_params` shape so
-/// the sidecar's `param(...)` block binds the splatted hashtable instead of
-/// the bare hashtable literal being treated as a positional arg.
-pub fn build_invoke_script(input: &VerifyInput) -> UecmResult<String> {
-    let body = crate::core::powershell::read_script("zen-verify-rules.ps1")?;
-    // Single-quoted PS strings: only `'` needs doubling. Backslashes / spaces
-    // remain literal, which is what Windows-style paths need.
-    let esc = |s: &str| s.replace('\'', "''");
-    let mut hash = String::from("@{ ");
-    hash.push_str(&format!("UeRoot = '{}'", esc(&input.ue_root)));
-    hash.push_str(&format!("; UprojectPath = '{}'", esc(&input.uproject_path)));
-    hash.push_str(&format!("; TimeoutSeconds = {}", input.timeout_seconds));
-    if let Some(h) = &input.expected_host {
-        hash.push_str(&format!("; ExpectedHost = '{}'", esc(h)));
-    }
-    if let Some(p) = input.expected_port {
-        hash.push_str(&format!("; ExpectedPort = {}", p));
-    }
-    if let Some(n) = &input.expected_namespace {
-        hash.push_str(&format!("; ExpectedNamespace = '{}'", esc(n)));
-    }
-    hash.push_str(" }");
-    Ok(format!(
-        "$__uecm_zen_params = {hash}\n& {{\n{body}\n}} @__uecm_zen_params\n"
-    ))
-}
-
 /// Parse the `{ ok, matched, ... }` envelope into a `VerifyOutcome`. Returns
 /// `Err(UecmError::PowerShell)` on `ok=false` so the caller layer doesn't need
 /// to remember to re-check the flag. Same hardening as
@@ -336,58 +307,6 @@ mod tests {
         i.timeout_seconds = 0;
         let e = verify_endpoint("10.0.0.1", None, &i, "Negotiate").unwrap_err();
         assert!(matches!(e, UecmError::InvalidInput(_)));
-    }
-
-    // ---- build_invoke_script -------------------------------------------
-
-    #[test]
-    fn build_invoke_script_emits_required_and_optional_params() {
-        let s = build_invoke_script(&full_input()).unwrap();
-        assert!(s.contains("$__uecm_zen_params = @{ "), "header: {s}");
-        assert!(s.contains(r"UeRoot = 'D:\Program Files\Epic Games\UE_5.7'"));
-        assert!(s.contains(r"UprojectPath = 'E:\RenderStream Projects\test_0311\test_0311.uproject'"));
-        assert!(s.contains("TimeoutSeconds = 300"));
-        assert!(s.contains("ExpectedHost = '127.0.0.1'"));
-        assert!(s.contains("ExpectedPort = 8558"));
-        assert!(s.contains("ExpectedNamespace = 'ue.ddc'"));
-        assert!(s.trim_end().ends_with("@__uecm_zen_params"));
-    }
-
-    #[test]
-    fn build_invoke_script_omits_optional_params_when_none() {
-        let i = VerifyInput {
-            ue_root: "C:\\UE".into(),
-            uproject_path: "C:\\proj\\p.uproject".into(),
-            timeout_seconds: 60,
-            expected_host: None,
-            expected_port: None,
-            expected_namespace: None,
-        };
-        let s = build_invoke_script(&i).unwrap();
-        // The PS sidecar source itself contains the parameter names in its
-        // `param(...)` block; we only need to assert that they don't show up
-        // in the splat hashtable on the FIRST line (the one we built).
-        let first_line = s.lines().next().unwrap_or("");
-        assert!(first_line.starts_with("$__uecm_zen_params = @{ "));
-        assert!(!first_line.contains("ExpectedHost"), "first_line: {first_line}");
-        assert!(!first_line.contains("ExpectedPort"), "first_line: {first_line}");
-        assert!(!first_line.contains("ExpectedNamespace"), "first_line: {first_line}");
-    }
-
-    #[test]
-    fn build_invoke_script_escapes_single_quotes() {
-        let i = VerifyInput {
-            ue_root: "C:\\UE 'odd'".into(),
-            uproject_path: "C:\\proj\\p.uproject".into(),
-            timeout_seconds: 60,
-            expected_host: Some("won't be used".into()),
-            expected_port: None,
-            expected_namespace: None,
-        };
-        let s = build_invoke_script(&i).unwrap();
-        // PowerShell single-quote escape: `'` becomes `''`.
-        assert!(s.contains(r"UeRoot = 'C:\UE ''odd'''"));
-        assert!(s.contains(r"ExpectedHost = 'won''t be used'"));
     }
 
     // ---- parse_outcome_json --------------------------------------------

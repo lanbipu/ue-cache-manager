@@ -1757,66 +1757,6 @@ fn urlacl_remove(
 // PS sidecar plumbing (T2.5)
 // -----------------------------------------------------------------------------
 
-/// Build an inline PowerShell snippet that runs a sidecar from `ps-scripts/`
-/// with named parameters. The sidecar body is read from disk and forwarded via
-/// stdin to `core::winrm::invoke[_with_credential]`, mirroring the M1
-/// detect-binary path.
-///
-/// We can't shell out to `powershell.exe -File <script>` over WinRM, because
-/// the sidecars live on the controller — the remote host has no copy.
-/// PowerShell's `param(...)` block must appear before any executable
-/// statement, so we cannot prepend `$Name = ...` assignments above the
-/// sidecar source.
-///
-/// The trick: assign the args hashtable to `$__uecm_zen_params` FIRST (outside
-/// the scriptblock), then invoke `& { <body> } @__uecm_zen_params`. PowerShell
-/// splatting requires the `@<variable>` form — a bare `@{ ... }` hashtable
-/// literal after the scriptblock is treated as a single positional argument,
-/// not as named-param binding. (Codex P1 fix: previously emitted
-/// `} @{ Name = 'x' }` which silently bound zero params, making every remote
-/// sidecar call fail on Windows.)
-///
-/// The body keeps its `[CmdletBinding()] param(...)` as the first statement
-/// inside the scriptblock, so the splatted hash binds to those params at
-/// invoke time. The sidecar's own `$args` (positional) stays empty so the
-/// `--full` hard-block in `zen-service-install.ps1` doesn't trip on caller
-/// positional drift.
-pub(crate) fn build_param_script(script_name: &str, args: &[(&str, &str)]) -> UecmResult<String> {
-    let body = crate::core::powershell::read_script(script_name)?;
-    // Build a PowerShell hashtable literal of the named args.
-    // Single-quoted PS strings only need `'` doubled to escape; backslashes
-    // and spaces stay literal, which is what we want for Windows paths.
-    let mut hash = String::from("@{ ");
-    for (i, (name, value)) in args.iter().enumerate() {
-        if i > 0 {
-            hash.push_str("; ");
-        }
-        let escaped = value.replace('\'', "''");
-        hash.push_str(&format!("{name} = '{escaped}'"));
-    }
-    hash.push_str(" }");
-    // Variable name is namespaced (`__uecm_zen_params`) so it cannot collide
-    // with anything inside the sidecar body. The trailing newline before the
-    // closing brace defends against a sidecar source that ends in a `#`
-    // line-comment with no newline.
-    Ok(format!(
-        "$__uecm_zen_params = {hash}\n& {{\n{body}\n}} @__uecm_zen_params\n"
-    ))
-}
-
-/// Dispatch a remote script body through WinRM, with or without credentials.
-pub(crate) fn run_remote(
-    host: &str,
-    body: &str,
-    creds: Option<&(String, String)>,
-    auth_method: &str,
-) -> UecmResult<String> {
-    match creds {
-        Some((u, p)) => crate::core::winrm::invoke_with_credential(host, body, u, p, auth_method),
-        None => crate::core::winrm::invoke(host, body),
-    }
-}
-
 /// Run a staged node-pure zen script over SSH (`-File`), args via stdin JSON.
 /// Returns stdout (the `{ok,...}` envelope; the script's `ok` flag is the source
 /// of truth, so a non-zero exit still surfaces its stdout — mirrors the old
@@ -3563,69 +3503,6 @@ mod tests {
         let mut ctx = fresh_ctx();
         let err = cache_stats(&mut ctx, Some(9999), false, 2).unwrap_err();
         assert!(matches!(err, UecmError::InvalidInput(_)));
-    }
-
-    // -------- T2.5 unit tests --------
-
-    /// `build_param_script` must assign the args hashtable to a variable
-    /// FIRST, then invoke the scriptblock with `@variable` splat. PowerShell
-    /// splatting only works with the `@<variable>` form — a trailing
-    /// `@{ ... }` literal would be a single positional argument, not a
-    /// named-param binding. The sidecar's `[CmdletBinding()] param(...)`
-    /// must remain the first statement inside the scriptblock.
-    /// (Codex P1 fix — without this the entire remote sidecar path silently
-    /// bound zero params.)
-    #[test]
-    fn build_param_script_uses_variable_splat_not_hash_literal() {
-        let snippet = build_param_script(
-            "zen-write-lua-config.ps1",
-            &[("LuaText", "x"), ("DestPath", r"C:\Zen\zen.lua")],
-        )
-        .unwrap();
-        // Hashtable lands in a variable BEFORE the scriptblock invocation.
-        assert!(
-            snippet.starts_with("$__uecm_zen_params = @{ "),
-            "snippet head: {:?}",
-            &snippet[..60.min(snippet.len())]
-        );
-        // The scriptblock call uses `@variable` splat, not `@{...}` literal.
-        assert!(
-            snippet.contains("} @__uecm_zen_params"),
-            "expected variable splat at the call site, got tail: {:?}",
-            snippet.lines().last().unwrap_or("")
-        );
-        // Defense-in-depth: ensure the bad form (`} @{` literal-as-splat)
-        // does NOT appear anywhere.
-        assert!(
-            !snippet.contains("} @{"),
-            "hash literal as splat must not be present: {:?}",
-            snippet
-        );
-        // The sidecar's CmdletBinding header must still be the first
-        // statement INSIDE the scriptblock — find it after `& {\n`.
-        let after_brace = snippet.find("& {\n").unwrap() + 4;
-        let inner_start = snippet[after_brace..].trim_start();
-        assert!(
-            inner_start.starts_with("# Plan 7 T2.4 sidecar")
-                || inner_start.starts_with("[CmdletBinding()]"),
-            "scriptblock interior must start with the sidecar source; got: {:?}",
-            &inner_start[..80.min(inner_start.len())]
-        );
-    }
-
-    #[test]
-    fn build_param_script_escapes_single_quotes_via_doubling() {
-        let snippet = build_param_script(
-            "zen-urlacl-add.ps1",
-            &[("UrlPrefix", r"http://+:8558/"), ("UserAccount", "DOMAIN\\zen's-svc")],
-        )
-        .unwrap();
-        // PowerShell single-quote escape: `'` → `''`.
-        assert!(
-            snippet.contains("UserAccount = 'DOMAIN\\zen''s-svc'"),
-            "expected doubled single-quote, got tail: {:?}",
-            snippet.lines().last().unwrap_or("")
-        );
     }
 
     #[test]

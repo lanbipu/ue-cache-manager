@@ -92,6 +92,14 @@ pub fn build_ssh_args(
         "BatchMode=yes".into(),
         "-o".into(),
         "ConnectTimeout=10".into(),
+        // Keepalive for long-running node scripts (e.g. zen verify-rules' editor
+        // run up to 300s, zen service-install). The probes keep the channel alive
+        // through app-silent stretches; we only drop after the server fails to
+        // answer 10 consecutive 30s probes (~5 min of a genuinely dead node).
+        "-o".into(),
+        "ServerAliveInterval=30".into(),
+        "-o".into(),
+        "ServerAliveCountMax=10".into(),
         format!("{ssh_user}@{host}"),
         remote,
     ]
@@ -429,6 +437,8 @@ mod tests {
         assert!(args.iter().any(|a| a == "UserKnownHostsFile=/cfg/known_hosts"));
         assert!(args.iter().any(|a| a == "StrictHostKeyChecking=accept-new"));
         assert!(args.iter().any(|a| a == "BatchMode=yes"));
+        assert!(args.iter().any(|a| a == "ServerAliveInterval=30"));
+        assert!(args.iter().any(|a| a == "ServerAliveCountMax=10"));
         assert!(args.contains(&"uecm-svc@RENDER-01".to_string()));
         let remote = args.last().unwrap();
         assert!(remote.contains(r"-File C:\ProgramData\UECM\ps-scripts\health-probes.ps1"));
