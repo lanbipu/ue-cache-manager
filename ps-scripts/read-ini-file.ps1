@@ -14,7 +14,9 @@ try {
         @{ ok = $true; found = $false; sections = @(); message = "" } | ConvertTo-Json -Compress -Depth 6
         return
     }
-    $lines = Get-Content -Path $FilePath -Encoding UTF8
+    # -ErrorAction Stop so an existing-but-unreadable file (ACL/lock) becomes ok:false
+    # (the catch), not a silent found=true with empty sections.
+    $lines = Get-Content -LiteralPath $FilePath -Encoding UTF8 -ErrorAction Stop
     $sections = New-Object System.Collections.ArrayList
     $current = $null
     $lineNo = 0
