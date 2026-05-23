@@ -400,4 +400,51 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, UecmError::SshConnect(_)));
     }
+
+    /// 真节点集成验证（默认 ignore）。需要：lanPC 已开 OpenSSH、UECM 公钥已授权、
+    /// `_a0-selftest.ps1` 已暂存到 `C:\ProgramData\UECM\ps-scripts\`。运行：
+    /// `UECM_IT_HOST=192.168.10.20 UECM_IT_USER=lanpc \`
+    /// `UECM_IT_KEY=/tmp/uecm-a0-validate/uecm_ed25519 \`
+    /// `UECM_IT_KNOWN_HOSTS=/tmp/uecm-a0-validate/known_hosts \`
+    /// `cargo test --lib core::ssh::tests::it_run_against_real_node -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn it_run_against_real_node() {
+        let (host, user, key, kh) = match (
+            std::env::var("UECM_IT_HOST"),
+            std::env::var("UECM_IT_USER"),
+            std::env::var("UECM_IT_KEY"),
+            std::env::var("UECM_IT_KNOWN_HOSTS"),
+        ) {
+            (Ok(h), Ok(u), Ok(k), Ok(kh)) => (h, u, k, kh),
+            _ => {
+                eprintln!("skip: set UECM_IT_HOST/USER/KEY/KNOWN_HOSTS");
+                return;
+            }
+        };
+        let exec = SshExecutor {
+            key_path: std::path::PathBuf::from(key),
+            known_hosts: std::path::PathBuf::from(kh),
+            default_user: user.clone(),
+            staging_root: STAGING_ROOT.to_string(),
+        };
+        let p = exec.probe(&host, Some(&user)).unwrap();
+        assert!(p.ok, "probe failed: {p:?}");
+
+        #[derive(Debug, serde::Deserialize)]
+        struct Echo {
+            ok: bool,
+            echoed: String,
+            host: String,
+        }
+        let script = NodeScript {
+            name: "_a0-selftest.ps1",
+            args: serde_json::json!({ "msg": "hello-from-mac" }),
+            ssh_user: Some(user),
+        };
+        let e: Echo = run_json(&exec, &host, &script).unwrap();
+        assert!(e.ok);
+        assert_eq!(e.echoed, "hello-from-mac");
+        eprintln!("OK: node host={} probe_latency_ms={}", e.host, p.latency_ms);
+    }
 }
