@@ -1,7 +1,7 @@
 //! Probe file count + total size for Local DDC and Shared DDC paths on a
 //! remote host, then classify imbalance signals (the SOP case study).
 
-use crate::core::powershell;
+use crate::core::ssh::{run_json, NodeScript, RemoteExecutor};
 use crate::error::{UecmError, UecmResult};
 use serde::{Deserialize, Serialize};
 
@@ -26,24 +26,20 @@ pub struct Stats {
 }
 
 pub fn run(
+    exec: &dyn RemoteExecutor,
     host: &str,
     local_path: &str,
     shared_path: &str,
-    creds: Option<(&str, &str)>,
 ) -> UecmResult<Stats> {
-    let mut args: Vec<&str> = vec![
-        "-HostName",
+    let s: Stats = run_json(
+        exec,
         host,
-        "-LocalPath",
-        local_path,
-        "-SharedPath",
-        shared_path,
-    ];
-    if let Some((u, p)) = creds {
-        args.extend(["-Username", u, "-Password", p]);
-    }
-    let s: Stats =
-        powershell::run_json(&powershell::script_path("ddc-file-stats.ps1"), &args)?;
+        &NodeScript {
+            name: "ddc-file-stats.ps1",
+            args: serde_json::json!({ "LocalPath": local_path, "SharedPath": shared_path }),
+            ssh_user: None,
+        },
+    )?;
     if !s.ok {
         return Err(UecmError::OperationFailed("ddc-file-stats failed".into()));
     }
@@ -89,6 +85,28 @@ pub fn classify_imbalance(s: &Stats) -> Option<ImbalanceFinding> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ssh::{NodeScript, ProbeResult, RemoteExecutor, ScriptOutput};
+
+    struct FakeExec(String);
+    impl RemoteExecutor for FakeExec {
+        fn run(&self, _h: &str, _s: &NodeScript) -> UecmResult<ScriptOutput> {
+            Ok(ScriptOutput { stdout: self.0.clone(), stderr: String::new(), exit_code: 0 })
+        }
+        fn probe(&self, _h: &str, _u: Option<&str>) -> UecmResult<ProbeResult> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn run_parses_layer_stats() {
+        let exec = FakeExec(
+            r#"{"ok":true,"local":{"path":"D:\\DDC","ok":true,"file_count":10,"total_bytes":2048},"shared":{"path":"X","ok":true,"file_count":5,"total_bytes":1024}}"#
+                .to_string(),
+        );
+        let s = run(&exec, "RENDER-01", "D:\\DDC", "X").unwrap();
+        assert_eq!(s.local.file_count, 10);
+        assert_eq!(s.shared.total_bytes, 1024);
+    }
 
     fn stat(ok: bool, n: u64) -> LayerStat {
         LayerStat {
