@@ -5,6 +5,7 @@ use crate::cli::destructive::{self, Outcome};
 use crate::cli::output::Event;
 use crate::cli::run::Ctx;
 use crate::cli::EmitSerialize;
+use crate::core::ssh::{RemoteExecutor, SshExecutor};
 use crate::data::{machines, machine_ue_installs, machine_gpus};
 use crate::error::{UecmError, UecmResult};
 use crate::data::machines::Machine;
@@ -246,15 +247,13 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64, cred: &crate::cli::credential_args::Crede
     ctx.emitter
         .emit_event(&Event::Progress {
             pct: None,
-            label: "winrm probe".into(),
+            label: "ssh probe".into(),
             current: None,
             total: None,
         })
         .ok();
-    let probe_result = match &creds {
-        Some((u, p)) => crate::core::winrm::probe_with_credential(&host, u, p),
-        None => crate::core::winrm::probe(&host),
-    };
+    // SSH key auth (uecm-svc); operator `creds` no longer gate the probe.
+    let probe_result = SshExecutor::from_config()?.probe(&host, None);
     let probe = match probe_result {
         Ok(p) if p.ok => {
             {
@@ -268,8 +267,8 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64, cred: &crate::cli::credential_args::Crede
                 let db = ctx.require_db()?;
                 machines::mark_seen(db, id, "offline")?;
             }
-            return Err(UecmError::PowerShell(format!(
-                "winrm probe failed: {}",
+            return Err(UecmError::SshConnect(format!(
+                "ssh probe failed: {}",
                 p.message
             )));
         }
@@ -416,6 +415,7 @@ fn deep_scan(
         cred.resolve(db)?
     };
     let sub_cred = crate::cli::credential_args::CredentialArgs::inline(resolved.clone(), cred.auth_method);
+    let ssh_exec = SshExecutor::from_config()?;
 
     ctx.emitter
         .emit_event(&Event::Started {
@@ -454,12 +454,7 @@ fn deep_scan(
         // Explicit reachability probe so we can tell "WinRM closed" (skip) apart
         // from "reachable but detection failed" (failure). `refresh` re-probes —
         // the small double-probe is worth the accurate classification.
-        let probe_ok = match &resolved {
-            Some((u, p)) => crate::core::winrm::probe_with_credential(&host, u, p)
-                .map(|r| r.ok)
-                .unwrap_or(false),
-            None => crate::core::winrm::probe(&host).map(|r| r.ok).unwrap_or(false),
-        };
+        let probe_ok = ssh_exec.probe(&host, None).map(|r| r.ok).unwrap_or(false);
         if !probe_ok {
             skipped += 1;
             ctx.emitter
@@ -469,8 +464,8 @@ fn deep_scan(
                         "host": host,
                         "step": "deep_scan",
                         "skipped": true,
-                        "reason": "WinRM unreachable",
-                        "hint": "run `uecm-cli machine authorize` to open WinRM first",
+                        "reason": "SSH unreachable",
+                        "hint": "node not reachable over SSH; onboard via UECM-Bootstrap.cmd (check uecm-svc / sshd)",
                     }),
                 })
                 .ok();

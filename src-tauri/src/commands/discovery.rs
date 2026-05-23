@@ -1,6 +1,7 @@
 //! Tauri commands for network scan + per-machine refresh.
 
-use crate::core::{discovery, network, winrm};
+use crate::core::ssh::{RemoteExecutor, SshExecutor};
+use crate::core::{discovery, network};
 use crate::data::{
     machine_gpus, machine_ue_installs, machines as data_machines, Db, GpuInfo, Machine, UeInstall,
 };
@@ -69,15 +70,18 @@ pub fn refresh_machine(db: State<'_, Db>, machine_id: i64) -> UecmResult<Refresh
     let machine = data_machines::find_by_id(&db, machine_id)?
         .ok_or_else(|| UecmError::InvalidInput(format!("machine {} not found", machine_id)))?;
 
-    // Probe + mark online/offline immediately so the UI badge is correct
-    // even when subsequent detection steps fail.
-    match winrm::probe(&machine.ip) {
+    // Probe + mark online/offline immediately so the UI badge is correct even
+    // when subsequent detection steps fail. SSH key auth (uecm-svc); the exec is
+    // reused for UE/GPU detection below. (RefreshResult.winrm_ok kept as the
+    // Vue-facing field name per the migration contract.)
+    let exec = SshExecutor::from_config()?;
+    match exec.probe(&machine.ip, None) {
         Ok(p) if p.ok => {
             data_machines::mark_seen(&db, machine_id, "online")?;
         }
         Ok(_) => {
             data_machines::mark_seen(&db, machine_id, "offline")?;
-            return Ok(refresh_err(machine_id, false, "WinRM unreachable"));
+            return Ok(refresh_err(machine_id, false, "node unreachable over SSH"));
         }
         Err(e) => {
             data_machines::mark_seen(&db, machine_id, "offline")?;
@@ -86,7 +90,6 @@ pub fn refresh_machine(db: State<'_, Db>, machine_id: i64) -> UecmResult<Refresh
     }
 
     // UE detect + persist BEFORE GPU detect — partial-failure tolerance.
-    let exec = crate::core::ssh::SshExecutor::from_config()?;
     let detected_ue = match discovery::detect_ue_versions(&exec, &machine.ip) {
         Ok(v) => v,
         Err(e) => return Ok(refresh_err(machine_id, true, format!("UE detection failed: {}", e))),
