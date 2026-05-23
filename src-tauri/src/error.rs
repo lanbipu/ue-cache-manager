@@ -23,6 +23,18 @@ pub enum UecmError {
 
     #[error("configuration error: {0}")]
     Configuration(String),
+
+    #[error("ssh connect failed: {0}")]
+    SshConnect(String),
+
+    #[error("node script failed (exit {exit}): {stderr}")]
+    NodeScript { exit: i32, stderr: String },
+
+    #[error("operation timed out: {0}")]
+    Timeout(String),
+
+    #[error("script staging failed: {0}")]
+    ScriptStaging(String),
 }
 
 /// Frontend-friendly error representation.
@@ -41,6 +53,10 @@ impl From<UecmError> for ErrorPayload {
             UecmError::InvalidInput(_) => "INVALID_INPUT",
             UecmError::OperationFailed(_) => "OPERATION_FAILED",
             UecmError::Configuration(_) => "CONFIGURATION",
+            UecmError::SshConnect(_) => "SSH_CONNECT",
+            UecmError::NodeScript { .. } => "NODE_SCRIPT",
+            UecmError::Timeout(_) => "TIMEOUT",
+            UecmError::ScriptStaging(_) => "SCRIPT_STAGING",
         };
         ErrorPayload {
             code: code.to_string(),
@@ -64,6 +80,10 @@ impl Serialize for UecmError {
                 UecmError::InvalidInput(_) => "INVALID_INPUT",
                 UecmError::OperationFailed(_) => "OPERATION_FAILED",
                 UecmError::Configuration(_) => "CONFIGURATION",
+                UecmError::SshConnect(_) => "SSH_CONNECT",
+                UecmError::NodeScript { .. } => "NODE_SCRIPT",
+                UecmError::Timeout(_) => "TIMEOUT",
+                UecmError::ScriptStaging(_) => "SCRIPT_STAGING",
             }
             .to_string(),
             message: self.to_string(),
@@ -100,5 +120,22 @@ mod tests {
         let json = serde_json::to_string(&err).unwrap();
         assert!(json.contains("POWERSHELL"));
         assert!(json.contains("script crashed"));
+    }
+
+    #[test]
+    fn ssh_connect_error_serializes_with_code() {
+        let err = UecmError::SshConnect("port 22 refused".to_string());
+        let payload: ErrorPayload = err.into();
+        assert_eq!(payload.code, "SSH_CONNECT");
+        assert!(payload.message.contains("port 22 refused"));
+    }
+
+    #[test]
+    fn node_script_error_carries_exit_and_stderr() {
+        let err = UecmError::NodeScript { exit: 3, stderr: "boom".to_string() };
+        let payload: ErrorPayload = err.into();
+        assert_eq!(payload.code, "NODE_SCRIPT");
+        assert!(payload.message.contains("3"));
+        assert!(payload.message.contains("boom"));
     }
 }
