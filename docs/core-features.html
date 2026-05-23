@@ -757,7 +757,94 @@
     .pathb .pathb-steps { grid-template-columns: 1fr; }
     .deploy-grid { grid-template-columns: 1fr 1fr; }
     .non-actions ul { grid-template-columns: 1fr; }
+    .cmd-note .cn-row { grid-template-columns: 1fr; gap: 4px; }
   }
+
+  /* === CLI command annotations (功能 / 作用 / UI 对应) ===== */
+  .cli-legend {
+    margin: 0 0 28px;
+    border: 1px solid var(--primary-line);
+    border-radius: 10px;
+    background: var(--primary-soft);
+    padding: 16px 20px;
+  }
+  .cli-legend .lg-title { font-family: "Manrope", sans-serif; font-weight: 800; font-size: 14px; margin: 0 0 10px; color: var(--fg); }
+  .cli-legend p { font-size: 13px; line-height: 1.7; color: var(--fg); margin: 0 0 8px; }
+  .cli-legend p:last-child { margin-bottom: 0; }
+  .cli-legend .k { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background: var(--card); padding: 1px 6px; border-radius: 4px; font-size: 12px; color: var(--fg); }
+  .cli-legend .none-tag { color: var(--warning); font-weight: 700; }
+
+  .cmd-notes {
+    margin: 12px 0 0;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--card);
+    overflow: hidden;
+  }
+  .cmd-note { padding: 14px 18px; }
+  .cmd-note + .cmd-note { border-top: 1px solid var(--border); }
+  .cmd-note .cn-cmd {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 12.5px; font-weight: 700; color: var(--fg);
+    display: block; margin-bottom: 10px; word-break: break-word;
+  }
+  .cmd-note .cn-cmd .arg { color: var(--primary); }
+  .cmd-note .cn-row {
+    display: grid; grid-template-columns: 48px 1fr; gap: 12px;
+    font-size: 12.5px; line-height: 1.6;
+  }
+  .cmd-note .cn-row + .cn-row { margin-top: 6px; }
+  .cmd-note .cn-k {
+    font-family: ui-monospace, monospace; font-size: 10.5px; font-weight: 700;
+    letter-spacing: 0.04em; color: var(--muted-fg); text-transform: uppercase;
+    padding-top: 2px;
+  }
+  .cmd-note .cn-v { color: var(--fg); }
+  .cmd-note .cn-v .k { font-family: ui-monospace, monospace; background: var(--muted); padding: 1px 6px; border-radius: 4px; font-size: 11.5px; }
+  .cmd-note .cn-ui { font-family: ui-monospace, monospace; color: var(--primary); font-size: 12px; font-weight: 600; }
+  .cmd-note .cn-ui.none { color: var(--warning); }
+  .cmd-note.cli-only { background: var(--warning-soft); }
+
+  /* === 复制按钮 ========================================== */
+  .commands, .pcmd, .cli-row, .cmd-note { position: relative; }
+  .copy-btn {
+    position: absolute; top: 8px; right: 8px; z-index: 2;
+    appearance: none; cursor: pointer;
+    font-size: 11px; line-height: 1; font-weight: 500;
+    color: var(--muted-fg);
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 9px;
+    display: inline-flex; align-items: center; gap: 5px;
+    opacity: 0;
+    transition: opacity .12s ease, color .12s ease, border-color .12s ease, background .12s ease;
+  }
+  .commands:hover .copy-btn,
+  .pcmd:hover .copy-btn,
+  .cli-row:hover .copy-btn,
+  .cmd-note:hover .copy-btn,
+  .copy-btn:focus-visible { opacity: 1; }
+  .copy-btn:hover { color: var(--primary); border-color: var(--primary-line); background: var(--muted); }
+  .copy-btn.copied { color: var(--healthy); border-color: var(--healthy); opacity: 1; }
+  .copy-btn svg { width: 12px; height: 12px; }
+  @media (hover: none) { .copy-btn { opacity: .7; } }
+
+  /* === Quickstart (开测前准备) =========================== */
+  .quickstart { margin: 0 0 32px; border: 1px solid var(--primary-line); border-radius: 12px; overflow: hidden; background: var(--card); }
+  .quickstart .qs-head { padding: 18px 22px; background: var(--primary-soft); border-bottom: 1px solid var(--primary-line); }
+  .quickstart .qs-head .qs-title { font-family: "Manrope", sans-serif; font-weight: 800; font-size: 16px; margin: 0 0 6px; color: var(--fg); }
+  .quickstart .qs-head p { font-size: 13px; line-height: 1.7; color: var(--fg); margin: 0; }
+  .quickstart .qs-step { display: grid; grid-template-columns: 36px 1fr; gap: 16px; padding: 18px 22px; }
+  .quickstart .qs-step + .qs-step { border-top: 1px solid var(--border); }
+  .quickstart .qs-n { width: 28px; height: 28px; border-radius: 9999px; background: var(--primary); color: var(--primary-fg); font-family: "Manrope", sans-serif; font-weight: 800; font-size: 14px; display: grid; place-items: center; }
+  .quickstart .qs-body { min-width: 0; }
+  .quickstart .qs-body .qs-st { font-family: "Manrope", sans-serif; font-weight: 800; font-size: 14px; margin: 2px 0 6px; }
+  .quickstart .qs-body p { font-size: 13px; line-height: 1.65; color: var(--muted-fg); margin: 0; }
+  .quickstart .qs-body p strong { color: var(--fg); font-weight: 600; }
+  .quickstart .qs-body .commands { margin: 10px 0 0; }
+  .quickstart .qs-foot { padding: 14px 22px; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--muted-fg); background: var(--muted); }
+  @media (max-width: 880px) { .quickstart .qs-step { grid-template-columns: 28px 1fr; gap: 12px; padding: 16px; } }
 </style>
 </head>
 <body>
@@ -939,6 +1026,67 @@
     </div>
   </section>
 
+  <!-- 开测前准备 · 从零上手 -->
+  <section class="quickstart" aria-label="开测前准备">
+    <div class="qs-head">
+      <p class="qs-title">开测前准备 · 从零到第一条命令</p>
+      <p>下面 3 个功能的命令默认你环境已就绪。<strong>第一次从零开始</strong>,先按这 4 步把"料"备齐(只做一次),后面的命令才能跑通。命令都在 lanPC 的 PowerShell 里跑(mac 上除 scan / list 外全报 Windows-only)。</p>
+    </div>
+    <div class="qs-step">
+      <span class="qs-n">0</span>
+      <div class="qs-body">
+        <p class="qs-st">让 uecm-cli 全局可用(只做一次)</p>
+        <p>在 lanPC PowerShell 跑下面这行,然后<strong>关掉重开一个窗口</strong>;之后任意目录直接敲 <span class="mono">uecm-cli</span>,本页命令复制即跑,不用加 <span class="mono">.\</span>。</p>
+        <div class="commands">
+          <div class="line"><span class="prompt">$</span><span class="cmd">[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path","User").TrimEnd(';') + ";C:\Tools\UECM", "User")</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="qs-step">
+      <span class="qs-n">1</span>
+      <div class="qs-body">
+        <p class="qs-st">把"要管的"机器加进库(scan 看全部,add 才选)</p>
+        <p>scan 会列出网段里<strong>所有</strong>在线机器(路由器 / NAS / 办公机都在内),但它<strong>不写库</strong>;你<strong>只 add 真正要部署的 Windows 渲染节点</strong>——NAS、路由器、Linux、普通办公 PC 不用加。add 给机器一个<strong>数字 id</strong>,list 看 id(后面 refresh / ini / health 全用这个 id,<strong>不是 IP</strong>)。</p>
+        <p style="margin-top:8px;">判断:scan 里 <span class="mono">winrm=✓</span> 的 Windows 机器直接 add;确实是渲染节点但 <span class="mono">winrm=✗</span> 的,先开通 WinRM(见下方功能 02)再 add;不需要加错了用 <span class="mono">machine delete &lt;id&gt; --yes</span> 删掉。</p>
+        <div class="commands">
+          <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine scan <span class="arg">192.168.10.0/24</span></span></div>
+          <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine add <span class="arg">--ip 192.168.10.20</span></span></div>
+          <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine list</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="qs-step">
+      <span class="qs-n">2</span>
+      <div class="qs-body">
+        <p class="qs-st">存凭据别名(<span class="mono">--cred-alias</span> 的来源)</p>
+        <p>本页所有 <span class="mono">--cred-alias prod</span> 里的 <span class="mono">prod</span> 都是<strong>占位名</strong>——得先 cred save 把别名存出来才存在。密码走 stdin 不留命令历史;账号填目标机上有效的本地管理员(如 bootstrap 建的 <span class="mono">uecm-svc</span>)。</p>
+        <div class="commands">
+          <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli cred list</span></div>
+          <div class="line"><span class="prompt">$</span><span class="cmd">"UecmRender@2026" | uecm-cli cred save <span class="arg">--alias render --user uecm-svc --pass-stdin</span></span></div>
+        </div>
+      </div>
+    </div>
+    <div class="qs-step">
+      <span class="qs-n">3</span>
+      <div class="qs-body">
+        <p class="qs-st">Microsoft 账户机器额外一步</p>
+        <p>像 razer <span class="mono">.173</span> 这种 MSA 登录的机器,连接命令要加 <span class="mono">--auth-method basic</span>(否则你给的凭据被 Negotiate SSO 顶掉),且目标机 + 主控机两端 WinRM 都要开 <span class="mono">AllowUnencrypted</span>。详见下方阅读说明。</p>
+        <div class="commands">
+          <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine refresh <span class="arg">9 --cred-alias render --auth-method basic</span></span></div>
+        </div>
+      </div>
+    </div>
+    <div class="qs-foot">备齐这 4 步,下面 3 个核心功能的命令就能照着跑了——<strong>id 用 machine list 里的数字,别名用你 cred save 存的名字</strong>。</div>
+  </section>
+
+  <!-- CLI 阅读说明 + auth-method 通用 flag -->
+  <section class="cli-legend" aria-label="CLI 命令阅读说明">
+    <p class="lg-title">怎么读下面的命令注解</p>
+    <p>每条 <span class="k">uecm-cli</span> 命令下方给三行:<strong>功能</strong>(它做什么)、<strong>作用</strong>(在流程里干嘛)、<strong>UI</strong>(这操作在前端对应哪个 <span class="k">invoke</span> 命令函数)。UI 行只标 <span class="k">commands::模块::函数</span>——这是前后端对应的<strong>硬锚点</strong>(将来哪个按钮点了就 invoke 它);按钮的中文文案以最终 UI 设计为准,这里不写死。</p>
+    <p>标 <span class="none-tag">✗ 仅 CLI</span> 的命令:UI 还没暴露(没注册到 <span class="k">invoke_handler</span>),只能命令行跑。目前是这几条:<span class="k">health run --cidr</span> 直扫网段、<span class="k">winrm probe</span> / <span class="k">winrm preflight</span>、<span class="k">zen enable</span> / <span class="k">zen disable</span>。</p>
+    <p><strong>通用认证 flag · <span class="k">--auth-method &lt;negotiate|basic&gt;</span></strong>(默认 <span class="k">negotiate</span>):凡是连远程的命令(带 <span class="k">--cred-alias</span> / <span class="k">--user</span> 的)都支持。Microsoft 账户登录的机器(如 razer <span class="k">.173</span>)上 <span class="k">negotiate</span> 会无视你传的凭据、回退成当前 Windows 登录身份(SSO),这时加 <span class="k">--auth-method basic</span> 强制用你给的账号——前提是目标机和主控机两端 WinRM 都开了 <span class="k">AllowUnencrypted</span>。UI 侧固定走 Negotiate,不暴露这个选项。</p>
+  </section>
+
   <!-- Feature 01 -->
   <article class="feature" id="f1">
     <header class="feature-head">
@@ -958,7 +1106,11 @@
     </p>
 
     <div class="workflow" aria-label="状态刷新与诊断流程">
-      <span class="step">扫 CIDR 发现机器<span class="k">（5985 / 445 / 135）</span></span>
+      <span class="step">scan 扫 CIDR 发现机器<span class="k">（5985 / 445 / 135）</span></span>
+      <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
+      <span class="step"><strong>add 入库拿 id</strong><span class="k">（scan 不写库）</span></span>
+      <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
+      <span class="step">list 看 id</span>
       <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
       <span class="step">refresh 读 UE 版本<span class="k">（注册表）</span>+ GPU<span class="k">（WMI）</span></span>
       <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
@@ -967,9 +1119,55 @@
       <span class="step">health run 出 24 项矩阵</span>
     </div>
 
+    <div class="callout" role="note">
+      <span class="glyph" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+      </span>
+      <div class="body">
+        <strong>顺序不能跳:scan 只探测、不写库。</strong>scan 发现的机器还没 id,必须先 <span class="mono">machine add --ip &lt;IP&gt;</span> 入库,再用 <span class="mono">machine list</span> 看分配到的<strong>数字 id</strong>——后面 refresh / ini / health 全用这个 id。
+        <span class="why">直接 refresh 一台没 add 的机器会报 <span class="mono">machine id=N not found</span>;拿 IP 当 id 会报 <span class="mono">invalid digit found in string</span>。</span>
+      </div>
+    </div>
+
     <div class="commands" aria-label="状态刷新命令">
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine scan <span class="arg">192.168.10.0/24</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine add <span class="arg">--ip 192.168.10.20</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine list</span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine delete <span class="arg">7 --yes</span></span></div>
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine refresh <span class="arg">3 --cred-alias prod</span></span></div>
+    </div>
+
+    <div class="cmd-notes" aria-label="machine 命令详解">
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli machine scan <span class="arg">&lt;cidr&gt;</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">并发探 <span class="k">5985</span> / <span class="k">445</span> / <span class="k">135</span> 三个端口,扫一段 CIDR 找出在线的 Windows 机器</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">纳管第一步——发现还没入库的机器;只发现,不写库</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::discovery::scan_network</span> · 网段扫描入口</span></div>
+      </div>
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli machine add <span class="arg">--ip &lt;IP&gt;</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">把一台机器按 IP 加进库,分配一个<strong>数字 id</strong></span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v"><strong>scan 不写库,add 才让机器可被管</strong>;<strong>只 add 要部署的渲染节点</strong>(NAS / 路由器 / 办公机不用加),后续 refresh / ini / health 全用这个 id</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::machines::add_machine</span>(把 scan 结果直接加用 <span class="cn-ui">discovery::add_discovered_machine</span>)</span></div>
+      </div>
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli machine list</span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">列出库里所有机器:<strong>数字 id</strong> / IP / 主机名 / 状态</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">refresh / ini / health 要的 id 从这里看——<strong>是 id 不是 IP</strong></span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::machines::list_machines</span> · 机器列表</span></div>
+      </div>
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli machine delete <span class="arg">&lt;id&gt; --yes</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">从库里删掉一台机器(按 id)</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">清理 scan 误加 / 重复 / 不再管的机器,让库只留要部署的渲染节点(库是持久的,跨 session 累积,要手动清)</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::machines::delete_machine</span> · 列表行删除入口(单台;UI 后续可做批量清空)</span></div>
+      </div>
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli machine refresh <span class="arg">&lt;id&gt; --cred-alias prod</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">远程读目标机 UE 版本(注册表)+ GPU(WMI)</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">刷新单台机器的现状快照;不写诊断库</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::discovery::refresh_machine</span> · 机器刷新入口</span></div>
+      </div>
     </div>
 
     <div class="split" role="list" aria-label="诊断子模块" style="margin-top:24px">
@@ -998,6 +1196,33 @@
           <div><span class="prompt">$</span> uecm-cli health run <span class="arg">--all --cred-alias prod</span></div>
           <div><span class="prompt">$</span> uecm-cli health results <span class="arg">7</span></div>
         </div>
+      </div>
+    </div>
+
+    <div class="cmd-notes" aria-label="ini / health 命令详解">
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli ini scan <span class="arg">--machine-ids 3,4,5 --cred-alias prod</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">扫 project / user / engine 三级 INI,跑 base <span class="k">R001–R025</span> +(机器注册了 zen 则自动追加)<span class="k">R012–R018</span> 规则</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">找出硬编码 DDC 路径、deprecated CVar、PSO / BackendGraph 配置问题,产出可一键修的 findings</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::ini_scanner::scan_inis</span> · 配置扫描入口</span></div>
+      </div>
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli ini apply <span class="arg">&lt;finding_id&gt; --yes</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">对单个 finding 应用一键修复,改前自动写 <span class="k">.bak</span></span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">把扫出的配置问题就地修掉,可回滚</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::ini_scanner::apply_finding</span> · 修复应用入口</span></div>
+      </div>
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli health run <span class="arg">--all --cred-alias prod</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">跑 24 项体检矩阵(L1 端口 / L2 bootstrap / L3 业务 / derived / zen),每行带 remediation 文案</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">看清集群健康度;开通后复验、部署后回跑都靠它(横切工具)</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::health_check::run_health_check</span>(<span class="k">--all</span> / 按已选机器);<span class="cn-ui none">✗ 仅 CLI</span> 的 <span class="k">--cidr</span> 直扫(UI 强制要 machine_ids)</span></div>
+      </div>
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli health results <span class="arg">&lt;scan_run_id&gt;</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">拉某次体检 run 的 N 机 × 24 行结果矩阵</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">复看历史体检结果与修复建议</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::health_check::list_health_results_for_run</span> · 结果查看入口</span></div>
       </div>
     </div>
   </article>
@@ -1057,6 +1282,21 @@
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli winrm bootstrap <span class="arg">lanpc --user Administrator --pass-stdin</span></span></div>
     </div>
 
+    <div class="cmd-notes" aria-label="winrm 命令详解">
+      <div class="cmd-note cli-only">
+        <span class="cn-cmd">uecm-cli winrm preflight <span class="arg">&lt;host&gt; --user &lt;u&gt; --pass-stdin [--probe]</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">5 步可达性体检(tcp_135 / 445 → 挂 <span class="k">ADMIN$</span> → 写删探针 → 加 <span class="k">--probe</span> 才真跑一次 PsExec),输出 viable / likely_viable / blocked / uncertain</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">远程推 bootstrap 前先判 Path B 可不可行,避免盲跑下一步</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui none">✗ 仅 CLI</span> · preflight 未注册到 invoke_handler,UI 没有这个按钮</span></div>
+      </div>
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli winrm bootstrap <span class="arg">&lt;host&gt; --user &lt;u&gt; --pass-stdin [--enable-local-admin]</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">Path B:用 bundled PsExec64 远程推 enable-winrm.ps1 一次开通 WinRM,顺手写 operator 端 TrustedHosts</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">把一台可达机器从「发现」带到「可远程管」</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::bootstrap::bootstrap_winrm</span> · 远程开通入口</span></div>
+      </div>
+    </div>
+
     <div class="criterion" role="note">
       <span class="ck"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></span>
       <span class="from mono">新机接入</span>
@@ -1072,14 +1312,12 @@
     </a>
   </article>
 
-<<<<<<< Updated upstream
-=======
-  <!-- Deep dive · F01 · WinRM Bootstrap -->
+  <!-- Deep dive · F02 · WinRM Bootstrap -->
   <section class="deepdive" id="winrm-deep" aria-labelledby="winrm-deep-title">
     <header class="deepdive-head">
-      <div class="ref">01<span style="font-size:0.55em;letter-spacing:-0.04em;">a</span></div>
+      <div class="ref">02<span style="font-size:0.55em;letter-spacing:-0.04em;">a</span></div>
       <div class="heading">
-        <span class="label">Deep dive · F01 子系统</span>
+        <span class="label">Deep dive · F02 子系统</span>
         <h2 id="winrm-deep-title">WinRM Bootstrap 内部分解</h2>
       </div>
     </header>
@@ -1325,19 +1563,19 @@
       <div class="cli-ref" role="list">
         <div class="cli-row" role="listitem">
           <div class="cli-cmd">uecm-cli winrm probe <span class="arg">&lt;host&gt;</span></div>
-          <div class="cli-desc">单机 WinRM 端点探测，返回 <span class="k">ok</span> / <span class="k">message</span> / <span class="k">latency_ms</span>。失败时 CLI 非零退出。</div>
+          <div class="cli-desc">单机 WinRM 端点探测，返回 <span class="k">ok</span> / <span class="k">message</span> / <span class="k">latency_ms</span>。失败时 CLI 非零退出。 <span class="cn-ui none">→ UI 无(仅 CLI)</span></div>
         </div>
         <div class="cli-row" role="listitem">
           <div class="cli-cmd">uecm-cli winrm preflight <span class="arg">&lt;host&gt;</span> <span class="opt">--user</span> <span class="arg">admin</span> <span class="opt">--pass-stdin</span> <span class="opt">[--probe]</span></div>
-          <div class="cli-desc">跑 5 步 preflight。默认 <strong>Shallow 零痕迹</strong>，加 <span class="k">--probe</span> 切 <strong>Deep</strong>（写 2 条 Event）。verdict=blocked 或 uncertain 时 CLI 非零退出，避免自动化盲跑下一步。</div>
+          <div class="cli-desc">跑 5 步 preflight。默认 <strong>Shallow 零痕迹</strong>，加 <span class="k">--probe</span> 切 <strong>Deep</strong>（写 2 条 Event）。verdict=blocked 或 uncertain 时 CLI 非零退出，避免自动化盲跑下一步。 <span class="cn-ui none">→ UI 无(仅 CLI)</span></div>
         </div>
         <div class="cli-row" role="listitem">
           <div class="cli-cmd">uecm-cli winrm bootstrap-script <span class="opt">[--output setup.ps1]</span></div>
-          <div class="cli-desc">把 enable-winrm.ps1 的源码原样输出到 stdout 或文件，给现场人员当离线参考 / GPO 输入用。</div>
+          <div class="cli-desc">把 enable-winrm.ps1 的源码原样输出到 stdout 或文件，给现场人员当离线参考 / GPO 输入用。 <span class="cn-ui">→ commands::bootstrap::get_winrm_bootstrap_script</span></div>
         </div>
         <div class="cli-row" role="listitem">
           <div class="cli-cmd">uecm-cli winrm bootstrap <span class="arg">&lt;host&gt;</span> <span class="opt">--user</span> <span class="arg">admin</span> <span class="opt">--pass-stdin</span> <span class="opt">[--enable-local-admin]</span></div>
-          <div class="cli-desc">触发 Path B 远程推送。内部调 bootstrap-winrm-remote.ps1，需要 bundled PsExec64.exe 可达。Workgroup 场景加 <span class="k">--enable-local-admin</span>。</div>
+          <div class="cli-desc">触发 Path B 远程推送。内部调 bootstrap-winrm-remote.ps1，需要 bundled PsExec64.exe 可达。Workgroup 场景加 <span class="k">--enable-local-admin</span>。 <span class="cn-ui">→ commands::bootstrap::bootstrap_winrm</span></div>
         </div>
       </div>
     </div>
@@ -1381,49 +1619,6 @@
     </div>
   </section>
 
-  <!-- Feature 02 -->
-  <article class="feature" id="f2">
-    <header class="feature-head">
-      <div class="feature-num">02</div>
-      <div class="feature-title">
-        <h2>SMB 共享配置</h2>
-        <div class="domains">
-          <span class="domain accent">share</span>
-        </div>
-      </div>
-    </header>
-
-    <p class="gist">
-      在目标机上把 DDC 路径开成 SMB 共享，<strong>是后面所有缓存分发的物理基础</strong>。两种模式按集群信任度选：
-    </p>
-
-    <div class="modes" role="list" aria-label="两种共享模式">
-      <div class="mode" role="listitem">
-        <div class="mkind">Mode A</div>
-        <h3 class="mtitle">信任内网</h3>
-        <p class="msub">最快上手，适合封闭 VP 棚。</p>
-        <p class="mech">开启 <span class="k">Guest</span> 账户，把目标目录的 NTFS / Share 权限都开成 <span class="k">Everyone : Full</span>。集群内任何机器、任何用户都能直接读写。</p>
-      </div>
-      <div class="mode" role="listitem">
-        <div class="mkind">Mode B</div>
-        <h3 class="mtitle">严格凭据 + SYSTEM 注入</h3>
-        <p class="msub">区别于「手撕 net share」的关键能力。</p>
-        <p class="mech">新建本地账号 <span class="k">ddc-svc</span>，把凭据同时写到当前用户 Credential Manager 和 <strong>SYSTEM 凭据空间</strong>，让 LocalSystem 启动的服务（如 RenderStream Service）也能在无人登录时挂载共享。</p>
-      </div>
-    </div>
-
-    <p class="mode-note">
-      <strong>选择依据：</strong>如果集群里跑了 RenderStream 这类 SYSTEM 服务，必须用 Mode B；否则服务进程拿不到任何用户凭据，路径会被解析为本地不存在。
-    </p>
-
-    <div class="commands" aria-label="典型命令" style="margin-top:24px">
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli share create <span class="arg">--host lanpc --mode A</span></span></div>
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli share inject-system-cred <span class="arg">--host lanpc --user ddc-svc</span></span></div>
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli share list <span class="arg">--all</span></span></div>
-    </div>
-  </article>
-
->>>>>>> Stashed changes
   <!-- Feature 03 -->
   <article class="feature" id="f3">
     <header class="feature-head">
@@ -1470,6 +1665,27 @@
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli ddc distribute <span class="arg">--project-id 7 --source-machine 3 --targets 4,5,6 --backend auto --yes</span></span></div>
     </div>
 
+    <div class="cmd-notes" aria-label="ddc 命令详解">
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli ddc generate <span class="arg">--project-id &lt;id&gt; --source-machine &lt;id&gt; --backend legacy</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">调 UE runner 把工程 DDC 烤成一个 <span class="k">.ddp</span> pak</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">legacy 路径第一步,产出可分发的缓存包</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::ddc_pak::generate_ddc_pak</span> · 生成 Pak 入口</span></div>
+      </div>
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli ddc verify <span class="arg">--project-id &lt;id&gt; --source-machine &lt;id&gt;</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">校验已生成 pak 的完整性</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">分发前确认 pak 没坏</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::ddc_pak::verify_pak_output</span> · 校验入口</span></div>
+      </div>
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli ddc distribute <span class="arg">--project-id &lt;id&gt; --source-machine &lt;id&gt; --targets 4,5,6 --backend auto --yes</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">Robocopy 把 pak 扇出到目标机 SMB 共享;<span class="k">--backend auto</span> 按 UE 版本决策 legacy / zen</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">缓存落到全集群,机器开工程从共享读不再本地重编译</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::ddc_pak::distribute_ddc_pak</span> · 分发入口</span></div>
+      </div>
+    </div>
+
     <p class="mode-note">
       <strong>legacy 分发的前置 · SMB 共享创建：</strong>把 DDC 目录开成共享有两种模式——<code>Mode A</code> 开 Guest + Everyone:Full（封闭 VP 棚最快上手）；<code>Mode B</code> 建 ddc-svc 账号 + 把凭据注入 <strong>SYSTEM 凭据空间</strong>（集群里跑 RenderStream 这类 LocalSystem 服务时必须用，否则服务进程拿不到凭据、共享路径会被解析为本地不存在）。zen 模式走 HTTP，不需要这一步。
     </p>
@@ -1479,6 +1695,21 @@
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli share inject-system-cred <span class="arg">--client-host worker1 --target-host lanpc --svc-user ddc-svc --yes</span></span></div>
     </div>
 
+    <div class="cmd-notes" aria-label="share 命令详解">
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli share create <span class="arg">--mode &lt;a|b&gt; --host &lt;h&gt; --share DDC --local-path &lt;路径&gt; --yes</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">把目标目录开成 SMB 共享。Mode A:开 Guest + Everyone:Full;Mode B:建 <span class="k">ddc-svc</span> 账号 + 把凭据注入 SYSTEM 凭据空间</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">legacy 分发的物理通道;zen 走 HTTP 不需要这步</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::shares::create_share</span> · 共享创建入口</span></div>
+      </div>
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli share inject-system-cred <span class="arg">--client-host &lt;c&gt; --target-host &lt;t&gt; --svc-user ddc-svc --yes</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">把访问共享的凭据写进 client 机的 <strong>SYSTEM 凭据空间</strong></span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">让 LocalSystem 启动的服务(如 RenderStream)无人登录时也能挂共享</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::shares::inject_share_credential_to_clients</span> · SYSTEM 凭据注入入口</span></div>
+      </div>
+    </div>
+
     <p class="mode-note"><strong>切到 zen 的典型链路：</strong>注册端点 → 探活 → master 装服务 → 集群改 INI 切 ZenShared upstream。</p>
 
     <div class="commands" aria-label="zen daemon 命令">
@@ -1486,6 +1717,33 @@
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli zen probe <span class="arg">--all --cred-alias prod</span></span></div>
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli zen service install <span class="arg">--endpoint-id 1 --cred-alias prod --yes</span></span></div>
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli zen enable <span class="arg">--project-id 7 --machines 3,4,5 --upstream-endpoint-id 1 --cred-alias prod --yes</span></span></div>
+    </div>
+
+    <div class="cmd-notes" aria-label="zen 命令详解">
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli zen register <span class="arg">--machine &lt;id&gt; --declared-port 8558 --role shared_upstream --lifecycle installed_service --data-dir &lt;路径&gt;</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">登记一个 zen 端点(机器 / 端口 / 角色 / 生命周期 / 数据目录)</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">zen 路径起点,把端点纳入 UECM 管理</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::zen::zen_register</span> · 端点注册入口</span></div>
+      </div>
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli zen probe <span class="arg">--all --cred-alias prod</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">批量探活所有 zen 端点的 <span class="k">/health</span></span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">确认 zen 服务在线可达</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::zen::zen_probe</span> · 探活入口</span></div>
+      </div>
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli zen service install <span class="arg">--endpoint-id 1 --cred-alias prod --yes</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">在 master 节点装 ZenServer Windows 服务</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">让 zen 缓存以服务形式常驻</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::zen::zen_service_install</span> · 服务安装入口(start / stop / status / uninstall 同有)</span></div>
+      </div>
+      <div class="cmd-note cli-only">
+        <span class="cn-cmd">uecm-cli zen enable <span class="arg">--project-id 7 --machines 3,4,5 --upstream-endpoint-id 1 --cred-alias prod --yes</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">改工程 DefaultEngine.ini,把指定机器指向 ZenShared upstream</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">把集群正式切到 zen 缓存(对应的 <span class="k">zen disable</span> 只删 key,不自动恢复 legacy)</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui none">✗ 仅 CLI</span> · zen enable / disable(改 INI 的危险操作)未注册到 invoke_handler</span></div>
+      </div>
     </div>
 
     <div class="callout" role="note">
@@ -1524,6 +1782,27 @@
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli pso distribute <span class="arg">--project-id 7 --source-machine 3 --targets 4,5,6 --yes</span></span></div>
     </div>
 
+    <div class="cmd-notes" aria-label="pso 命令详解">
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli pso verify <span class="arg">--project-id &lt;id&gt;</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">验工程 ConsoleVariables.ini 里的 <span class="k">R008–R010</span> PSO precaching CVar 配置</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">采集前确认 precaching 开对了,否则采不到东西</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::ini_scanner::verify_pso_precaching</span> · 注意挂在 ini_scanner 模块,不在 pso</span></div>
+      </div>
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli pso collect <span class="arg">--project-id &lt;id&gt; --source-machine &lt;id&gt;</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">UE <span class="k">-game</span> 模式跑采集,产出 <span class="k">.upipelinecache</span> / <span class="k">.stablepc.csv</span></span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">把运行时见过的 GPU pipeline 组合抓成缓存文件</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::pso::start_pso_collection</span> · 采集入口</span></div>
+      </div>
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli pso distribute <span class="arg">--project-id &lt;id&gt; --source-machine &lt;id&gt; --targets 4,5,6 --yes</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">带 GPU 一致性检测扇出 PSO 缓存,GPU mismatch 直接拒绝(不靠 flag 触发)</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">切场零卡顿缓存推到全集群,避免跨 GPU 首帧重建 hitch</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::pso::distribute_pso_cache</span> · 分发入口</span></div>
+      </div>
+    </div>
+
     <div class="callout" role="note">
       <span class="glyph" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1549,6 +1828,21 @@
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli deploy ddc <span class="arg">--plan ./deploy-plan.json --yes</span></span></div>
     </div>
 
+    <div class="cmd-notes" aria-label="deploy 命令详解">
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli deploy ddc <span class="arg">--plan &lt;计划.json&gt; --dry-run</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">预览 11 步部署编排,不执行任何改动</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">跑前看清每一步要干啥,确认计划无误</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::deploy::deploy_ddc_plan_preview</span> · 计划预览入口</span></div>
+      </div>
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli deploy ddc <span class="arg">--plan &lt;计划.json&gt; --yes</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">执行 11 步编排:开目录 → 建 SMB 共享 → 写 BackendGraph → 生成 / 分发 pak → 设 PSO CVar → 采集 / 分发 PSO → 验证启动日志</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">把 ③ 的所有手动步骤一键串成一条工作流,支持 <span class="k">--stop-on-failure</span></span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::deploy::deploy_ddc_run</span> · 执行部署入口</span></div>
+      </div>
+    </div>
+
     <p class="mode-note" style="margin-top:24px">
       <strong>验证生效 · 别让「配了」等于「生效了」：</strong>部署跑完别假设缓存就在用。<code>log verify-startup</code> 跑一次 nullrhi 编辑器、解析 <code>LogDerivedDataCache</code> 启动输出，确认 <code>ZenShared … OK!</code>（或 legacy 的 <code>Using Shared data cache path</code>）真的出现；再回 <a href="#f1">① health</a> 看 <code>zen_*</code> / <code>ini_consistency</code> / <code>pso_precaching</code> 这几行转绿。
     </p>
@@ -1556,6 +1850,21 @@
     <div class="commands" aria-label="验证生效命令">
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli log verify-startup <span class="arg">--host lanpc --editor-exe "C:\UE\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" --project "D:\Show\My.uproject"</span></span></div>
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli health run <span class="arg">--all --cred-alias prod</span></span></div>
+    </div>
+
+    <div class="cmd-notes" aria-label="验证生效命令详解">
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli log verify-startup <span class="arg">--host &lt;h&gt; --editor-exe &lt;UnrealEditor-Cmd.exe&gt; --project &lt;.uproject&gt;</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">跑一次 nullrhi 编辑器,解析 <span class="k">LogDerivedDataCache</span> 启动输出</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">确认缓存真生效——<span class="k">ZenShared … OK!</span>(或 legacy 的 <span class="k">Using Shared data cache path</span>)真的出现</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::log_verify::run_log_verify</span> · 启动验证入口</span></div>
+      </div>
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli health run <span class="arg">--all --cred-alias prod</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">同 ① 的 24 项体检矩阵</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">部署后回跑,看 <span class="k">zen_*</span> / <span class="k">ini_consistency</span> / <span class="k">pso_precaching</span> 这几行转绿</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::health_check::run_health_check</span> · 详见 ① 注解</span></div>
+      </div>
     </div>
   </article>
 
@@ -1626,6 +1935,58 @@
         label.textContent = "Light";
       }
     }
+  })();
+
+  // 给每个命令块挂"复制"按钮:复制时自动去掉 $ / PS> 提示符
+  (function () {
+    const COPY_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+    function lineText(el) {
+      const clone = el.cloneNode(true);
+      clone.querySelectorAll(".prompt, .copy-btn").forEach((n) => n.remove());
+      return clone.textContent.replace(/\s+/g, " ").trim();
+    }
+    function commandsOf(box) {
+      const parts = [];
+      if (box.classList.contains("commands")) {
+        box.querySelectorAll(".line").forEach((l) => { const t = lineText(l); if (t) parts.push(t); });
+      } else if (box.classList.contains("pcmd")) {
+        box.querySelectorAll(":scope > div").forEach((d) => { const t = lineText(d); if (t) parts.push(t); });
+      } else if (box.classList.contains("cli-row")) {
+        const c = box.querySelector(".cli-cmd");
+        if (c) parts.push(c.textContent.replace(/\s+/g, " ").trim());
+      } else if (box.classList.contains("cmd-note")) {
+        const c = box.querySelector(".cn-cmd");
+        if (c) parts.push(c.textContent.replace(/\s+/g, " ").trim());
+      }
+      return parts.join("\n");
+    }
+    function attach(box) {
+      const text = commandsOf(box);
+      if (!text) return;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "copy-btn";
+      btn.setAttribute("aria-label", "复制命令");
+      btn.innerHTML = COPY_ICON + "<span>复制</span>";
+      const label = btn.querySelector("span");
+      btn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch (_) {
+          const ta = document.createElement("textarea");
+          ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+          document.body.appendChild(ta); ta.focus(); ta.select();
+          try { document.execCommand("copy"); } catch (e2) {}
+          ta.remove();
+        }
+        btn.classList.add("copied");
+        label.textContent = "已复制";
+        setTimeout(() => { btn.classList.remove("copied"); label.textContent = "复制"; }, 1400);
+      });
+      box.appendChild(btn);
+    }
+    document.querySelectorAll(".commands, .pcmd, .cli-row, .cmd-note").forEach(attach);
   })();
 </script>
 </body>

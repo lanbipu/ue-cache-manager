@@ -1,5 +1,9 @@
 # CLAUDE.md
 
+## uecm-cli 平台限制（别再在 mac 上试核心命令）
+
+除 `machine scan` / `machine list` 外，所有命令（refresh / ini / health / zen / ddc / pso / share / deploy / log 等）只能在 **Windows（lanPC）** 上跑，非 Windows 一律报 Windows-only。核心功能测试一律在 lanPC：`C:\Tools\UECM\uecm-cli.exe`（源码仓 `E:\AIWorkspace\vp\ue-cache-manager`，build 后复制过去）；mac 端只用于 `scan` / `list` 和编译核对。
+
 ## 远程通道选型（WinRM vs Listener Agent）
 
 UECM 所有功能走 **WinRM pull 模式**（operator 触发的离散配置 / 短任务），不引入常驻 agent；好处是无升级负担、走 Windows 原生认证、动作可审计。仅当 DDC distribute / PSO collect 等长任务体验扛不住、要做 nDisplay-like 实时编排（参考 Switchboard Listener）、或需节点主动上报（UE 崩溃 / OOM / GPU 状态）时，才为对应域单独引入 lightweight Windows Service agent；配置类继续走 WinRM，两条通道并存。
