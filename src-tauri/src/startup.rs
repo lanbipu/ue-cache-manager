@@ -38,6 +38,21 @@ pub fn resolve_db_path() -> UecmResult<PathBuf> {
     Ok(base.data_dir().join(APP_IDENTIFIER).join("uecm.sqlite"))
 }
 
+/// Resolves the UECM config directory (where the SSH transport key, public
+/// key, and known_hosts live). Mirrors `resolve_db_path`'s parent so a
+/// `UECM_DB_PATH` test override keeps key material next to the test DB.
+pub fn resolve_config_dir() -> UecmResult<PathBuf> {
+    if let Ok(override_path) = env::var("UECM_DB_PATH") {
+        if let Some(parent) = Path::new(&override_path).parent() {
+            return Ok(parent.to_path_buf());
+        }
+    }
+    let base = BaseDirs::new().ok_or_else(|| {
+        UecmError::Configuration("failed to resolve user base directories".into())
+    })?;
+    Ok(base.data_dir().join(APP_IDENTIFIER))
+}
+
 /// Opens the DB (WAL mode is set inside `data::open`) and runs idempotent
 /// migrations. Both binaries call this. Creates the parent directory if it
 /// does not exist — important for `UECM_DB_PATH` overrides that point at a
@@ -161,6 +176,15 @@ mod tests {
             path.parent().is_some(),
             "DB path must have a parent component"
         );
+    }
+
+    #[test]
+    fn config_dir_follows_db_path_override() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+        env::set_var("UECM_DB_PATH", "/tmp/uecm-test-abc/uecm.sqlite");
+        let dir = resolve_config_dir().unwrap();
+        assert_eq!(dir, PathBuf::from("/tmp/uecm-test-abc"));
+        env::remove_var("UECM_DB_PATH");
     }
 
     #[test]
