@@ -133,9 +133,11 @@ impl SecretStore {
 
 ## Task 组 3：收口
 
-- [ ] grep 确认无 secret 域 + secret 域均脱离 powershell::run_json（仅剩 winrm.rs/bootstrap/preflight/credentials 待 A5）。
-- [ ] cargo test --lib 全绿 + build；lanPC 跑一次完整 health run + 一次 share/distribute 端到端。
-- [ ] 提交收口。
+- [x] grep 确认无 secret 域 + secret 域均脱离 powershell::run_json。
+- [x] cargo test --lib 全绿（975）+ `pnpm tauri build --no-bundle` 通过。lanPC 端到端抽验**待 lanPC 重 onboard**（Mac keystore key 不匹配，from_config() 认证不通）。
+- [x] A4(inject) 合入 main（merge c851093，2026-05-23）。
+
+> ⚠️ **A5 阻塞勘误（2026-05-23）**：本 plan「完成后只剩 winrm.rs/DPAPI 待 A5 删」的假设**与代码不符**。grep 确认 winrm.rs 仍被 **zen（CLI+core+commands）、machine/discovery 探测、winrm 命令域** 活用；DPAPI（resolve/store_password）仍被 **整个 commands/* UI 层（14 文件，= 子项目 B）+ credential_args** 活用；vestigial `_with_credential` 参数被 commands/batch·env·ini 调用。A0–A4 从没迁 zen / 探测 / UI commands 层。**A5 现在删任何一项都会炸 build，已阻塞**。前置：① 迁 zen + machine/discovery 探测到 SSH；② 子项目 B 迁 UI off DPAPI/WinRM。详见 memory `a5_blocked_winrm_dpapi_live`。
 
 ---
 
