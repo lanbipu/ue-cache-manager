@@ -417,11 +417,16 @@ pub async fn distribute_ddc_pak(
         // behavior of letting a manual/override UNC through. Cred from the
         // SecretStore alias if given (Mode B svc = ddc-svc), else none (open share).
         Some(unc) => {
-            let pass = match source_smb_credential_alias.as_deref() {
-                Some(a) => crate::core::secrets::SecretStore::from_config()?.get(a)?,
-                None => None,
+            let (user, pass) = match source_smb_credential_alias.as_deref() {
+                Some(a) => {
+                    let pass = crate::core::secrets::SecretStore::from_config()?.get(a)?;
+                    // Managed-share ACL only grants the share's actual service
+                    // account — read it from the credential record, not a default.
+                    let user = crate::data::credentials::find_by_alias(&db, a)?.map(|c| c.username);
+                    (user, pass)
+                }
+                None => (None, None),
             };
-            let user = pass.as_ref().map(|_| "ddc-svc".to_string());
             (Some(unc.clone()), user, pass)
         }
         // No explicit UNC: auto-derive the source share + cred from the SecretStore.
