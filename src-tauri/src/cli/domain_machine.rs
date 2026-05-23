@@ -456,12 +456,19 @@ fn deep_scan(
             }
         };
 
-        // Explicit reachability probe so we can tell "WinRM closed" (skip) apart
+        // Explicit reachability probe so we can tell "unreachable" (skip) apart
         // from "reachable but detection failed" (failure). `refresh` re-probes —
-        // the small double-probe is worth the accurate classification.
-        let probe_ok = exec.probe(&host, None).map(|r| r.ok).unwrap_or(false);
+        // the small double-probe is worth the accurate classification. Preserve
+        // the actual probe error in `reason` so a host-key / auth / config
+        // failure is distinguishable from a plain offline node (not swallowed).
+        let probe_outcome = exec.probe(&host, None);
+        let probe_ok = matches!(&probe_outcome, Ok(p) if p.ok);
         if !probe_ok {
             skipped += 1;
+            let reason = match &probe_outcome {
+                Ok(p) => format!("SSH probe not ok: {}", p.message),
+                Err(e) => format!("SSH probe error: {}", e),
+            };
             ctx.emitter
                 .emit_event(&Event::Completed {
                     summary: json!({
@@ -469,8 +476,8 @@ fn deep_scan(
                         "host": host,
                         "step": "deep_scan",
                         "skipped": true,
-                        "reason": "SSH unreachable",
-                        "hint": "node not reachable over SSH; onboard via UECM-Bootstrap.cmd (check uecm-svc / sshd)",
+                        "reason": reason,
+                        "hint": "node not reachable over SSH; if this is a host-key/auth error re-onboard via UECM-Bootstrap.cmd (check uecm-svc / sshd / known_hosts)",
                     }),
                 })
                 .ok();
