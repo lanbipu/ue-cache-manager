@@ -1,7 +1,6 @@
 //! Robocopy fan-out planning and per-target execution for DDC Pak files.
 
-#[cfg(windows)]
-use crate::core::powershell; // decode_subprocess_output, used by the loopback robocopy path
+use crate::core::powershell; // run_json_stdin/script_path, used by the loopback distribute path
 use crate::core::ssh::{run_json, NodeScript, SshExecutor};
 use crate::data::{
     machines as data_machines,
@@ -438,77 +437,30 @@ pub async fn run_one_with_profile(
     })
 }
 
+/// Loopback distribution: run the SAME node-pure script the remote SSH path
+/// uses, but locally on the operator host (no SSH round-trip to self). The script
+/// mounts the source share with the forwarded SourceSmb credential (New-PSDrive)
+/// before robocopy, so a managed (Mode B) source authenticates exactly as it does
+/// on a remote target — the SSH migration dropped the operator-side `cmdkey`
+/// persistence that the old bespoke local robocopy silently relied on.
 fn run_local_robocopy(
-    _profile: &DistributeProfile,
+    profile: &DistributeProfile,
     item: &DistributePlanItem,
     preflight: bool,
 ) -> UecmResult<DistributeOutcome> {
-    #[cfg(windows)]
-    {
-        let mut args = vec![
-            item.source_unc.as_str(),
-            item.target_local.as_str(),
-            item.file_name.as_deref().unwrap_or(_profile.primary_glob()),
-            "/E",
-            "/R:3",
-            "/W:5",
-            "/NP",
-            "/NDL",
-            "/NJH",
-            "/NJS",
-            "/BYTES",
-        ];
-        if preflight {
-            args.push("/L");
-        }
-        let output = std::process::Command::new("robocopy.exe")
-            .args(args)
-            .output()
-            .map_err(UecmError::Io)?;
-        let code = output.status.code().unwrap_or(-1);
-        let stdout = powershell::decode_subprocess_output(&output.stdout);
-        let stderr = powershell::decode_subprocess_output(&output.stderr);
-        let stdout_tail = stdout
-            .lines()
-            .rev()
-            .take(30)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join("\n");
-        let bytes_copied = stdout
-            .lines()
-            .find_map(|line| {
-                let (_, value) = line.split_once("Bytes")?;
-                let digits: String = value.chars().filter(|ch| ch.is_ascii_digit()).collect();
-                digits.parse::<i64>().ok()
-            })
-            .unwrap_or_default();
-
-        Ok(DistributeOutcome {
-            target_machine_id: item.target_machine_id,
-            ok: code < 8,
-            exit_code: code,
-            bytes_copied,
-            stdout_tail,
-            message: if code < 8 {
-                None
-            } else if stderr.trim().is_empty() {
-                Some(stdout)
-            } else {
-                Some(stderr)
-            },
-        })
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = item;
-        let _ = preflight;
-        Err(UecmError::OperationFailed(
-            "local robocopy distribution requires Windows".into(),
-        ))
-    }
+    let payload = build_distribute_payload(item, preflight).to_string();
+    let raw: DistributeRaw = powershell::run_json_stdin(
+        &powershell::script_path(profile.ps_script),
+        &payload,
+    )?;
+    Ok(DistributeOutcome {
+        target_machine_id: item.target_machine_id,
+        ok: raw.ok,
+        exit_code: raw.exit_code.parse().unwrap_or(-1),
+        bytes_copied: raw.bytes_copied.parse().unwrap_or_default(),
+        stdout_tail: raw.stdout_tail,
+        message: raw.message,
+    })
 }
 
 #[cfg(test)]

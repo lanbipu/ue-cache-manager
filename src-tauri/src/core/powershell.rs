@@ -169,15 +169,62 @@ pub fn run_script(script_path: &Path, args: &[&str]) -> UecmResult<ScriptResult>
     }
 }
 
-/// Run a script and parse stdout as JSON of type T.
+/// Run a .ps1 script feeding `stdin` to its standard input. The node-pure
+/// scripts read their JSON args via `[Console]::In.ReadToEnd()`, so this lets the
+/// loopback distribute path run the SAME script locally as the remote SSH path.
+pub fn run_script_stdin(script_path: &Path, stdin: &str) -> UecmResult<ScriptResult> {
+    #[cfg(windows)]
+    {
+        use std::io::Write;
+        use std::process::Stdio;
+        let mut child = Command::new("powershell.exe")
+            .arg("-NoProfile")
+            .arg("-NonInteractive")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-File")
+            .arg(script_path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| {
+                UecmError::PowerShell(format!("failed to spawn powershell.exe: {}", e))
+            })?;
+        child
+            .stdin
+            .take()
+            .ok_or_else(|| UecmError::PowerShell("failed to open powershell stdin".into()))?
+            .write_all(stdin.as_bytes())
+            .map_err(|e| {
+                UecmError::PowerShell(format!("failed to write powershell stdin: {}", e))
+            })?;
+        let output = child.wait_with_output().map_err(|e| {
+            UecmError::PowerShell(format!("failed to wait for powershell.exe: {}", e))
+        })?;
+        Ok(ScriptResult {
+            stdout: decode_subprocess_output(&output.stdout),
+            stderr: decode_subprocess_output(&output.stderr),
+            exit_code: output.status.code().unwrap_or(-1),
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (script_path, stdin);
+        Err(UecmError::PowerShell(
+            "PowerShell sidecar is Windows-only".to_string(),
+        ))
+    }
+}
+
+/// Parse a sidecar's stdout as JSON of type T.
 ///
 /// Most sidecars emit `{ ok: bool, ... }` to stdout AND `exit 1` on the
 /// catch path so callers that only check exit code see an empty stderr.
 /// Try to parse stdout first regardless of exit code — if it deserializes
 /// to T, return it (caller inspects the `ok` field). Only fall back to the
 /// raw exit-code error message when stdout doesn't parse cleanly.
-pub fn run_json<T: DeserializeOwned>(script_path: &Path, args: &[&str]) -> UecmResult<T> {
-    let result = run_script(script_path, args)?;
+fn parse_script_json<T: DeserializeOwned>(result: ScriptResult) -> UecmResult<T> {
     if !result.stdout.trim().is_empty() {
         if let Ok(parsed) = serde_json::from_str::<T>(&result.stdout) {
             return Ok(parsed);
@@ -200,6 +247,17 @@ pub fn run_json<T: DeserializeOwned>(script_path: &Path, args: &[&str]) -> UecmR
             e, result.stdout
         ))
     })
+}
+
+/// Run a script with args and parse stdout as JSON of type T.
+pub fn run_json<T: DeserializeOwned>(script_path: &Path, args: &[&str]) -> UecmResult<T> {
+    parse_script_json(run_script(script_path, args)?)
+}
+
+/// Like `run_json`, but feeds `stdin` to the script (for node-pure scripts that
+/// read their JSON args from standard input rather than `-File` arguments).
+pub fn run_json_stdin<T: DeserializeOwned>(script_path: &Path, stdin: &str) -> UecmResult<T> {
+    parse_script_json(run_script_stdin(script_path, stdin)?)
 }
 
 #[cfg(test)]
