@@ -22,22 +22,47 @@ pub struct ProbeResult {
     pub latency_ms: i64,
 }
 
-/// 传输抽象。生产实现是 `SshExecutor`；测试用 fake 注入预置 JSON。
-pub trait RemoteExecutor {
-    fn run(&self, host: &str, script: &NodeScript) -> UecmResult<String>;
-    fn probe(&self, host: &str) -> UecmResult<ProbeResult>;
+/// 一次远程执行的原始结果。`run` 返回完整三元组（不在非零退出时提前判失败），
+/// 让 `run_json` 能像 `powershell::run_json` 那样先解析 stdout 的 `{ok,...}` envelope。
+#[derive(Debug, Clone)]
+pub struct ScriptOutput {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i32,
 }
 
-/// 跑脚本并把 stdout 解析成 JSON。
+/// 传输抽象。生产实现是 `SshExecutor`；测试用 fake 注入预置输出。
+/// `run` 只在「ssh 进程都起不来 / stdin 写失败」时返 Err；进程跑完（任何退出码）
+/// 都返回 `ScriptOutput`，由 `run_json` 决定成败语义。
+pub trait RemoteExecutor {
+    fn run(&self, host: &str, script: &NodeScript) -> UecmResult<ScriptOutput>;
+    fn probe(&self, host: &str, ssh_user: Option<&str>) -> UecmResult<ProbeResult>;
+}
+
+/// 跑脚本并解析 stdout 为 JSON。语义对齐 `powershell::run_json`：
+/// 多数 sidecar 失败时把 `{ok:false,...}` 写 stdout 再 `exit 1`，所以**先**尝试解析
+/// 非空 stdout（成功即返回，调用方查 `ok` 字段）；解析不出再按退出码分类报错。
 pub fn run_json<T: DeserializeOwned>(
     exec: &dyn RemoteExecutor,
     host: &str,
     script: &NodeScript,
 ) -> UecmResult<T> {
-    let raw = exec.run(host, script)?;
-    serde_json::from_str(&raw).map_err(|e| UecmError::NodeScript {
+    let out = exec.run(host, script)?;
+    if !out.stdout.trim().is_empty() {
+        if let Ok(parsed) = serde_json::from_str::<T>(&out.stdout) {
+            return Ok(parsed);
+        }
+    }
+    if out.exit_code != 0 {
+        // 区分 ssh 层失败(255 → SshConnect) 与节点脚本失败(其余 → NodeScript)。
+        return Err(map_exit(
+            out.exit_code,
+            &failure_detail(&out.stdout, &out.stderr),
+        ));
+    }
+    serde_json::from_str(&out.stdout).map_err(|e| UecmError::NodeScript {
         exit: 0,
-        stderr: format!("bad JSON from node: {e} (raw: {raw})"),
+        stderr: format!("bad JSON from node: {e} (stdout: {})", out.stdout),
     })
 }
 
@@ -155,7 +180,7 @@ impl SshExecutor {
 }
 
 impl RemoteExecutor for SshExecutor {
-    fn run(&self, host: &str, script: &NodeScript) -> UecmResult<String> {
+    fn run(&self, host: &str, script: &NodeScript) -> UecmResult<ScriptOutput> {
         let user = script.ssh_user.as_deref().unwrap_or(&self.default_user);
         let args = build_ssh_args(
             &self.key_path.to_string_lossy(),
@@ -182,21 +207,22 @@ impl RemoteExecutor for SshExecutor {
                 .map_err(|e| UecmError::InvalidInput(format!("encode args: {e}")))?;
             stdin.write_all(&payload)?;
         }
+        // 进程跑完（任何退出码）都返回完整输出，成败判断交给 run_json。
         let out = child.wait_with_output()?;
-        let code = out.status.code().unwrap_or(-1);
-        if !out.status.success() {
-            let detail = failure_detail(&Self::decode(&out.stdout), &Self::decode(&out.stderr));
-            return Err(map_exit(code, &detail));
-        }
-        Ok(Self::decode(&out.stdout))
+        Ok(ScriptOutput {
+            stdout: Self::decode(&out.stdout),
+            stderr: Self::decode(&out.stderr),
+            exit_code: out.status.code().unwrap_or(-1),
+        })
     }
 
-    fn probe(&self, host: &str) -> UecmResult<ProbeResult> {
+    fn probe(&self, host: &str, ssh_user: Option<&str>) -> UecmResult<ProbeResult> {
         let started = std::time::Instant::now();
+        let user = ssh_user.unwrap_or(&self.default_user);
         let mut args = build_ssh_args(
             &self.key_path.to_string_lossy(),
             &self.known_hosts.to_string_lossy(),
-            &self.default_user,
+            user,
             host,
             "noop",
             &self.staging_root,
@@ -292,17 +318,33 @@ mod tests {
         assert_eq!(drift, vec!["b.ps1".to_string(), "c.ps1".to_string()]);
     }
 
-    struct FakeExec(String);
+    struct FakeExec(ScriptOutput);
     impl RemoteExecutor for FakeExec {
-        fn run(&self, _h: &str, _s: &NodeScript) -> UecmResult<String> {
+        fn run(&self, _h: &str, _s: &NodeScript) -> UecmResult<ScriptOutput> {
             Ok(self.0.clone())
         }
-        fn probe(&self, _h: &str) -> UecmResult<ProbeResult> {
+        fn probe(&self, _h: &str, _u: Option<&str>) -> UecmResult<ProbeResult> {
             Ok(ProbeResult {
                 ok: true,
                 message: "fake".into(),
                 latency_ms: 1,
             })
+        }
+    }
+
+    fn fake(stdout: &str, stderr: &str, exit_code: i32) -> FakeExec {
+        FakeExec(ScriptOutput {
+            stdout: stdout.to_string(),
+            stderr: stderr.to_string(),
+            exit_code,
+        })
+    }
+
+    fn demo_script() -> NodeScript {
+        NodeScript {
+            name: "x.ps1",
+            args: serde_json::json!({}),
+            ssh_user: None,
         }
     }
 
@@ -314,14 +356,17 @@ mod tests {
 
     #[test]
     fn run_json_parses_node_stdout() {
-        let exec = FakeExec(r#"{"ok":true,"value":42}"#.to_string());
-        let script = NodeScript {
-            name: "x.ps1",
-            args: serde_json::json!({}),
-            ssh_user: None,
-        };
-        let d: Demo = run_json(&exec, "RENDER-01", &script).unwrap();
+        let d: Demo =
+            run_json(&fake(r#"{"ok":true,"value":42}"#, "", 0), "RENDER-01", &demo_script()).unwrap();
         assert!(d.ok && d.value == 42);
+    }
+
+    #[test]
+    fn run_json_returns_envelope_even_on_nonzero_exit() {
+        // 脚本写 {ok:false} 到 stdout 后 exit 1：调用方仍应拿到 typed envelope。
+        let d: Demo =
+            run_json(&fake(r#"{"ok":false,"value":7}"#, "", 1), "RENDER-01", &demo_script()).unwrap();
+        assert!(!d.ok && d.value == 7);
     }
 
     #[test]
@@ -338,13 +383,21 @@ mod tests {
 
     #[test]
     fn run_json_surfaces_bad_json_as_node_script_error() {
-        let exec = FakeExec("not json".to_string());
-        let script = NodeScript {
-            name: "x.ps1",
-            args: serde_json::json!({}),
-            ssh_user: None,
-        };
-        let err = run_json::<Demo>(&exec, "RENDER-01", &script).unwrap_err();
+        let err = run_json::<Demo>(&fake("not json", "", 0), "RENDER-01", &demo_script()).unwrap_err();
         assert!(matches!(err, UecmError::NodeScript { .. }));
+    }
+
+    #[test]
+    fn run_json_nonzero_empty_stdout_is_script_error() {
+        let err =
+            run_json::<Demo>(&fake("", "remote crash", 1), "RENDER-01", &demo_script()).unwrap_err();
+        assert!(matches!(err, UecmError::NodeScript { .. }));
+    }
+
+    #[test]
+    fn run_json_exit_255_is_ssh_connect_error() {
+        let err = run_json::<Demo>(&fake("", "Connection refused", 255), "RENDER-01", &demo_script())
+            .unwrap_err();
+        assert!(matches!(err, UecmError::SshConnect(_)));
     }
 }
