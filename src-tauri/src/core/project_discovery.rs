@@ -1,6 +1,6 @@
 //! Project discovery through the `discover-uprojects.ps1` sidecar.
 
-use crate::core::powershell;
+use crate::core::ssh::{run_json, NodeScript, SshExecutor};
 use crate::core::project_identity::{parse_engine_association, stem_lower, DiscoveredUproject};
 use crate::data::{
     project_locations::{self, DiscoveryStatus, ProjectLocation},
@@ -42,27 +42,21 @@ pub fn run_discovery(
     operator_user: Option<&str>,
     operator_pass: Option<&str>,
 ) -> UecmResult<Vec<DiscoveryResult>> {
+    // SSH key auth: per-call WinRM creds no longer used (params kept until A5 cleanup).
+    let _ = (operator_user, operator_pass);
     if search_roots.is_empty() {
         return Err(UecmError::InvalidInput("search_roots is empty".into()));
     }
 
-    let roots_csv = search_roots.join(",");
-    let mut args = vec![
-        "-HostName".to_string(),
-        host.to_string(),
-        "-SearchRoots".to_string(),
-        roots_csv,
-    ];
-    if let (Some(user), Some(pass)) = (operator_user, operator_pass) {
-        args.push("-Username".into());
-        args.push(user.into());
-        args.push("-Password".into());
-        args.push(pass.into());
-    }
-    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
-    let result: DiscoveryScriptResult = powershell::run_json(
-        &powershell::script_path("discover-uprojects.ps1"),
-        &args_ref,
+    let exec = SshExecutor::from_config()?;
+    let result: DiscoveryScriptResult = run_json(
+        &exec,
+        host,
+        &NodeScript {
+            name: "discover-uprojects.ps1",
+            args: serde_json::json!({ "Roots": search_roots, "MaxDepth": 6 }),
+            ssh_user: None,
+        },
     )?;
 
     if !result.ok {
@@ -151,20 +145,9 @@ mod tests {
         (db, machine_id)
     }
 
-    #[cfg(not(windows))]
-    #[test]
-    fn run_discovery_returns_powershell_error_on_non_windows() {
-        let (db, machine_id) = setup();
-        let result = run_discovery(
-            &db,
-            machine_id,
-            "RENDER-01",
-            &["D:\\Work".into()],
-            Some("user"),
-            Some("pass"),
-        );
-        assert!(matches!(result, Err(UecmError::PowerShell(_))));
-    }
+    // (run_discovery's remote path now goes over SSH and is validated on a real
+    // node; the old "Windows-only PowerShell error" test is obsolete and would
+    // also generate a key in the real config dir via from_config().)
 
     #[test]
     fn empty_search_roots_returns_invalid_input() {
