@@ -199,6 +199,32 @@ fn path_ends_with_segments(path: &str, suffix: &str) -> bool {
         .all(|(left, right)| left.eq_ignore_ascii_case(right))
 }
 
+/// True when `candidate` names the registered share `share_unc` — matched by
+/// leading path segments, case-insensitively, ignoring trailing separators and
+/// any appended source subdir. The distribute path appends the profile's source
+/// subdir to a share UNC, and operators may type a different case or a trailing
+/// slash, so an explicit `named_share_unc` must be matched to its share this way
+/// rather than by exact string compare (which would drop the credential for a
+/// valid Mode B share). Segment-wise matching also avoids a string-prefix false
+/// positive (e.g. `\\H\DDC` must not match the share `\\H\D`).
+pub(crate) fn unc_names_share(candidate: &str, share_unc: &str) -> bool {
+    let cand: Vec<_> = candidate
+        .split(['\\', '/'])
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let base: Vec<_> = share_unc
+        .split(['\\', '/'])
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    if base.is_empty() || base.len() > cand.len() {
+        return false;
+    }
+    cand[..base.len()]
+        .iter()
+        .zip(base.iter())
+        .all(|(left, right)| left.eq_ignore_ascii_case(right))
+}
+
 /// Source-share SMB access for a distribute run: the share UNC the target pulls
 /// from, plus the credential to mount it. An open (Mode A) share has a UNC but
 /// no credential; a managed (Mode B) share has both.
@@ -753,5 +779,20 @@ mod tests {
         let profile = DistributeProfile::ddc_pak();
         assert_eq!(profile.file_globs.len(), 1);
         assert_eq!(profile.primary_glob(), "*.ddp");
+    }
+
+    #[test]
+    fn unc_names_share_matches_case_trailing_sep_and_appended_subdir() {
+        let share = "\\\\HOST\\DDC";
+        // exact, casing, trailing separator, and the appended source subdir all match.
+        assert!(unc_names_share("\\\\HOST\\DDC", share));
+        assert!(unc_names_share("\\\\host\\ddc", share));
+        assert!(unc_names_share("\\\\HOST\\DDC\\", share));
+        assert!(unc_names_share("\\\\HOST\\DDC\\DerivedDataCache", share));
+        assert!(unc_names_share("//HOST/DDC/DerivedDataCache", share));
+        // a different share must NOT match, and a string-prefix is not a segment prefix.
+        assert!(!unc_names_share("\\\\HOST\\OTHER", share));
+        assert!(!unc_names_share("\\\\HOST\\DDCX", share));
+        assert!(!unc_names_share("\\\\HOST", share));
     }
 }

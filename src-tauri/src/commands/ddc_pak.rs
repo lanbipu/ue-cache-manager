@@ -434,7 +434,10 @@ pub async fn distribute_ddc_pak(
                     .and_then(|shares| {
                         shares
                             .into_iter()
-                            .find(|s| &s.unc_path == unc && s.mode == crate::data::ShareMode::Managed)
+                            .find(|s| {
+                                s.mode == crate::data::ShareMode::Managed
+                                    && pak_distribute::unc_names_share(unc, &s.unc_path)
+                            })
                             .and_then(|s| s.credential_alias)
                     })
             });
