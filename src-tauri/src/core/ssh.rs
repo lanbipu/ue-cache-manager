@@ -188,7 +188,11 @@ pub fn scp_push(
         .arg("-o")
         .arg("StrictHostKeyChecking=accept-new")
         .arg("-o")
-        .arg("BatchMode=yes");
+        .arg("BatchMode=yes")
+        // Same fail-fast budget as the ssh exec path (build_ssh_args), so an
+        // offline node errors in ~10s instead of the system SSH default.
+        .arg("-o")
+        .arg("ConnectTimeout=10");
     for f in local_files {
         cmd.arg(f);
     }
@@ -197,17 +201,69 @@ pub fn scp_push(
         .output()
         .map_err(|e| UecmError::ScriptStaging(format!("spawn scp failed: {e}")))?;
     if !out.status.success() {
-        return Err(UecmError::ScriptStaging(format!(
-            "scp failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        )));
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        // scp delegates to ssh; a 255 exit is an ssh-level connect/auth/host-key
+        // failure. Surface it as SshConnect (not ScriptStaging) so callers like
+        // discovery::with_onboarding_hint can suggest running UECM-Bootstrap.cmd,
+        // exactly as they would for a failed `run`.
+        if out.status.code() == Some(255) {
+            return Err(UecmError::SshConnect(stderr));
+        }
+        return Err(UecmError::ScriptStaging(format!("scp failed: {stderr}")));
     }
     Ok(())
 }
 
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
+
+/// Hosts whose node scripts this process has already staged. Operator-side
+/// script changes only reach a node when we re-push them; onboarding
+/// (enable-ssh.ps1) stages an initial copy but never updates it. We bulk-push
+/// the current scripts once per host per process so every domain that runs
+/// `-File <staged>` by name executes the operator's current code.
+fn synced_hosts() -> &'static Mutex<HashSet<String>> {
+    static SYNCED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    SYNCED.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Names of stageable `*.ps1` in one dir: everything except the node-local
+/// onboarding scripts (`enable-*`), which ship in the bootstrap package and are
+/// never run over SSH. Unreadable dir → empty (caller tries other candidates).
+fn ps1_names_in(dir: &Path) -> Vec<String> {
+    let mut names = Vec::new();
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return names;
+    };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        let is_ps1 = path.extension().is_some_and(|x| x == "ps1");
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if is_ps1 && !name.starts_with("enable-") {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names
+}
+
+/// Local node scripts to stage. Collect the union of script names across all
+/// candidate dirs, then resolve each via `script_path` so a script missing
+/// from a stale/partial exe-dir still falls back to the repo-root copy — the
+/// same per-file resolution used when the script is executed.
+fn node_script_files() -> Vec<PathBuf> {
+    let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for dir in crate::core::powershell::script_dirs() {
+        names.extend(ps1_names_in(&dir));
+    }
+    names
+        .iter()
+        .map(|n| crate::core::powershell::script_path(n))
+        .collect()
+}
 
 /// 生产传输实现：用系统 ssh 在节点跑预置脚本，参数 JSON 经 stdin 喂入。
 pub struct SshExecutor {
@@ -239,11 +295,44 @@ impl SshExecutor {
             Err(_) => encoding_rs::GBK.decode(bytes).0.into_owned(),
         }
     }
+
+    /// Push current node scripts to `host` once per process per login user
+    /// (see `synced_hosts`). Staged via the same `user` the script will run as,
+    /// so a node that only authorized a per-script account still gets its
+    /// scripts. scp wants a forward-slash remote path even on Windows targets;
+    /// the backslash `staging_root` is kept for the `-File` exec path.
+    fn ensure_scripts_staged(&self, host: &str, user: &str) -> UecmResult<()> {
+        let cache_key = format!("{user}@{host}");
+        if synced_hosts().lock().unwrap().contains(&cache_key) {
+            return Ok(());
+        }
+        let files = node_script_files();
+        if files.is_empty() {
+            // Finding zero local scripts means a broken install / bad UECM_PS_DIR,
+            // not "nothing to do". Fail (and don't cache) so the node never runs
+            // a stale staged copy on the false premise that we synced it.
+            return Err(UecmError::ScriptStaging(
+                "no local node scripts found to stage (check ps-scripts dir / UECM_PS_DIR)".into(),
+            ));
+        }
+        let remote_dir = self.staging_root.replace('\\', "/");
+        scp_push(
+            &self.key_path,
+            &self.known_hosts,
+            user,
+            host,
+            &files,
+            &remote_dir,
+        )?;
+        synced_hosts().lock().unwrap().insert(cache_key);
+        Ok(())
+    }
 }
 
 impl RemoteExecutor for SshExecutor {
     fn run(&self, host: &str, script: &NodeScript) -> UecmResult<ScriptOutput> {
         let user = script.ssh_user.as_deref().unwrap_or(&self.default_user);
+        self.ensure_scripts_staged(host, user)?;
         let args = build_ssh_args(
             &self.key_path.to_string_lossy(),
             &self.known_hosts.to_string_lossy(),
@@ -335,6 +424,27 @@ mod tests {
         assert!(remote.contains(r"-File C:\ProgramData\UECM\ps-scripts\health-probes.ps1"));
         assert!(remote.contains("powershell.exe -NoProfile -ExecutionPolicy Bypass"));
         assert!(!remote.contains("-EncodedCommand"));
+    }
+
+    #[test]
+    fn ps1_names_in_lists_ps1_excluding_enable() {
+        let tmp = tempfile::tempdir().unwrap();
+        for name in [
+            "health-probes.ps1",
+            "setup-share-mode-a.ps1",
+            "enable-ssh.ps1", // node-local onboarding, must be excluded
+            "readme.txt",     // non-ps1, must be excluded
+        ] {
+            std::fs::write(tmp.path().join(name), "x").unwrap();
+        }
+        let mut names = ps1_names_in(tmp.path());
+        names.sort();
+        assert_eq!(names, ["health-probes.ps1", "setup-share-mode-a.ps1"]);
+    }
+
+    #[test]
+    fn ps1_names_in_missing_dir_is_empty() {
+        assert!(ps1_names_in(Path::new("/no/such/uecm/dir")).is_empty());
     }
 
     #[test]

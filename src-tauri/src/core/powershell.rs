@@ -56,6 +56,12 @@ pub fn script_path(name: &str) -> PathBuf {
             if candidate.is_file() {
                 return candidate;
             }
+            // Packaged Tauri app on macOS: resources live in Contents/Resources,
+            // i.e. <exe-dir>/../Resources/ps-scripts.
+            let bundled = parent.join("../Resources/ps-scripts").join(name);
+            if bundled.is_file() {
+                return bundled;
+            }
         }
     }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -63,6 +69,37 @@ pub fn script_path(name: &str) -> PathBuf {
         .unwrap_or_else(|| std::path::Path::new("."))
         .join("ps-scripts")
         .join(name)
+}
+
+/// Candidate sidecar dirs in `script_path`'s priority order. Used to enumerate
+/// the full node-script set for staging; callers resolve each name via
+/// `script_path` so a stale/partial exe-dir still falls back to repo-root
+/// per-file (matching how scripts are resolved for execution).
+pub fn script_dirs() -> Vec<PathBuf> {
+    if let Ok(over) = std::env::var("UECM_PS_DIR") {
+        return vec![PathBuf::from(over)];
+    }
+    let mut dirs = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let dir = parent.join("ps-scripts");
+            if dir.is_dir() {
+                dirs.push(dir);
+            }
+            // Packaged Tauri app on macOS: <exe-dir>/../Resources/ps-scripts.
+            let bundled = parent.join("../Resources/ps-scripts");
+            if bundled.is_dir() {
+                dirs.push(bundled);
+            }
+        }
+    }
+    dirs.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("ps-scripts"),
+    );
+    dirs
 }
 
 /// Load a sidecar script's text. Used when the script body is forwarded over
