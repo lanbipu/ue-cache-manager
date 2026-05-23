@@ -417,12 +417,29 @@ pub async fn distribute_ddc_pak(
         // behavior of letting a manual/override UNC through. Cred from the
         // SecretStore alias if given (Mode B svc = ddc-svc), else none (open share).
         Some(unc) => {
-            let (user, pass) = match source_smb_credential_alias.as_deref() {
+            // Resolve the SMB cred ALIAS for this explicit UNC: the caller's
+            // explicit alias wins; otherwise match the UNC to a registered share
+            // on the source host (an explicit UNC uniquely identifies the share,
+            // so we sidestep resolve_source_smb's multi-share ambiguity error).
+            // A Mode B share -> its alias -> SecretStore cred + real svc account.
+            // An open (Mode A) share or an unregistered manual UNC -> no alias ->
+            // anonymous (fine for open shares).
+            let alias = source_smb_credential_alias.clone().or_else(|| {
+                crate::data::share_configs::find_by_host(&db, source_machine_id)
+                    .ok()
+                    .and_then(|shares| {
+                        shares
+                            .into_iter()
+                            .find(|s| &s.unc_path == unc)
+                            .and_then(|s| s.credential_alias)
+                    })
+            });
+            let (user, pass) = match alias.as_deref() {
                 Some(a) => {
-                    // A given alias must resolve to BOTH a stored secret and a
+                    // A resolved alias must yield BOTH the stored secret and the
                     // credential record (the share's real svc account) — error
-                    // clearly rather than silently mounting the source as
-                    // anonymous, which a managed share rejects later.
+                    // clearly rather than mounting the source as anonymous, which
+                    // a managed share rejects later as unreachable.
                     let pass = crate::core::secrets::SecretStore::from_config()?
                         .get(a)?
                         .ok_or_else(|| {
@@ -437,17 +454,7 @@ pub async fn distribute_ddc_pak(
                         })?;
                     (Some(user), Some(pass))
                 }
-                // No explicit alias: best-effort auto-derive an SMB cred (a single
-                // Mode B share on the source) so a private share still mounts. The
-                // WinRM-era operator-credential fallback is gone (SSH key auth), so
-                // an ambiguous/absent derive means anonymous — fine for an open
-                // (Mode A) share; a private one then needs an explicit
-                // source_smb_credential_alias. The explicit UNC is still honored
-                // either way (we never propagate resolve_source_smb's pick error).
-                None => match pak_distribute::resolve_source_smb(&db, source_machine_id, None, true) {
-                    Ok(smb) => (smb.user, smb.pass),
-                    Err(_) => (None, None),
-                },
+                None => (None, None),
             };
             (Some(unc.clone()), user, pass)
         }

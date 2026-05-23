@@ -54,28 +54,32 @@ pub fn save_credential(
 
 #[tauri::command]
 pub fn delete_credential(db: State<'_, Db>, alias: String) -> UecmResult<()> {
-    // SQLite metadata is the source of truth for the UI list — always clear it.
+    // Look up the kind BEFORE clearing the row: a Winrm (operator) credential's
+    // real secret lives in cmdkey, so a cmdkey-delete failure must surface (else
+    // the UI shows it gone while the Credential Manager entry lingers,
+    // unreclaimable). A Share alias is SecretStore-backed with no cmdkey entry,
+    // so cmdkey's "no entry" failure there is expected and tolerated.
+    let kind = data_creds::find_by_alias(&db, &alias)?.map(|c| c.kind);
+
+    // SQLite metadata is the UI source of truth — always clear it.
     data_creds::delete_by_alias(&db, &alias)?;
 
-    // Best-effort secret cleanup across every store; a leftover entry is a
-    // harmless orphan, so none failing should wedge the delete (cmdkey is no
-    // longer the home for share-svc secrets, so its "no entry" failure is
-    // expected for SecretStore-backed aliases).
-    //   - SecretStore: current home for Mode B share-svc passwords (P3).
+    // SecretStore (Share-svc home, P3) + DPAPI: best-effort orphan cleanup.
     if let Err(e) = crate::core::secrets::SecretStore::from_config().and_then(|s| s.delete(&alias)) {
         tracing::warn!(alias = %alias, error = %e, "SecretStore delete failed; orphan secret may remain");
     }
-    //   - cmdkey / DPAPI: legacy stores for aliases created before the SecretStore move (retired in P5b).
-    if let Err(e) = core_creds::delete(&alias) {
-        tracing::debug!(alias = %alias, error = %e, "cmdkey delete failed (expected for SecretStore-backed aliases)");
-    }
     if let Err(e) = core_creds::delete_password(&alias) {
-        tracing::warn!(
-            alias = %alias,
-            error = %e,
-            "DPAPI delete_password failed; orphan entry will remain in creds.bin"
-        );
+        tracing::warn!(alias = %alias, error = %e, "DPAPI delete_password failed; orphan entry will remain in creds.bin");
     }
 
-    Ok(())
+    // cmdkey: surface the failure for a Winrm cred (real secret store); tolerate
+    // it for a Share/SecretStore alias (no cmdkey entry expected).
+    match core_creds::delete(&alias) {
+        Ok(()) => Ok(()),
+        Err(e) if matches!(kind, Some(CredentialKind::Winrm)) => Err(e),
+        Err(e) => {
+            tracing::debug!(alias = %alias, error = %e, "cmdkey delete failed (expected for SecretStore-backed alias)");
+            Ok(())
+        }
+    }
 }
