@@ -27,6 +27,13 @@ try {
         [string]::IsNullOrEmpty($SvcPassword)) {
         throw "TargetHost, SvcUsername, SvcPassword are required"
     }
+    # TargetHost is interpolated into a `cmd.exe /c` string for the SYSTEM /list
+    # verify, so restrict it to hostname/IP characters — this blocks cmd
+    # metacharacters (& | > < ^ " % ...) that would otherwise run as SYSTEM on
+    # the node. A real SMB host is always within this set.
+    if ($TargetHost -notmatch '^[A-Za-z0-9.:_-]+$') {
+        throw "TargetHost '$TargetHost' has invalid characters (expected a hostname or IP)"
+    }
 
     $psexec = Join-Path $env:ProgramData 'UECM\PsExec64.exe'
     if (-not (Test-Path -LiteralPath $psexec)) {
