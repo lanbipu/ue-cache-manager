@@ -1,49 +1,18 @@
-# Sets a system-level environment variable on a remote host via WinRM.
-# Parameters: -HostName <string> -Name <string> -Value <string>
-#             [-Username <string>] [-Password <string>]
+# Sets a system-level (Machine) environment variable on the target.
+#
+# Node-pure: runs locally on the target (shipped + executed via SSH -File).
+# stdin: JSON { "Name": "...", "Value": "..." }
 # Output: JSON { ok: bool, message: string }
-
-param(
-    [Parameter(Mandatory=$true)] [string]$HostName,
-    [Parameter(Mandatory=$true)] [string]$Name,
-    [Parameter(Mandatory=$true)] [string]$Value,
-    [string]$Username,
-    [string]$Password
-)
-
-[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
-
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
+# set + verify with explicit throw on mismatch -> Stop is appropriate here.
 $ErrorActionPreference = 'Stop'
 
-function Build-CredentialOrNull {
-    param([string]$User, [string]$Pass)
-    if ([string]::IsNullOrEmpty($User) -or [string]::IsNullOrEmpty($Pass)) { return $null }
-    $User = $User.Trim()
-    if ([string]::IsNullOrEmpty($User)) { return $null }
-    if ($User.StartsWith(".\") -or $User.StartsWith("./")) { $User = $User.Substring(2) }
-    $secure = ConvertTo-SecureString -String $Pass -AsPlainText -Force
-    return New-Object System.Management.Automation.PSCredential($User, $secure)
-}
-
 try {
-    $script = {
-        param($Name, $Value)
-        [System.Environment]::SetEnvironmentVariable($Name, $Value, 'Machine')
-        $readback = [System.Environment]::GetEnvironmentVariable($Name, 'Machine')
-        if ($readback -ne $Value) { throw "verify failed: read '$readback', expected '$Value'" }
-        return $true
-    }
-    $cred = Build-CredentialOrNull -User $Username -Pass $Password
-    $invokeArgs = @{
-        ComputerName = $HostName
-        ScriptBlock  = $script
-        ArgumentList = @($Name, $Value)
-        ErrorAction  = 'Stop'
-        Authentication = 'Negotiate'
-    }
-    if ($cred) { $invokeArgs['Credential'] = $cred }
-    Invoke-Command @invokeArgs | Out-Null
-    @{ ok = $true; message = "set $Name on $HostName" } | ConvertTo-Json -Compress
+    $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    [System.Environment]::SetEnvironmentVariable($p.Name, $p.Value, 'Machine')
+    $readback = [System.Environment]::GetEnvironmentVariable($p.Name, 'Machine')
+    if ($readback -ne $p.Value) { throw "verify failed: read '$readback', expected '$($p.Value)'" }
+    @{ ok = $true; message = "set $($p.Name)" } | ConvertTo-Json -Compress
 }
 catch {
     @{ ok = $false; message = $_.Exception.Message } | ConvertTo-Json -Compress
