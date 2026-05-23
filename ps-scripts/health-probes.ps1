@@ -140,7 +140,17 @@ try {
                           remediation='Re-run UECM-Bootstrap.cmd on this node (installs PsExec64 to %ProgramData%\UECM). If AV/AppLocker blocks PsExec, exempt %ProgramData%\UECM\PsExec64.exe.' }
             }
             try {
-                $out = & $vendor -accepteula -nobanner -s -i 0 cmdkey.exe /list 2>&1 | Out-String
+                # Read the SYSTEM cmdkey list via a file, not PsExec's stdout pipe:
+                # over non-interactive SSH PsExec does not relay the child's stdout
+                # back, so a direct capture comes back empty and a present cred reads
+                # as missing. Have the SYSTEM cmd redirect to a file and read that.
+                # The cmd string has no user input (fixed `cmdkey /list` + a PID-named
+                # path under ProgramData), so there is nothing to inject.
+                $listFile = Join-Path $env:ProgramData ("UECM\uecm-health-cmdkey-{0}.txt" -f $PID)
+                Remove-Item -LiteralPath $listFile -ErrorAction SilentlyContinue
+                & $vendor -accepteula -nobanner -s cmd.exe /c "cmdkey /list > `"$listFile`" 2>&1" 2>$null | Out-Null
+                $out = if (Test-Path -LiteralPath $listFile) { Get-Content -LiteralPath $listFile -Raw -ErrorAction SilentlyContinue } else { "" }
+                Remove-Item -LiteralPath $listFile -ErrorAction SilentlyContinue
                 $hasIt = $out -match [regex]::Escape($SvcUsername)
                 @{ status = ($(if ($hasIt) {'healthy'} else {'critical'}));
                    message = "SYSTEM cmdkey /list contains $SvcUsername = $hasIt"; sample = '';
