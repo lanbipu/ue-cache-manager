@@ -75,13 +75,11 @@ pub fn handle(ctx: &mut Ctx<'_>, action: HealthAction) -> UecmResult<()> {
             })).ok();
             Ok(())
         }
-        HealthAction::ScanCommandLine { host, cred } => {
-            let db = ctx.require_db()?;
-            let creds = cred.resolve(db)?;
-            let hits = crate::core::command_line_scanner::scan(
-                &host,
-                creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
-            )?;
+        HealthAction::ScanCommandLine { host, cred: _ } => {
+            // SSH key auth: per-call WinRM creds no longer used (kept on the CLI
+            // surface until A5 cleanup). Discovery/scan run over the SSH executor.
+            let exec = crate::core::ssh::SshExecutor::from_config()?;
+            let hits = crate::core::command_line_scanner::scan(&exec, &host)?;
             ctx.emitter.emit_result(&hits).ok();
             Ok(())
         }

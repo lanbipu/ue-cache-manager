@@ -1,7 +1,7 @@
 //! Scans Windows shortcuts, bat files, and services for embedded DDC
 //! command-line overrides like -LocalDataCachePath / -SharedDataCachePath.
 
-use crate::core::powershell;
+use crate::core::ssh::{run_json, NodeScript, RemoteExecutor};
 use crate::error::{UecmError, UecmResult};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -24,14 +24,15 @@ struct ScriptResult {
     message: Option<String>,
 }
 
-pub fn scan(host: &str, creds: Option<(&str, &str)>) -> UecmResult<Vec<CmdLineHit>> {
-    let mut args: Vec<&str> = vec!["-HostName", host];
-    if let Some((u, p)) = creds {
-        args.extend(["-Username", u, "-Password", p]);
-    }
-    let r: ScriptResult = powershell::run_json(
-        &powershell::script_path("scan-command-line-args.ps1"),
-        &args,
+pub fn scan(exec: &dyn RemoteExecutor, host: &str) -> UecmResult<Vec<CmdLineHit>> {
+    let r: ScriptResult = run_json(
+        exec,
+        host,
+        &NodeScript {
+            name: "scan-command-line-args.ps1",
+            args: serde_json::json!({}),
+            ssh_user: None,
+        },
     )?;
     if !r.ok {
         return Err(UecmError::OperationFailed(r.message.unwrap_or_default()));
@@ -42,11 +43,37 @@ pub fn scan(host: &str, creds: Option<(&str, &str)>) -> UecmResult<Vec<CmdLineHi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ssh::{ProbeResult, ScriptOutput};
 
-    #[cfg(not(windows))]
+    struct FakeExec(String);
+    impl RemoteExecutor for FakeExec {
+        fn run(&self, _h: &str, _s: &NodeScript) -> UecmResult<ScriptOutput> {
+            Ok(ScriptOutput {
+                stdout: self.0.clone(),
+                stderr: String::new(),
+                exit_code: 0,
+            })
+        }
+        fn probe(&self, _h: &str, _u: Option<&str>) -> UecmResult<ProbeResult> {
+            unreachable!()
+        }
+    }
+
     #[test]
-    fn returns_powershell_error_off_windows() {
-        let r = scan("HOST", None);
-        assert!(matches!(r, Err(UecmError::PowerShell(_))));
+    fn scan_parses_findings() {
+        let exec = FakeExec(
+            r#"{"ok":true,"findings":[{"source":"service","name":"RenderSvc","path":"x.exe -LocalDataCachePath=D:\\DDC","matches":{"local":"D:\\DDC"}}]}"#
+                .to_string(),
+        );
+        let hits = scan(&exec, "RENDER-01").unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].source, "service");
+        assert_eq!(hits[0].matches.get("local").map(String::as_str), Some("D:\\DDC"));
+    }
+
+    #[test]
+    fn scan_surfaces_not_ok_as_error() {
+        let exec = FakeExec(r#"{"ok":false,"message":"boom","findings":[]}"#.to_string());
+        assert!(matches!(scan(&exec, "H"), Err(UecmError::OperationFailed(_))));
     }
 }
