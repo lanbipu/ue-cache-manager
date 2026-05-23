@@ -368,6 +368,16 @@ impl RemoteExecutor for SshExecutor {
     }
 
     fn probe(&self, host: &str, ssh_user: Option<&str>) -> UecmResult<ProbeResult> {
+        // Loopback target (operator probing its own box): no point SSHing to
+        // self, and a real ssh-to-self can hit host-key/loopback quirks. Mirror
+        // winrm::probe's bypass (returns Ok without spawning ssh).
+        if crate::core::loopback::is_loopback_target(host) {
+            return Ok(ProbeResult {
+                ok: true,
+                message: "loopback target; ssh bypassed".to_string(),
+                latency_ms: 0,
+            });
+        }
         let started = std::time::Instant::now();
         let user = ssh_user.unwrap_or(&self.default_user);
         let mut args = build_ssh_args(
@@ -488,6 +498,22 @@ mod tests {
         assert_eq!(exec.staging_root, STAGING_ROOT);
         assert!(exec.key_path.exists(), "ensure_keypair should have generated the key");
         assert!(exec.key_path.ends_with("uecm_ed25519"));
+    }
+
+    #[test]
+    fn probe_bypasses_loopback_without_spawning_ssh() {
+        // Nonexistent key/known_hosts: if probe tried to spawn ssh it would fail,
+        // so a successful Ok proves the loopback bypass short-circuits first.
+        let exec = SshExecutor {
+            key_path: std::path::PathBuf::from("/nonexistent/key"),
+            known_hosts: std::path::PathBuf::from("/nonexistent/known_hosts"),
+            default_user: "uecm-svc".to_string(),
+            staging_root: STAGING_ROOT.to_string(),
+        };
+        let p = exec.probe("127.0.0.1", None).unwrap();
+        assert!(p.ok);
+        assert!(p.message.contains("loopback"));
+        assert_eq!(p.latency_ms, 0);
     }
 
     #[test]
