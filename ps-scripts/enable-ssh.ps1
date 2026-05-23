@@ -423,11 +423,26 @@ try {
     $sshd = Get-Service sshd -ErrorAction SilentlyContinue
     $sshdRunning = ($sshd -and $sshd.Status -eq 'Running')
     $keyAuthorized = (Test-Path $adminKeys) -and ((Get-Content $adminKeys) -contains $pub)
-    $svcAccountExists = $false
+    # When -CreateLocalAdmin was requested, the uecm-svc account is load-bearing:
+    # SshExecutor logs in AS uecm-svc, and Windows OpenSSH only honors the shared
+    # administrators_authorized_keys for accounts that are LOCAL ADMINS. So a
+    # failed/partial account prep must drag readiness to NOT ready (the prep step
+    # only WARNs on failure; this end-state probe is the hard gate). Verify the
+    # actual end state: exists + enabled + in Administrators (SID S-1-5-32-544).
+    $svcAccountReady = $true
     if ($CreateLocalAdmin) {
-        try { $svcAccountExists = [bool](Get-LocalUser -Name $LocalAdminName -ErrorAction SilentlyContinue) } catch {}
+        $svcAccountReady = $false
+        try {
+            $svcUser = Get-LocalUser -Name $LocalAdminName -ErrorAction SilentlyContinue
+            $svcInAdmins = $false
+            if ($svcUser) {
+                $svcInAdmins = [bool](@(Get-LocalGroupMember -SID 'S-1-5-32-544' -ErrorAction SilentlyContinue) |
+                    Where-Object { $_.SID -eq $svcUser.SID })
+            }
+            $svcAccountReady = [bool]($svcUser -and $svcUser.Enabled -and $svcInAdmins)
+        } catch { $svcAccountReady = $false }
     }
-    $ok = $capInstalled -and $sshdRunning -and $keyAuthorized
+    $ok = $capInstalled -and $sshdRunning -and $keyAuthorized -and $svcAccountReady
     if ($ok) {
         $msg = "SSH onboarding complete"
     }
@@ -436,9 +451,10 @@ try {
         if (-not $capInstalled) { $missing += 'OpenSSH.Server not installed' }
         if (-not $sshdRunning) { $missing += 'sshd not running' }
         if (-not $keyAuthorized) { $missing += 'UECM key not authorized' }
+        if (-not $svcAccountReady) { $missing += "$LocalAdminName account not ready (must exist + be enabled + be in Administrators)" }
         $msg = "not ready: " + ($missing -join '; ')
     }
-    @{ ok = $ok; changes = $changes; message = $msg; svc_account_exists = $svcAccountExists } | ConvertTo-Json -Depth 6 -Compress
+    @{ ok = $ok; changes = $changes; message = $msg; svc_account_ready = $svcAccountReady } | ConvertTo-Json -Depth 6 -Compress
     exit $(if ($ok) { 0 } else { 1 })
 }
 catch {
