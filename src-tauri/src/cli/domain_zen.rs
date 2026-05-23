@@ -1822,7 +1822,8 @@ pub(crate) fn run_remote(
 /// of truth, so a non-zero exit still surfaces its stdout — mirrors the old
 /// run_remote contract). SSH key auth (uecm-svc); operator creds are gone.
 /// Replaces build_param_script + run_remote (WinRM) as zen migrates in P2.
-fn run_node(host: &str, script_name: &'static str, args: serde_json::Value) -> UecmResult<String> {
+/// pub(crate) so the Tauri `commands/zen.rs` backend reuses the same SSH path.
+pub(crate) fn run_node(host: &str, script_name: &'static str, args: serde_json::Value) -> UecmResult<String> {
     use crate::core::ssh::RemoteExecutor;
     let exec = crate::core::ssh::SshExecutor::from_config()?;
     let out = exec.run(

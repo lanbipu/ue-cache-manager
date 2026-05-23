@@ -35,8 +35,6 @@
 //! `confirmed` parameter — they aren't destructive in the CLI either.
 
 use crate::cli::domain_zen as zen_cli_shared;
-use crate::core::powershell;
-use crate::core::winrm;
 use crate::core::zen::endpoint as zen_endpoint;
 use crate::core::zen::redaction::redact;
 use crate::core::zen::{binary as zen_binary, cache_stats as zen_cache, probe as zen_probe};
@@ -342,15 +340,19 @@ pub struct ZenDetectBinaryReport {
 pub fn zen_detect_binary(
     db: State<'_, Db>,
     machine_id: Option<i64>,
-    cred_alias: String,
+    cred_alias: Option<String>,
 ) -> UecmResult<ZenDetectBinaryReport> {
-    // Resolve credential up front so a typo'd alias fails fast before we
-    // touch the network at all.
-    let cred_record = data_creds::find_by_alias(&db, &cred_alias)?.ok_or_else(|| {
-        UecmError::InvalidInput(format!("credential alias '{}' not found", cred_alias))
-    })?;
-    let password = crate::core::credentials::resolve_password(&cred_alias)?;
-    let username = cred_record.username;
+    // The transport is now SSH key auth (uecm-svc), so the operator password
+    // is no longer loaded or forwarded — `cred_alias` is therefore optional,
+    // matching the CLI's `CredentialArgs` (which accepts no credential). When
+    // an alias is supplied we still validate it up front so a typo fails fast
+    // before we touch the network; SSH-only hosts with no legacy WinRM
+    // credential row pass straight through.
+    if let Some(alias) = &cred_alias {
+        data_creds::find_by_alias(&db, alias)?.ok_or_else(|| {
+            UecmError::InvalidInput(format!("credential alias '{}' not found", alias))
+        })?;
+    }
 
     let target_machines: Vec<crate::data::Machine> = match machine_id {
         Some(id) => {
@@ -367,7 +369,7 @@ pub fn zen_detect_binary(
     let mut failed = 0usize;
     for m in &target_machines {
         let mid = m.id.expect("machine row has id");
-        match invoke_detect_binary(&m.ip, &username, &password) {
+        match invoke_detect_binary(&m.ip) {
             Ok(detection) => {
                 let report = zen_binary::persist(&db, mid, &detection)?;
                 ok_count += 1;
@@ -412,21 +414,17 @@ pub fn zen_detect_binary(
     })
 }
 
-/// Run `zen-detect-binary.ps1` on `host` via WinRM and parse the JSON payload.
+/// Run `zen-detect-binary.ps1` on `host` over SSH and parse the JSON payload.
 ///
 /// Mirrors `cli::domain_zen::invoke_detect_binary` so the two surfaces stay in
-/// sync. PS sidecars emit exit 0 even on expected failures with `{ok:false,
-/// message:"..."}`; we have to check `ok` BEFORE handing the payload to
-/// `parse_detection_json`, otherwise a missing install would look identical to
-/// "no install detected" and `zen_binary::persist` would drop the existing
-/// row (T1.6 P2-1 fix).
-fn invoke_detect_binary(
-    host: &str,
-    username: &str,
-    password: &str,
-) -> UecmResult<zen_binary::BinaryDetection> {
-    let body = powershell::read_script("zen-detect-binary.ps1")?;
-    let raw = winrm::invoke_with_credential(host, &body, username, password, "Negotiate")?;
+/// sync. SSH key auth (uecm-svc); operator creds are gone (P2 migration).
+/// zen-detect-binary takes no args (param-less; ignores stdin). PS sidecars
+/// emit exit 0 even on expected failures with `{ok:false, message:"..."}`; we
+/// have to check `ok` BEFORE handing the payload to `parse_detection_json`,
+/// otherwise a missing install would look identical to "no install detected"
+/// and `zen_binary::persist` would drop the existing row (T1.6 P2-1 fix).
+fn invoke_detect_binary(host: &str) -> UecmResult<zen_binary::BinaryDetection> {
+    let raw = zen_cli_shared::run_node(host, "zen-detect-binary.ps1", serde_json::json!({}))?;
     let envelope: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
         UecmError::OperationFailed(format!(
             "zen-detect-binary returned non-JSON output: {e}; raw: {}",
@@ -1097,7 +1095,10 @@ pub fn zen_service_install(
         }));
     }
 
+    // SSH key auth (uecm-svc); operator creds/auth_method ignored. Keep the
+    // resolve() so the credential preflight side-effect still runs.
     let creds = cred.resolve(&db)?;
+    let _ = &creds;
     // Invocation string with manual redaction of ServicePassword — the
     // flag-name redactor doesn't match `-ServicePassword`.
     let user_marker = service_user
@@ -1115,23 +1116,23 @@ pub fn zen_service_install(
         ep.data_dir
     ));
     let op_id = operations::start(&db, "zen.service_install", &[ep.machine_id])?;
-    let mut params: Vec<(&str, &str)> = vec![
-        ("ZenExePath", zen_exe.as_str()),
-        ("ServiceName", zen_cli_shared::DEFAULT_SERVICE_NAME),
-        ("DataDir", ep.data_dir.as_str()),
-    ];
-    if let Some(u) = service_user.as_deref() {
-        params.push(("ServiceUser", u));
+    // ServiceUser / ServicePassword only added when supplied — the node
+    // script defaults to '' (zen keeps LocalService) when the field is absent.
+    let mut args = serde_json::json!({
+        "ZenExePath": zen_exe,
+        "ServiceName": zen_cli_shared::DEFAULT_SERVICE_NAME,
+        "DataDir": ep.data_dir,
+    });
+    if let Some(obj) = args.as_object_mut() {
+        if let Some(u) = service_user.as_deref() {
+            obj.insert("ServiceUser".into(), serde_json::Value::String(u.to_string()));
+        }
+        if let Some(p) = service_pass.as_deref() {
+            obj.insert("ServicePassword".into(), serde_json::Value::String(p.to_string()));
+        }
     }
-    if let Some(p) = service_pass.as_deref() {
-        params.push(("ServicePassword", p));
-    }
-    let body = zen_cli_shared::build_param_script("zen-service-install.ps1", &params);
-    let result = match body {
-        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref(), "Negotiate")
-            .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-service-install")),
-        Err(e) => Err(e),
-    };
+    let result = zen_cli_shared::run_node(&machine.ip, "zen-service-install.ps1", args)
+        .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-service-install"));
     zen_cli_shared::finalize_op(&db, op_id, &result, &invocation);
     let response = result?;
     Ok(ZenServiceResult::Completed(ZenServiceSummary {
@@ -1180,24 +1181,21 @@ pub fn zen_service_uninstall(
         }));
     }
 
+    // SSH key auth (uecm-svc); operator creds/auth_method ignored. Keep the
+    // resolve() so the credential preflight side-effect still runs.
     let creds = cred.resolve(&db)?;
+    let _ = &creds;
     let invocation = redact(&format!(
         "zen-service-uninstall.ps1 -ZenExePath {zen_exe} -ServiceName {}",
         zen_cli_shared::DEFAULT_SERVICE_NAME
     ));
     let op_id = operations::start(&db, "zen.service_uninstall", &[ep.machine_id])?;
-    let body = zen_cli_shared::build_param_script(
+    let result = zen_cli_shared::run_node(
+        &machine.ip,
         "zen-service-uninstall.ps1",
-        &[
-            ("ZenExePath", zen_exe.as_str()),
-            ("ServiceName", zen_cli_shared::DEFAULT_SERVICE_NAME),
-        ],
-    );
-    let result = match body {
-        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref(), "Negotiate")
-            .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-service-uninstall")),
-        Err(e) => Err(e),
-    };
+        serde_json::json!({ "ZenExePath": zen_exe, "ServiceName": zen_cli_shared::DEFAULT_SERVICE_NAME }),
+    )
+    .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-service-uninstall"));
     zen_cli_shared::finalize_op(&db, op_id, &result, &invocation);
     let response = result?;
     Ok(ZenServiceResult::Completed(ZenServiceSummary {
@@ -1227,22 +1225,22 @@ pub fn zen_service_start(
             ep.lifecycle_mode
         )));
     }
+    // SSH key auth (uecm-svc); operator creds/auth_method ignored. Keep the
+    // resolve() so the credential preflight side-effect still runs.
     let creds = cred.resolve(&db)?;
+    let _ = &creds;
 
     let invocation = redact(&format!(
         "zen-up.ps1 -ServiceName {}",
         zen_cli_shared::DEFAULT_SERVICE_NAME
     ));
     let op_id = operations::start(&db, "zen.service_start", &[ep.machine_id])?;
-    let body = zen_cli_shared::build_param_script(
+    let result = zen_cli_shared::run_node(
+        &machine.ip,
         "zen-up.ps1",
-        &[("ServiceName", zen_cli_shared::DEFAULT_SERVICE_NAME)],
-    );
-    let result = match body {
-        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref(), "Negotiate")
-            .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-up.ps1")),
-        Err(e) => Err(e),
-    };
+        serde_json::json!({ "ServiceName": zen_cli_shared::DEFAULT_SERVICE_NAME }),
+    )
+    .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-up.ps1"));
     zen_cli_shared::finalize_op(&db, op_id, &result, &invocation);
     let response = result?;
     Ok(ZenServiceSummary {
@@ -1288,21 +1286,21 @@ pub fn zen_service_stop(
         }));
     }
 
+    // SSH key auth (uecm-svc); operator creds/auth_method ignored. Keep the
+    // resolve() so the credential preflight side-effect still runs.
     let creds = cred.resolve(&db)?;
+    let _ = &creds;
     let invocation = redact(&format!(
         "zen-down.ps1 -ServiceName {}",
         zen_cli_shared::DEFAULT_SERVICE_NAME
     ));
     let op_id = operations::start(&db, "zen.service_stop", &[ep.machine_id])?;
-    let body = zen_cli_shared::build_param_script(
+    let result = zen_cli_shared::run_node(
+        &machine.ip,
         "zen-down.ps1",
-        &[("ServiceName", zen_cli_shared::DEFAULT_SERVICE_NAME)],
-    );
-    let result = match body {
-        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref(), "Negotiate")
-            .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-down.ps1")),
-        Err(e) => Err(e),
-    };
+        serde_json::json!({ "ServiceName": zen_cli_shared::DEFAULT_SERVICE_NAME }),
+    )
+    .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-down.ps1"));
     zen_cli_shared::finalize_op(&db, op_id, &result, &invocation);
     let response = result?;
     Ok(ZenServiceResult::Completed(ZenServiceSummary {
@@ -1332,13 +1330,16 @@ pub fn zen_service_status(
     cred.preflight(&db)?;
     let ep = zen_cli_shared::require_endpoint(&db, endpoint_id)?;
     let machine = zen_cli_shared::require_machine(&db, ep.machine_id)?;
+    // SSH key auth (uecm-svc); operator creds/auth_method ignored. Keep the
+    // resolve() so the credential preflight side-effect still runs.
     let creds = cred.resolve(&db)?;
+    let _ = &creds;
 
-    let body = zen_cli_shared::build_param_script(
+    let raw = zen_cli_shared::run_node(
+        &machine.ip,
         "zen-service-status.ps1",
-        &[("ServiceName", zen_cli_shared::DEFAULT_SERVICE_NAME)],
+        serde_json::json!({ "ServiceName": zen_cli_shared::DEFAULT_SERVICE_NAME }),
     )?;
-    let raw = zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref(), "Negotiate")?;
     let response = zen_cli_shared::parse_envelope(&raw, "zen-service-status")?;
     Ok(ZenServiceStatusResult {
         endpoint_id,
@@ -1413,23 +1414,20 @@ pub fn zen_urlacl_add(
         }));
     }
 
+    // SSH key auth (uecm-svc); operator creds/auth_method ignored. Keep the
+    // resolve() so the credential preflight side-effect still runs.
     let creds = cred.resolve(&db)?;
+    let _ = &creds;
     let invocation = redact(&format!(
         "zen-urlacl-add.ps1 -UrlPrefix {url_prefix} -UserAccount {principal}"
     ));
     let op_id = operations::start(&db, "zen.urlacl_add", &[ep.machine_id])?;
-    let body = zen_cli_shared::build_param_script(
+    let result = zen_cli_shared::run_node(
+        &machine.ip,
         "zen-urlacl-add.ps1",
-        &[
-            ("UrlPrefix", url_prefix.as_str()),
-            ("UserAccount", principal.as_str()),
-        ],
-    );
-    let result = match body {
-        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref(), "Negotiate")
-            .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-urlacl-add")),
-        Err(e) => Err(e),
-    };
+        serde_json::json!({ "UrlPrefix": url_prefix, "UserAccount": principal }),
+    )
+    .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-urlacl-add"));
     zen_cli_shared::finalize_op(&db, op_id, &result, &invocation);
     let response = result?;
     Ok(ZenUrlaclResult::Completed(ZenUrlaclSummary {
@@ -1459,14 +1457,18 @@ pub fn zen_urlacl_list(
 ) -> UecmResult<ZenUrlaclListResult> {
     cred.preflight(&db)?;
     let m = zen_cli_shared::require_machine(&db, machine_id)?;
+    // SSH key auth (uecm-svc); operator creds/auth_method ignored. Keep the
+    // resolve() so the credential preflight side-effect still runs.
     let creds = cred.resolve(&db)?;
+    let _ = &creds;
 
-    let mut args: Vec<(&str, &str)> = Vec::new();
-    if let Some(p) = port_filter.as_deref() {
-        args.push(("PortFilter", p));
-    }
-    let body = zen_cli_shared::build_param_script("zen-urlacl-list.ps1", &args)?;
-    let raw = zen_cli_shared::run_remote(&m.ip, &body, creds.as_ref(), "Negotiate")?;
+    // PortFilter optional — null when no filter; the node script treats
+    // null / empty as "list all reservations".
+    let raw = zen_cli_shared::run_node(
+        &m.ip,
+        "zen-urlacl-list.ps1",
+        serde_json::json!({ "PortFilter": port_filter.as_deref() }),
+    )?;
     let response = zen_cli_shared::parse_envelope(&raw, "zen-urlacl-list")?;
     Ok(ZenUrlaclListResult {
         machine_id,
@@ -1501,18 +1503,18 @@ pub fn zen_urlacl_remove(
         }));
     }
 
+    // SSH key auth (uecm-svc); operator creds/auth_method ignored. Keep the
+    // resolve() so the credential preflight side-effect still runs.
     let creds = cred.resolve(&db)?;
+    let _ = &creds;
     let invocation = redact(&format!("zen-urlacl-remove.ps1 -UrlPrefix {url_prefix}"));
     let op_id = operations::start(&db, "zen.urlacl_remove", &[ep.machine_id])?;
-    let body = zen_cli_shared::build_param_script(
+    let result = zen_cli_shared::run_node(
+        &machine.ip,
         "zen-urlacl-remove.ps1",
-        &[("UrlPrefix", url_prefix.as_str())],
-    );
-    let result = match body {
-        Ok(body) => zen_cli_shared::run_remote(&machine.ip, &body, creds.as_ref(), "Negotiate")
-            .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-urlacl-remove")),
-        Err(e) => Err(e),
-    };
+        serde_json::json!({ "UrlPrefix": url_prefix }),
+    )
+    .and_then(|raw| zen_cli_shared::parse_envelope(&raw, "zen-urlacl-remove"));
     zen_cli_shared::finalize_op(&db, op_id, &result, &invocation);
     let response = result?;
     Ok(ZenUrlaclResult::Completed(ZenUrlaclSummary {
