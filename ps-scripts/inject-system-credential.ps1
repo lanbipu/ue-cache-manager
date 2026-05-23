@@ -1,84 +1,76 @@
-# Injects a credential into both the current user's Credential Manager AND
-# the SYSTEM account's Credential Manager (so that services running as
-# LocalSystem can use it to authenticate to a SMB share).
-# Parameters:
-#   -ClientHostName <string>    the client machine that needs the credential
-#   -TargetHost <string>        the SMB host the credential authenticates to
-#   -SvcUsername <string>       e.g. "ddc-svc"
-#   -SvcPassword <string>
-#   [-Username <string>] [-Password <string>]   operator admin cred for client
-#   [-PsExecPath <string>]      override path to PsExec64.exe; defaults to
-#                               ../vendor/PsExec64.exe relative to this script
+# Injects an SMB credential into THIS node's SYSTEM-account Credential Manager
+# (and the current SSH user's), so LocalSystem services (UE engine /
+# RenderStream Service) can transparently authenticate to a Mode B share.
+#
+# Node-pure: runs locally on the target (shipped + executed via SSH -File).
+# Writing SYSTEM's credential vault requires running cmdkey AS SYSTEM, which we
+# do via PsExec64 -s. PsExec64.exe is installed at onboarding (enable-ssh.ps1)
+# to C:\ProgramData\UECM\PsExec64.exe.
+#
+# stdin: JSON { "TargetHost", "SvcUsername", "SvcPassword" }
+#   TargetHost  = the SMB host the credential authenticates to (cmdkey /add target)
+#   SvcUsername = the share service account, e.g. "ddc-svc"
+#   SvcPassword = its password
 # Output: JSON { ok, message }
-# Caveat: PsExec64.exe must exist on the CLIENT machine - Invoke-Command runs
-# the scriptblock there, so the operator must pre-stage it (or rely on UECM's
-# Tauri resource bundling which places it at <exe-dir>\vendor\PsExec64.exe).
-
-param(
-    [Parameter(Mandatory=$true)] [string]$ClientHostName,
-    [Parameter(Mandatory=$true)] [string]$TargetHost,
-    [Parameter(Mandatory=$true)] [string]$SvcUsername,
-    [Parameter(Mandatory=$true)] [string]$SvcPassword,
-    [string]$Username,
-    [string]$Password,
-    [string]$PsExecPath = ""
-)
 
 [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
 
 $ErrorActionPreference = 'Stop'
 
-function Build-CredentialOrNull {
-    param([string]$User, [string]$Pass)
-    if ([string]::IsNullOrEmpty($User) -or [string]::IsNullOrEmpty($Pass)) { return $null }
-    $User = $User.Trim()
-    if ([string]::IsNullOrEmpty($User)) { return $null }
-    if ($User.StartsWith(".\") -or $User.StartsWith("./")) { $User = $User.Substring(2) }
-    $secure = ConvertTo-SecureString -String $Pass -AsPlainText -Force
-    return New-Object System.Management.Automation.PSCredential($User, $secure)
-}
-
-if ([string]::IsNullOrEmpty($PsExecPath)) {
-    $PsExecPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'vendor\PsExec64.exe'
-}
-if (-not (Test-Path $PsExecPath)) {
-    @{ ok = $false; message = "PsExec64.exe not found at $PsExecPath" } | ConvertTo-Json -Compress
-    exit 1
-}
-
 try {
-    $script = {
-        param($TargetHost, $SvcUsername, $SvcPassword, $PsExecPath)
-        # PsExec writes "Connecting to local system..." status lines to stderr,
-        # which PowerShell with -ErrorActionPreference Stop treats as terminating.
-        # Suppress stderr explicitly on every PsExec call (and on cmdkey, which
-        # also writes to stderr on success).
-        $prevPref = $ErrorActionPreference
-        $ErrorActionPreference = 'Continue'
-        try {
-            cmdkey.exe "/add:$TargetHost" "/user:$SvcUsername" "/pass:$SvcPassword" 2>&1 | Out-Null
-            & $PsExecPath -accepteula -nobanner -s -i 0 cmdkey.exe "/add:$TargetHost" "/user:$SvcUsername" "/pass:$SvcPassword" 2>&1 | Out-Null
-            $listOut = (& $PsExecPath -accepteula -nobanner -s -i 0 cmdkey.exe /list:$TargetHost 2>&1) -join "`n"
-        } finally {
-            $ErrorActionPreference = $prevPref
-        }
-        if ($listOut -notmatch [regex]::Escape($SvcUsername)) {
-            throw "SYSTEM cred verify failed; cmdkey /list under SYSTEM did not show '$SvcUsername'. Got: $listOut"
-        }
-        return "user + SYSTEM creds injected for $TargetHost"
+    $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    $TargetHost  = $p.TargetHost
+    $SvcUsername = $p.SvcUsername
+    $SvcPassword = $p.SvcPassword
+    if ([string]::IsNullOrWhiteSpace($TargetHost) -or
+        [string]::IsNullOrWhiteSpace($SvcUsername) -or
+        [string]::IsNullOrEmpty($SvcPassword)) {
+        throw "TargetHost, SvcUsername, SvcPassword are required"
     }
-    $cred = Build-CredentialOrNull -User $Username -Pass $Password
-    $invokeArgs = @{
-        ComputerName = $ClientHostName
-        ScriptBlock  = $script
-        ArgumentList = @($TargetHost, $SvcUsername, $SvcPassword, $PsExecPath)
-        ErrorAction  = 'Stop'
-        Authentication = 'Negotiate'
+    # TargetHost is interpolated into a `cmd.exe /c` string for the SYSTEM /list
+    # verify, so restrict it to hostname/IP characters — this blocks cmd
+    # metacharacters (& | > < ^ " % ...) that would otherwise run as SYSTEM on
+    # the node. A real SMB host is always within this set.
+    if ($TargetHost -notmatch '^[A-Za-z0-9.:_-]+$') {
+        throw "TargetHost '$TargetHost' has invalid characters (expected a hostname or IP)"
     }
-    if ($cred) { $invokeArgs['Credential'] = $cred }
-    $remoteResult = Invoke-Command @invokeArgs
-    $msg = "$remoteResult"
-    @{ ok = $true; message = $msg } | ConvertTo-Json -Compress
+
+    $psexec = Join-Path $env:ProgramData 'UECM\PsExec64.exe'
+    if (-not (Test-Path -LiteralPath $psexec)) {
+        @{ ok = $false; message = "PsExec64.exe not found at $psexec; re-run UECM-Bootstrap.cmd on this node to install it" } | ConvertTo-Json -Compress
+        exit 1
+    }
+
+    # cmdkey + PsExec are native exes that write status to stderr; with
+    # $ErrorActionPreference='Stop' PowerShell turns native stderr into a
+    # terminating error, so drop to 'Continue' around these calls.
+    #
+    # Verify the SYSTEM cmdkey by FILE, not by capturing PsExec's stdout. When the
+    # parent runs non-interactively (over SSH), PsExec does not relay the child
+    # cmdkey's stdout back through our pipe (verified on a real node: the capture
+    # came back empty), so we have the SYSTEM cmd redirect `cmdkey /list` to a file
+    # and read that. This code ran under WinRM Invoke-Command before, where the
+    # pipe relay worked, which hid the gap. The svc username is ASCII, so it
+    # matches even when the surrounding cmdkey text is in the console CJK codepage.
+    $listFile = Join-Path $env:ProgramData ("UECM\uecm-cmdkey-list-{0}.txt" -f $PID)
+    $prevPref = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        cmdkey.exe "/add:$TargetHost" "/user:$SvcUsername" "/pass:$SvcPassword" 2>&1 | Out-Null
+        & $psexec -accepteula -nobanner -s cmdkey.exe "/add:$TargetHost" "/user:$SvcUsername" "/pass:$SvcPassword" 2>&1 | Out-Null
+        Remove-Item -LiteralPath $listFile -ErrorAction SilentlyContinue
+        & $psexec -accepteula -nobanner -s cmd.exe /c "cmdkey /list:$TargetHost > `"$listFile`" 2>&1" 2>$null | Out-Null
+        $listOut = if (Test-Path -LiteralPath $listFile) { Get-Content -LiteralPath $listFile -Raw -ErrorAction SilentlyContinue } else { "" }
+        Remove-Item -LiteralPath $listFile -ErrorAction SilentlyContinue
+    }
+    finally {
+        $ErrorActionPreference = $prevPref
+    }
+
+    if ([string]::IsNullOrEmpty($listOut) -or ($listOut -notmatch [regex]::Escape($SvcUsername))) {
+        throw "SYSTEM cred verify failed; cmdkey /list under SYSTEM did not show '$SvcUsername'. Got: $listOut"
+    }
+    @{ ok = $true; message = "user + SYSTEM creds injected for $TargetHost" } | ConvertTo-Json -Compress
 }
 catch {
     @{ ok = $false; message = $_.Exception.Message } | ConvertTo-Json -Compress

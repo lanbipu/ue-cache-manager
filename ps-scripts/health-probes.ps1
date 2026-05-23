@@ -134,20 +134,30 @@ try {
             if ([string]::IsNullOrEmpty($SvcUsername)) {
                 return @{ status='na'; message='no managed share'; sample=''; remediation='' }
             }
-            $vendor = Join-Path $env:LOCALAPPDATA 'UECM\PsExec64.exe'
+            $vendor = Join-Path $env:ProgramData 'UECM\PsExec64.exe'
             if (-not (Test-Path $vendor)) {
                 return @{ status='warning'; message='PsExec64 not staged on machine; cannot verify SYSTEM cred'; sample='';
-                          remediation='Re-run `uecm-cli winrm bootstrap <host>` (stages PsExec64 to %LOCALAPPDATA%\UECM). If AV/AppLocker blocks PsExec, exempt %LOCALAPPDATA%\UECM\PsExec64.exe.' }
+                          remediation='Re-run UECM-Bootstrap.cmd on this node (installs PsExec64 to %ProgramData%\UECM). If AV/AppLocker blocks PsExec, exempt %ProgramData%\UECM\PsExec64.exe.' }
             }
             try {
-                $out = & $vendor -accepteula -nobanner -s -i 0 cmdkey.exe /list 2>&1 | Out-String
+                # Read the SYSTEM cmdkey list via a file, not PsExec's stdout pipe:
+                # over non-interactive SSH PsExec does not relay the child's stdout
+                # back, so a direct capture comes back empty and a present cred reads
+                # as missing. Have the SYSTEM cmd redirect to a file and read that.
+                # The cmd string has no user input (fixed `cmdkey /list` + a PID-named
+                # path under ProgramData), so there is nothing to inject.
+                $listFile = Join-Path $env:ProgramData ("UECM\uecm-health-cmdkey-{0}.txt" -f $PID)
+                Remove-Item -LiteralPath $listFile -ErrorAction SilentlyContinue
+                & $vendor -accepteula -nobanner -s cmd.exe /c "cmdkey /list > `"$listFile`" 2>&1" 2>$null | Out-Null
+                $out = if (Test-Path -LiteralPath $listFile) { Get-Content -LiteralPath $listFile -Raw -ErrorAction SilentlyContinue } else { "" }
+                Remove-Item -LiteralPath $listFile -ErrorAction SilentlyContinue
                 $hasIt = $out -match [regex]::Escape($SvcUsername)
                 @{ status = ($(if ($hasIt) {'healthy'} else {'critical'}));
                    message = "SYSTEM cmdkey /list contains $SvcUsername = $hasIt"; sample = '';
                    remediation = ($(if ($hasIt) {''} else {'Run `uecm-cli share inject-system-cred --host <host>` to push cred into SYSTEM credential store.'})) }
             } catch {
                 @{ status='warning'; message=$_.Exception.Message; sample='';
-                   remediation='PsExec invocation failed -- check %LOCALAPPDATA%\UECM\PsExec64.exe integrity and AV/AppLocker exclusions.' }
+                   remediation='PsExec invocation failed -- check %ProgramData%\UECM\PsExec64.exe integrity and AV/AppLocker exclusions.' }
             }
         }
 
@@ -196,10 +206,10 @@ try {
             if ([string]::IsNullOrEmpty($ShareUnc)) {
                 return @{ status='na'; message='no share configured'; sample=''; remediation='' }
             }
-            $vendor = Join-Path $env:LOCALAPPDATA 'UECM\PsExec64.exe'
+            $vendor = Join-Path $env:ProgramData 'UECM\PsExec64.exe'
             if (-not (Test-Path $vendor)) {
                 return @{ status='warning'; message='PsExec64 not staged; cannot SYSTEM-write probe'; sample='';
-                          remediation='Re-run `uecm-cli winrm bootstrap <host>` (stages PsExec64 into %LOCALAPPDATA%\UECM).' }
+                          remediation='Re-run UECM-Bootstrap.cmd on this node (installs PsExec64 into %ProgramData%\UECM).' }
             }
             try {
                 $probe = "uecm-probe-$(Get-Random).txt"
