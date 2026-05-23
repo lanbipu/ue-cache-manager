@@ -339,6 +339,23 @@ impl SshExecutor {
 
 impl RemoteExecutor for SshExecutor {
     fn run(&self, host: &str, script: &NodeScript) -> UecmResult<ScriptOutput> {
+        // Loopback target (operator running a node script on its own box): run the
+        // script locally rather than SSH-to-self — the operator host then needn't
+        // onboard its own OpenSSH/uecm-svc. This keeps `probe`'s loopback bypass
+        // honest: probe reports reachable, and `run` actually executes here (the
+        // node scripts read their JSON args from stdin, same contract as remote).
+        if crate::core::loopback::is_loopback_target(host) {
+            let result = crate::core::powershell::run_script_stdin(
+                &crate::core::powershell::script_path(script.name),
+                &serde_json::to_string(&script.args)
+                    .map_err(|e| UecmError::InvalidInput(format!("encode args: {e}")))?,
+            )?;
+            return Ok(ScriptOutput {
+                stdout: result.stdout,
+                stderr: result.stderr,
+                exit_code: result.exit_code,
+            });
+        }
         let user = script.ssh_user.as_deref().unwrap_or(&self.default_user);
         self.ensure_scripts_staged(host, user)?;
         let args = build_ssh_args(

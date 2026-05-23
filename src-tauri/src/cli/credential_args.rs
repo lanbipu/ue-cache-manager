@@ -89,10 +89,13 @@ impl CredentialArgs {
     /// Resolve to `(username, password)` if any credential was supplied;
     /// `None` means inherit the caller's Kerberos/NTLM context.
     ///
-    /// `--cred-alias` still resolves the DPAPI password: the WinRM/PsExec
-    /// onboarding path (`machine authorize`) is alive until P5a and needs the
-    /// real `(user, pass)`. SSH-migrated callers resolve then discard it
-    /// harmlessly. The DPAPI resolve retires with `authorize` in P5a.
+    /// `--cred-alias` still yields the real `(user, pass)`: the WinRM/PsExec
+    /// onboarding path (`machine authorize`) is alive until P5a and needs it.
+    /// The password home is the cross-platform SecretStore (post-migration
+    /// saves), falling back to the legacy DPAPI store for older credentials —
+    /// so this no longer fails with "DPAPI is Windows-only" on a non-Windows
+    /// operator or for a SecretStore-only alias (SSH-migrated callers resolve
+    /// then discard it harmlessly). The DPAPI fallback retires in P5b.
     pub fn resolve(&self, db: &Db) -> UecmResult<Option<(String, String)>> {
         if let Some(alias) = &self.cred_alias {
             let user = data_creds::find_by_alias(db, alias)?
@@ -100,7 +103,10 @@ impl CredentialArgs {
                     UecmError::InvalidInput(format!("credential alias '{}' not found", alias))
                 })?
                 .username;
-            let pass = crate::core::credentials::resolve_password(alias)?;
+            let pass = match crate::core::secrets::SecretStore::from_config()?.get(alias)? {
+                Some(p) => p,
+                None => crate::core::credentials::resolve_password(alias)?,
+            };
             return Ok(Some((user, pass)));
         }
         match (&self.user, &self.pass, self.pass_stdin) {
