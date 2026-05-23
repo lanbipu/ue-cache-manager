@@ -419,11 +419,23 @@ pub async fn distribute_ddc_pak(
         Some(unc) => {
             let (user, pass) = match source_smb_credential_alias.as_deref() {
                 Some(a) => {
-                    let pass = crate::core::secrets::SecretStore::from_config()?.get(a)?;
-                    // Managed-share ACL only grants the share's actual service
-                    // account — read it from the credential record, not a default.
-                    let user = crate::data::credentials::find_by_alias(&db, a)?.map(|c| c.username);
-                    (user, pass)
+                    // A given alias must resolve to BOTH a stored secret and a
+                    // credential record (the share's real svc account) — error
+                    // clearly rather than silently mounting the source as
+                    // anonymous, which a managed share rejects later.
+                    let pass = crate::core::secrets::SecretStore::from_config()?
+                        .get(a)?
+                        .ok_or_else(|| {
+                            UecmError::InvalidInput(format!(
+                                "source SMB alias '{a}' has no stored secret; re-create the share via `share create --mode b`"
+                            ))
+                        })?;
+                    let user = crate::data::credentials::find_by_alias(&db, a)?
+                        .map(|c| c.username)
+                        .ok_or_else(|| {
+                            UecmError::InvalidInput(format!("source SMB alias '{a}' not found in credentials"))
+                        })?;
+                    (Some(user), Some(pass))
                 }
                 None => (None, None),
             };

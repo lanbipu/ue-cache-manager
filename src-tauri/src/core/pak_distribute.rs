@@ -297,7 +297,17 @@ pub fn resolve_source_smb(
                          re-run `share create --mode b`"
                     ))
                 })?;
-            (Some("ddc-svc".to_string()), Some(pass))
+            // Use the share's actual service account from its credential record
+            // (the alias IS the credential alias) — a managed-share ACL only
+            // grants that account, so a non-default svc_username must not be sent
+            // as the hardcoded `ddc-svc`. Fall back to the convention only if no
+            // record exists.
+            let user = crate::data::credentials::find_by_alias(db, &alias)
+                .ok()
+                .flatten()
+                .map(|c| c.username)
+                .unwrap_or_else(|| "ddc-svc".to_string());
+            (Some(user), Some(pass))
         }
         _ => (None, None),
     };
