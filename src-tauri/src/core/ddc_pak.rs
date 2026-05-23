@@ -1,6 +1,6 @@
 //! High-level DDC Pak generation helpers.
 
-use crate::core::powershell;
+use crate::core::ssh::{run_json, NodeScript, SshExecutor};
 use crate::core::ue_runner::{self, UeRunSpec, UeRunnerBackend};
 use crate::error::{UecmError, UecmResult};
 use serde::{Deserialize, Serialize};
@@ -53,23 +53,17 @@ pub fn preflight(
     user: Option<&str>,
     pass: Option<&str>,
 ) -> UecmResult<()> {
-    let mut args = vec![
-        "-HostName".to_string(),
-        host.to_string(),
-        "-EnginePath".into(),
-        engine_path.to_string(),
-        "-ProjectPath".into(),
-        project_path.to_string(),
-    ];
-    if let (Some(user), Some(pass)) = (user, pass) {
-        args.push("-Username".into());
-        args.push(user.into());
-        args.push("-Password".into());
-        args.push(pass.into());
-    }
-    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
-    let result: PreflightRaw =
-        powershell::run_json(&powershell::script_path("generate-ddc-pak.ps1"), &args_ref)?;
+    let _ = (user, pass); // SSH key auth; per-call WinRM cred ignored (kept until A5).
+    let exec = SshExecutor::from_config()?;
+    let result: PreflightRaw = run_json(
+        &exec,
+        host,
+        &NodeScript {
+            name: "generate-ddc-pak.ps1",
+            args: serde_json::json!({ "EnginePath": engine_path, "ProjectPath": project_path }),
+            ssh_user: None,
+        },
+    )?;
     if !result.ok {
         return Err(UecmError::OperationFailed(
             result.message.unwrap_or_else(|| "preflight failed".into()),
@@ -94,21 +88,17 @@ pub fn verify_output(
     user: Option<&str>,
     pass: Option<&str>,
 ) -> UecmResult<PakOutput> {
-    let mut args = vec![
-        "-HostName".to_string(),
-        host.to_string(),
-        "-ProjectDir".into(),
-        project_dir.to_string(),
-    ];
-    if let (Some(user), Some(pass)) = (user, pass) {
-        args.push("-Username".into());
-        args.push(user.into());
-        args.push("-Password".into());
-        args.push(pass.into());
-    }
-    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
-    let result: VerifyRaw =
-        powershell::run_json(&powershell::script_path("verify-pak-output.ps1"), &args_ref)?;
+    let _ = (user, pass); // SSH key auth; per-call WinRM cred ignored (kept until A5).
+    let exec = SshExecutor::from_config()?;
+    let result: VerifyRaw = run_json(
+        &exec,
+        host,
+        &NodeScript {
+            name: "verify-pak-output.ps1",
+            args: serde_json::json!({ "ProjectDir": project_dir }),
+            ssh_user: None,
+        },
+    )?;
     if !result.ok {
         return Err(UecmError::OperationFailed(
             result.message.unwrap_or_else(|| "pak verify failed".into()),
@@ -145,19 +135,7 @@ pub fn launch_generation(
     })
 }
 
-#[cfg(all(test, not(windows)))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn preflight_returns_powershell_error_on_non_windows() {
-        let result = preflight("h", "C:\\UE", "C:\\X.uproject", Some("u"), Some("p"));
-        assert!(matches!(result, Err(UecmError::PowerShell(_))));
-    }
-
-    #[test]
-    fn verify_returns_powershell_error_on_non_windows() {
-        let result = verify_output("h", "C:\\X", Some("u"), Some("p"));
-        assert!(matches!(result, Err(UecmError::PowerShell(_))));
-    }
-}
+// (Old `#[cfg(not(windows))]` "returns PowerShell error" tests for preflight/
+// verify_output removed: both now go over SSH — they error at ssh connect and
+// from_config would touch the real config dir. Remote behavior is validated on a
+// real node; the pak generation itself runs through ue_runner.)
