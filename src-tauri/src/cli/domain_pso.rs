@@ -33,7 +33,7 @@ pub fn handle(ctx: &mut Ctx<'_>, action: PsoAction) -> UecmResult<()> {
             cred,
         } => collect(ctx, project_id, source_machine, &resolution, windowed, max_minutes, &cred),
         PsoAction::List { project_id } => list(ctx, project_id),
-        PsoAction::Distribute { project_id, source_machine, targets, yes, dry_run, cred } => {
+        PsoAction::Distribute { project_id, source_machine, targets, yes, dry_run, source_smb_cred_alias, cred } => {
             let outcome = destructive::check(yes, dry_run, "pso.distribute")?;
             distribute(
                 ctx,
@@ -41,6 +41,7 @@ pub fn handle(ctx: &mut Ctx<'_>, action: PsoAction) -> UecmResult<()> {
                 source_machine,
                 &targets,
                 outcome == Outcome::DryRun,
+                source_smb_cred_alias.as_deref(),
                 &cred,
             )
         }
@@ -280,6 +281,7 @@ fn distribute(
     source_machine_id: i64,
     target_ids: &[i64],
     dry_run: bool,
+    source_smb_cred_alias: Option<&str>,
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
     let db = ctx.require_db()?;
@@ -290,11 +292,17 @@ fn distribute(
 
     // Dry-run must not consume `--pass-stdin` or decrypt DPAPI; see
     // `domain_ddc::distribute` for rationale.
-    let (op_user, op_pass) = if dry_run {
+    let (op_user, op_pass, smb) = if dry_run {
         cred.preflight(db)?;
-        (None, None)
+        (None, None, crate::core::pak_distribute::SourceSmb::default())
     } else {
-        resolve_creds(db, cred)?
+        let (op_user, op_pass) = resolve_creds(db, cred)?;
+        let smb = crate::core::pak_distribute::resolve_source_smb(
+            db,
+            source_machine_id,
+            source_smb_cred_alias,
+        )?;
+        (op_user, op_pass, smb)
     };
 
     // Find the most recent PSO cache file for this project + source machine.
@@ -315,11 +323,11 @@ fn distribute(
         &source_machine.ip,
         &file,
         target_ids,
-        None, // named_share_unc not exposed in CLI
-        op_user.clone(),
-        op_pass.clone(),
-        op_user.clone(),
-        op_pass.clone(),
+        smb.named_share_unc.as_deref(), // managed-share UNC paired with the SMB cred
+        op_user,
+        op_pass,
+        smb.user,
+        smb.pass,
     )?;
 
     if plan.is_empty() {

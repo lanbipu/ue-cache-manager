@@ -25,7 +25,7 @@ pub fn handle(ctx: &mut Ctx<'_>, action: DdcAction) -> UecmResult<()> {
         DdcAction::Verify { project_id, source_machine, backend, cred } => {
             verify(ctx, project_id, source_machine, backend, &cred)
         }
-        DdcAction::Distribute { project_id, source_machine, targets, yes, dry_run, backend, cred } => {
+        DdcAction::Distribute { project_id, source_machine, targets, yes, dry_run, backend, source_smb_cred_alias, cred } => {
             let outcome = destructive::check(yes, dry_run, "ddc.distribute")?;
             distribute(
                 ctx,
@@ -34,6 +34,7 @@ pub fn handle(ctx: &mut Ctx<'_>, action: DdcAction) -> UecmResult<()> {
                 &targets,
                 outcome == Outcome::DryRun,
                 backend,
+                source_smb_cred_alias.as_deref(),
                 &cred,
             )
         }
@@ -367,6 +368,7 @@ fn distribute(
     target_ids: &[i64],
     dry_run: bool,
     backend_choice: BackendChoice,
+    source_smb_cred_alias: Option<&str>,
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
     let db = ctx.require_db()?.clone();
@@ -410,11 +412,18 @@ fn distribute(
     // credential snippets without altering its validation logic; the result
     // we emit back to the user lists target machines and UNC paths, never
     // resolved passwords.
-    let (op_user, op_pass) = if dry_run {
+    // Dry-run must not read secrets, so source SMB cred is resolved only on the
+    // real path. source SMB now comes from the SecretStore (via explicit alias
+    // or auto-derived from the source host's Mode B share), not the operator
+    // WinRM cred — the operator->target leg is SSH key auth.
+    let (op_user, op_pass, smb) = if dry_run {
         cred.preflight(&db)?;
-        (None, None)
+        (None, None, pak_distribute::SourceSmb::default())
     } else {
-        resolve_creds(&db, cred)?
+        let (op_user, op_pass) = resolve_creds(&db, cred)?;
+        let smb =
+            pak_distribute::resolve_source_smb(&db, source_machine_id, source_smb_cred_alias)?;
+        (op_user, op_pass, smb)
     };
 
     let profile = pak_distribute::DistributeProfile::ddc_pak();
@@ -426,11 +435,11 @@ fn distribute(
         &source_location,
         target_ids,
         project_id,
-        None, // named_share_unc — not exposed in CLI for now
-        op_user.clone(),
-        op_pass.clone(),
+        smb.named_share_unc.as_deref(), // managed-share UNC paired with the SMB cred
         op_user,
         op_pass,
+        smb.user,
+        smb.pass,
     )?;
 
     if plan.is_empty() {

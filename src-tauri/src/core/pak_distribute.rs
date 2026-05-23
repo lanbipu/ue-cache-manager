@@ -199,6 +199,64 @@ fn path_ends_with_segments(path: &str, suffix: &str) -> bool {
         .all(|(left, right)| left.eq_ignore_ascii_case(right))
 }
 
+/// Source-share SMB access for a distribute run: the managed-share UNC the
+/// target should pull from, plus the credential to mount it. Empty (`None`s)
+/// means "no managed share / no cred" — fine for an open Mode A source.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SourceSmb {
+    pub named_share_unc: Option<String>,
+    pub user: Option<String>,
+    pub pass: Option<String>,
+}
+
+/// Resolve how the target node reads the source share. Auto-derive (no explicit
+/// alias) finds a Managed (Mode B) share on the source host and returns BOTH its
+/// `unc_path` AND the SecretStore credential A3-7 wrote — they must stay paired,
+/// because the `ddc-svc` account only has rights to that managed share, not the
+/// admin `D$` share. An explicit alias selects the matching managed share (so
+/// its UNC is used too); if none matches, the cred still resolves but the UNC is
+/// left to the caller's admin-share fallback.
+///
+/// Mode B svc account is `ddc-svc` by convention (see `share create`); the
+/// SecretStore holds only the password, so the username is fixed here.
+pub fn resolve_source_smb(
+    db: &Db,
+    source_machine_id: i64,
+    explicit_alias: Option<&str>,
+) -> UecmResult<SourceSmb> {
+    use crate::data::share_configs::{self, ShareMode};
+    let share = share_configs::find_by_host(db, source_machine_id)?
+        .into_iter()
+        .find(|s| {
+            s.mode == ShareMode::Managed
+                && s.credential_alias.is_some()
+                && explicit_alias.map_or(true, |a| s.credential_alias.as_deref() == Some(a))
+        });
+    let store = crate::core::secrets::SecretStore::from_config()?;
+    if let Some(share) = share {
+        let alias = share.credential_alias.expect("filtered to Some");
+        let pass = store.get(&alias)?;
+        return Ok(SourceSmb {
+            named_share_unc: pass.as_ref().map(|_| share.unc_path.clone()),
+            user: pass.as_ref().map(|_| "ddc-svc".to_string()),
+            pass,
+        });
+    }
+    // No managed share matched. An explicit alias still resolves a cred (UNC
+    // unknown → admin-share fallback); no alias → nothing (open Mode A source).
+    match explicit_alias {
+        Some(alias) => {
+            let pass = store.get(alias)?;
+            Ok(SourceSmb {
+                named_share_unc: None,
+                user: pass.as_ref().map(|_| "ddc-svc".to_string()),
+                pass,
+            })
+        }
+        None => Ok(SourceSmb::default()),
+    }
+}
+
 /// stdin JSON for the node-pure distribute scripts. The operator→target WinRM
 /// cred is gone (SSH key auth); only the target→source SMB cred is forwarded.
 fn build_distribute_payload(item: &DistributePlanItem, preflight: bool) -> serde_json::Value {
@@ -410,6 +468,35 @@ mod tests {
             discovery_status: crate::data::DiscoveryStatus::Auto,
             discovered_at: None,
         }
+    }
+
+    #[test]
+    fn resolve_source_smb_none_without_managed_share() {
+        use crate::data::share_configs::{insert, ShareConfig, ShareMode};
+        let (db, source, _target, _project) = setup();
+        // No shares registered → empty (open Mode A path on the node).
+        assert_eq!(
+            resolve_source_smb(&db, source, None).unwrap(),
+            SourceSmb::default()
+        );
+        // An Open (Mode A) share contributes no managed UNC / cred either.
+        insert(
+            &db,
+            &ShareConfig {
+                id: None,
+                host_machine_id: source,
+                share_name: "DDC".into(),
+                unc_path: "\\\\SOURCE\\DDC".into(),
+                local_path: "D:\\DDC".into(),
+                mode: ShareMode::Open,
+                credential_alias: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_source_smb(&db, source, None).unwrap(),
+            SourceSmb::default()
+        );
     }
 
     #[test]
