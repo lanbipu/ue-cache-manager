@@ -1,56 +1,33 @@
-param(
-    [Parameter(Mandatory=$true)] [string]$HostName,
-    [Parameter(Mandatory=$true)] [string]$ProjectDir,
-    [string]$Username,
-    [string]$Password
-)
-
+# List PSO cache files under a project's Saved\CollectedPSOs dir.
+#
+# Node-pure: runs locally on the target (shipped + executed via SSH -File).
+# stdin: JSON { "ProjectDir" }
+# Output: JSON { ok, items: [{ file_path, file_name, size, last_write }], count, [message] }
+[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
 $ErrorActionPreference = 'Stop'
 
-function Build-CredentialOrNull {
-    param([string]$User, [string]$Pass)
-    if ([string]::IsNullOrEmpty($User) -or [string]::IsNullOrEmpty($Pass)) { return $null }
-    if ($User -notmatch '[\\@]') { $User = ".\$User" }
-    $secure = ConvertTo-SecureString -String $Pass -AsPlainText -Force
-    return New-Object System.Management.Automation.PSCredential($User, $secure)
-}
-
 try {
-    $script = {
-        param($ProjectDir)
-        $dir = Join-Path -Path $ProjectDir -ChildPath 'Saved\CollectedPSOs'
-        if (-not (Test-Path -LiteralPath $dir)) { return ,@() }
+    $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    $ProjectDir = $p.ProjectDir
+    if ([string]::IsNullOrWhiteSpace($ProjectDir)) { throw "ProjectDir is required" }
 
+    $dir = Join-Path -Path $ProjectDir -ChildPath 'Saved\CollectedPSOs'
+    # ArrayList (not Generic.List) so ConvertTo-Json serialises cleanly on PS5.1.
+    $out = New-Object System.Collections.ArrayList
+    if (Test-Path -LiteralPath $dir) {
         $files = Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue | Where-Object {
             $_.Extension -eq '.upipelinecache' -or $_.Name -like '*.stablepc.csv'
         }
-        $out = @()
         foreach ($f in $files) {
-            $out += @{
-                file_path = "$($f.FullName)"
-                file_name = "$($f.Name)"
-                size = "$($f.Length)"
+            [void]$out.Add(@{
+                file_path  = "$($f.FullName)"
+                file_name  = "$($f.Name)"
+                size       = "$($f.Length)"
                 last_write = "$($f.LastWriteTimeUtc.ToString('o'))"
-            }
+            })
         }
-        return ,$out
     }
-
-    $cred = Build-CredentialOrNull -User $Username -Pass $Password
-    $invokeArgs = @{
-        ComputerName = $HostName
-        ScriptBlock = $script
-        ArgumentList = @($ProjectDir)
-        ErrorAction = 'Stop'
-    }
-    if ($cred) { $invokeArgs['Credential'] = $cred }
-    $items = Invoke-Command @invokeArgs
-
-    @{
-        ok = $true
-        items = @($items)
-        count = (@($items)).Count
-    } | ConvertTo-Json -Depth 6 -Compress
+    @{ ok = $true; items = @($out); count = $out.Count } | ConvertTo-Json -Depth 6 -Compress
 }
 catch {
     @{ ok = $false; items = @(); count = 0; message = "$($_.Exception.Message)" } | ConvertTo-Json -Compress

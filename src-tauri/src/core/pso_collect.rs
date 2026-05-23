@@ -2,7 +2,6 @@
 
 use crate::core::{
     gpu_consistency,
-    powershell,
     ue_runner::{self, UeRunSpec, UeRunnerBackend},
 };
 use crate::data::{machine_gpus, pso_cache_files, Db, PsoCacheFile};
@@ -104,21 +103,17 @@ pub fn enumerate_remote(
         return enumerate_local(project_dir);
     }
 
-    let mut args = vec![
-        "-HostName".to_string(),
-        host.into(),
-        "-ProjectDir".into(),
-        project_dir.into(),
-    ];
-    if let (Some(user), Some(pass)) = (user, pass) {
-        args.push("-Username".into());
-        args.push(user.into());
-        args.push("-Password".into());
-        args.push(pass.into());
-    }
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let result: ListScriptResult =
-        powershell::run_json(&powershell::script_path("list-pso-cache-files.ps1"), &refs)?;
+    let _ = (user, pass); // SSH key auth; per-call WinRM cred ignored until A5.
+    let exec = crate::core::ssh::SshExecutor::from_config()?;
+    let result: ListScriptResult = crate::core::ssh::run_json(
+        &exec,
+        host,
+        &crate::core::ssh::NodeScript {
+            name: "list-pso-cache-files.ps1",
+            args: serde_json::json!({ "ProjectDir": project_dir }),
+            ssh_user: None,
+        },
+    )?;
     if !result.ok {
         return Err(UecmError::OperationFailed(
             result.message.unwrap_or_else(|| "PSO file enumeration failed".into()),

@@ -1,6 +1,8 @@
 //! Robocopy fan-out planning and per-target execution for DDC Pak files.
 
-use crate::core::powershell;
+#[cfg(windows)]
+use crate::core::powershell; // decode_subprocess_output, used by the loopback robocopy path
+use crate::core::ssh::{run_json, NodeScript, SshExecutor};
 use crate::data::{
     machines as data_machines,
     project_locations::{self, ProjectLocation},
@@ -197,39 +199,25 @@ fn path_ends_with_segments(path: &str, suffix: &str) -> bool {
         .all(|(left, right)| left.eq_ignore_ascii_case(right))
 }
 
-fn build_distribute_args(
-    _profile: &DistributeProfile,
-    item: &DistributePlanItem,
-    preflight: bool,
-) -> Vec<String> {
-    let mut args = vec![
-        "-HostName".to_string(),
-        item.target_host.clone(),
-        "-SourceUnc".into(),
-        item.source_unc.clone(),
-        "-TargetLocal".into(),
-        item.target_local.clone(),
-    ];
+/// stdin JSON for the node-pure distribute scripts. The operator→target WinRM
+/// cred is gone (SSH key auth); only the target→source SMB cred is forwarded.
+fn build_distribute_payload(item: &DistributePlanItem, preflight: bool) -> serde_json::Value {
+    let mut obj = serde_json::json!({
+        "SourceUnc": item.source_unc,
+        "TargetLocal": item.target_local,
+        "PreflightOnly": preflight,
+    });
+    let map = obj.as_object_mut().expect("json object");
     if let Some(file_name) = &item.file_name {
-        args.push("-FileName".into());
-        args.push(file_name.clone());
+        map.insert("FileName".into(), file_name.clone().into());
     }
-    if let (Some(user), Some(pass)) = (item.credential_user.as_deref(), item.credential_pass.as_deref()) {
-        args.push("-Username".into());
-        args.push(user.into());
-        args.push("-Password".into());
-        args.push(pass.into());
+    if let (Some(user), Some(pass)) =
+        (item.source_smb_user.as_deref(), item.source_smb_pass.as_deref())
+    {
+        map.insert("SourceSmbUser".into(), user.into());
+        map.insert("SourceSmbPass".into(), pass.into());
     }
-    if let (Some(user), Some(pass)) = (item.source_smb_user.as_deref(), item.source_smb_pass.as_deref()) {
-        args.push("-SourceSmbUser".into());
-        args.push(user.into());
-        args.push("-SourceSmbPass".into());
-        args.push(pass.into());
-    }
-    if preflight {
-        args.push("-PreflightOnly".into());
-    }
-    args
+    obj
 }
 
 pub async fn preflight_one(item: &DistributePlanItem) -> UecmResult<()> {
@@ -253,10 +241,16 @@ pub async fn preflight_one_with_profile(
         return Ok(());
     }
 
-    let args = build_distribute_args(profile, item, true);
-    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
-    let result: DistributeRaw =
-        powershell::run_json(&powershell::script_path(profile.ps_script), &args_ref)?;
+    let exec = SshExecutor::from_config()?;
+    let result: DistributeRaw = run_json(
+        &exec,
+        &item.target_host,
+        &NodeScript {
+            name: profile.ps_script,
+            args: build_distribute_payload(item, true),
+            ssh_user: None,
+        },
+    )?;
     if !result.ok {
         return Err(UecmError::OperationFailed(
             result
@@ -280,10 +274,16 @@ pub async fn run_one_with_profile(
         return run_local_robocopy(profile, &item, false);
     }
 
-    let args = build_distribute_args(profile, &item, false);
-    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
-    let result: DistributeRaw =
-        powershell::run_json(&powershell::script_path(profile.ps_script), &args_ref)?;
+    let exec = SshExecutor::from_config()?;
+    let result: DistributeRaw = run_json(
+        &exec,
+        &item.target_host,
+        &NodeScript {
+            name: profile.ps_script,
+            args: build_distribute_payload(&item, false),
+            ssh_user: None,
+        },
+    )?;
     Ok(DistributeOutcome {
         target_machine_id: item.target_machine_id,
         ok: result.ok,
