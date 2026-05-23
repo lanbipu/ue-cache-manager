@@ -424,22 +424,26 @@ pub async fn distribute_ddc_pak(
             // A Mode B share -> its alias -> SecretStore cred + real svc account.
             // An open (Mode A) share or an unregistered manual UNC -> no alias ->
             // anonymous (fine for open shares).
+            // Only a MANAGED (Mode B) share carries an SMB credential; match the
+            // UNC to a Mode B share on the source to find its alias. (An open
+            // Mode A row may store an unrelated operator alias and is mounted
+            // anonymously, so it must not be treated as an SMB cred.)
             let alias = source_smb_credential_alias.clone().or_else(|| {
                 crate::data::share_configs::find_by_host(&db, source_machine_id)
                     .ok()
                     .and_then(|shares| {
                         shares
                             .into_iter()
-                            .find(|s| &s.unc_path == unc)
+                            .find(|s| &s.unc_path == unc && s.mode == crate::data::ShareMode::Managed)
                             .and_then(|s| s.credential_alias)
                     })
             });
             let (user, pass) = match alias.as_deref() {
                 Some(a) => {
-                    // A resolved alias must yield BOTH the stored secret and the
-                    // credential record (the share's real svc account) — error
-                    // clearly rather than mounting the source as anonymous, which
-                    // a managed share rejects later as unreachable.
+                    // The SecretStore secret is required for a Mode B share (error
+                    // clearly rather than mounting anonymously, which it rejects).
+                    // The svc username mirrors resolve_source_smb: the real account
+                    // from the credential record, else the `ddc-svc` convention.
                     let pass = crate::core::secrets::SecretStore::from_config()?
                         .get(a)?
                         .ok_or_else(|| {
@@ -449,9 +453,7 @@ pub async fn distribute_ddc_pak(
                         })?;
                     let user = crate::data::credentials::find_by_alias(&db, a)?
                         .map(|c| c.username)
-                        .ok_or_else(|| {
-                            UecmError::InvalidInput(format!("source SMB alias '{a}' not found in credentials"))
-                        })?;
+                        .unwrap_or_else(|| "ddc-svc".to_string());
                     (Some(user), Some(pass))
                 }
                 None => (None, None),

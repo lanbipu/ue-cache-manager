@@ -54,17 +54,12 @@ pub fn save_credential(
 
 #[tauri::command]
 pub fn delete_credential(db: State<'_, Db>, alias: String) -> UecmResult<()> {
-    // Look up the kind BEFORE clearing the row: a Winrm (operator) credential's
-    // real secret lives in cmdkey, so a cmdkey-delete failure must surface (else
-    // the UI shows it gone while the Credential Manager entry lingers,
-    // unreclaimable). A Share alias is SecretStore-backed with no cmdkey entry,
-    // so cmdkey's "no entry" failure there is expected and tolerated.
-    let kind = data_creds::find_by_alias(&db, &alias)?.map(|c| c.kind);
-
     // SQLite metadata is the UI source of truth — always clear it.
     data_creds::delete_by_alias(&db, &alias)?;
 
     // SecretStore (Share-svc home, P3) + DPAPI: best-effort orphan cleanup.
+    // DPAPI is a legacy store retired by the SSH migration, so a stale entry is
+    // harmless — warn rather than block the delete.
     if let Err(e) = crate::core::secrets::SecretStore::from_config().and_then(|s| s.delete(&alias)) {
         tracing::warn!(alias = %alias, error = %e, "SecretStore delete failed; orphan secret may remain");
     }
@@ -72,14 +67,10 @@ pub fn delete_credential(db: State<'_, Db>, alias: String) -> UecmResult<()> {
         tracing::warn!(alias = %alias, error = %e, "DPAPI delete_password failed; orphan entry will remain in creds.bin");
     }
 
-    // cmdkey: surface the failure for a Winrm cred (real secret store); tolerate
-    // it for a Share/SecretStore alias (no cmdkey entry expected).
-    match core_creds::delete(&alias) {
-        Ok(()) => Ok(()),
-        Err(e) if matches!(kind, Some(CredentialKind::Winrm)) => Err(e),
-        Err(e) => {
-            tracing::debug!(alias = %alias, error = %e, "cmdkey delete failed (expected for SecretStore-backed alias)");
-            Ok(())
-        }
-    }
+    // cmdkey: surface a genuine delete failure (perms/cmdkey) for ANY kind so the
+    // UI never reports a credential gone while its Credential Manager entry
+    // lingers, unreclaimable. cred-delete.ps1 is idempotent — a missing entry
+    // (e.g. a SecretStore-backed Share alias that never wrote cmdkey) returns Ok,
+    // so this no longer mis-fires on aliases that simply have nothing to delete.
+    core_creds::delete(&alias)
 }
