@@ -1,13 +1,19 @@
-# Creates a USB-friendly UECM WinRM bootstrap package.
+# Creates a USB-friendly UECM bootstrap package.
 # The package contains:
 # - UECM-Bootstrap.cmd        (双击入口，自提权)
-# - UECM-Bootstrap-WinRM.ps1  (脚本本体)
+# - UECM-Bootstrap-WinRM.ps1  (WinRM 脚本本体)
 # - README.txt                (中文使用说明)
+# 当传入 -UecmPublicKeyPath 时，额外打包 SSH 传输纳管文件：
+# - enable-ssh.ps1            (节点开 OpenSSH + 授权 UECM 公钥)
+# - uecm.pub                  (UECM 传输公钥，明文随包)
 
 param(
     [string]$OutputDirectory = (Join-Path (Get-Location) 'UECM-WinRM-Bootstrap'),
     [string]$LocalAdminName = '',
-    [string]$LocalAdminPassword = ''
+    [string]$LocalAdminPassword = '',
+    # Path to the UECM transport public key (keystore's uecm_ed25519.pub). When set,
+    # enable-ssh.ps1 + uecm.pub are added so the package also onboards SSH transport.
+    [string]$UecmPublicKeyPath = ''
 )
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -72,12 +78,32 @@ try {
     $targetReadme = Join-Path $OutputDirectory 'README.txt'
     Copy-Item -Path $sourceReadme -Destination $targetReadme -Force
 
+    # SSH transport onboarding files (parallel to WinRM during migration). Only
+    # included when an operator public key is supplied; otherwise the package stays
+    # WinRM-only and the .cmd's SSH step no-ops (it guards on both files existing).
+    $sshIncluded = $false
+    $sourceSshPs1 = Join-Path $scriptRoot 'enable-ssh.ps1'
+    if (-not [string]::IsNullOrWhiteSpace($UecmPublicKeyPath)) {
+        if (-not (Test-Path $sourceSshPs1)) { throw "enable-ssh.ps1 not found at $sourceSshPs1" }
+        if (-not (Test-Path $UecmPublicKeyPath)) { throw "UECM public key not found at $UecmPublicKeyPath" }
+        Copy-Item -Path $sourceSshPs1 -Destination (Join-Path $OutputDirectory 'enable-ssh.ps1') -Force
+        $pub = (Get-Content -Raw $UecmPublicKeyPath).Trim()
+        $encNoBom = New-Object System.Text.UTF8Encoding $false
+        [System.IO.File]::WriteAllText((Join-Path $OutputDirectory 'uecm.pub'), $pub + "`n", $encNoBom)
+        $sshIncluded = $true
+    }
+
+    $files = New-Object System.Collections.ArrayList
+    [void]$files.AddRange(@('UECM-Bootstrap.cmd', 'UECM-Bootstrap-WinRM.ps1', 'README.txt'))
+    if ($sshIncluded) { [void]$files.AddRange(@('enable-ssh.ps1', 'uecm.pub')) }
+
     @{
         ok = $true
-        message = 'UECM WinRM bootstrap package created'
+        message = 'UECM bootstrap package created'
         output_directory = (Resolve-Path $OutputDirectory).Path
-        files = @('UECM-Bootstrap.cmd', 'UECM-Bootstrap-WinRM.ps1', 'README.txt')
+        files = $files
         local_admin_baked = (-not [string]::IsNullOrEmpty($LocalAdminPassword))
+        ssh_included = $sshIncluded
     } | ConvertTo-Json -Compress
     exit 0
 }
