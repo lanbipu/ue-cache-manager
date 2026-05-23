@@ -177,8 +177,7 @@ pub fn inject_share_credential_to_clients(
     })?;
     // Mode B share svc password from the SecretStore (was DPAPI). Mirrors
     // cli/domain_share.rs::find_share_svc_password.
-    let svc_pass = crate::core::secrets::SecretStore::from_config()?
-        .get(svc_alias)?
+    let svc_pass = crate::core::secrets::get_share_secret_migrating(svc_alias)?
         .ok_or_else(|| {
             UecmError::InvalidInput(format!(
                 "no stored svc password for alias '{}'; re-create the share via `share create --mode b`",

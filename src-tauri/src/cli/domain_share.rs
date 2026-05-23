@@ -289,8 +289,7 @@ fn find_share_svc_password(
             target_host
         ))
     })?;
-    crate::core::secrets::SecretStore::from_config()?
-        .get(&alias)?
+    crate::core::secrets::get_share_secret_migrating(&alias)?
         .ok_or_else(|| {
             UecmError::InvalidInput(format!(
                 "no stored svc password for alias '{}'. The share may have been created \

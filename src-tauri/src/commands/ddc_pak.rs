@@ -447,8 +447,7 @@ pub async fn distribute_ddc_pak(
                     // clearly rather than mounting anonymously, which it rejects).
                     // The svc username mirrors resolve_source_smb: the real account
                     // from the credential record, else the `ddc-svc` convention.
-                    let pass = crate::core::secrets::SecretStore::from_config()?
-                        .get(a)?
+                    let pass = crate::core::secrets::get_share_secret_migrating(a)?
                         .ok_or_else(|| {
                             UecmError::InvalidInput(format!(
                                 "source SMB alias '{a}' has no stored secret; re-create the share via `share create --mode b`"

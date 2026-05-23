@@ -315,8 +315,7 @@ pub fn resolve_source_smb(
         resolve_source_share(db, source_machine_id, explicit_alias)?;
     let (user, pass) = match (secret_alias, read_secret) {
         (Some(alias), true) => {
-            let pass = crate::core::secrets::SecretStore::from_config()?
-                .get(&alias)?
+            let pass = crate::core::secrets::get_share_secret_migrating(&alias)?
                 .ok_or_else(|| {
                     UecmError::InvalidInput(format!(
                         "Mode B share secret '{alias}' missing from SecretStore; \
