@@ -16,13 +16,19 @@ pub fn handle(ctx: &mut Ctx<'_>, action: MachineAction) -> UecmResult<()> {
         MachineAction::List => list(ctx),
         MachineAction::Scan { cidr, timeout_ms } => scan(ctx, &cidr, timeout_ms),
         MachineAction::Add { ip, hostname } => add(ctx, ip, hostname),
-        MachineAction::Refresh { id, cred } => refresh(ctx, id, &cred),
+        MachineAction::Refresh { id, cred } => {
+            let exec = SshExecutor::from_config()?;
+            refresh(ctx, id, &cred, &exec)
+        }
         MachineAction::Detail { id } => detail(ctx, id),
         MachineAction::Delete { id, machine_ids, all, yes, dry_run } => {
             delete(ctx, id, machine_ids, all, yes, dry_run)
         }
         MachineAction::Rename { id, hostname } => rename(ctx, id, hostname),
-        MachineAction::DeepScan { machine_ids, all, cred } => deep_scan(ctx, machine_ids, all, &cred),
+        MachineAction::DeepScan { machine_ids, all, cred } => {
+            let exec = SshExecutor::from_config()?;
+            deep_scan(ctx, machine_ids, all, &cred, &exec)
+        }
         MachineAction::Authorize { machine_ids, all, save_as, cred } => {
             authorize(ctx, machine_ids, all, save_as, &cred)
         }
@@ -212,7 +218,7 @@ fn scan(ctx: &mut Ctx<'_>, cidr: &str, timeout_ms: u64) -> UecmResult<()> {
     Ok(())
 }
 
-fn refresh(ctx: &mut Ctx<'_>, id: i64, cred: &crate::cli::credential_args::CredentialArgs) -> UecmResult<()> {
+fn refresh(ctx: &mut Ctx<'_>, id: i64, cred: &crate::cli::credential_args::CredentialArgs, exec: &dyn RemoteExecutor) -> UecmResult<()> {
     // Fetch machine, grab IP (canonical connect target — matches the UI's
     // `commands::discovery::refresh_machine`). Hostname can drift if the user
     // renames the row, so IP is the only reliable WinRM target.
@@ -253,7 +259,7 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64, cred: &crate::cli::credential_args::Crede
         })
         .ok();
     // SSH key auth (uecm-svc); operator `creds` no longer gate the probe.
-    let probe_result = SshExecutor::from_config()?.probe(&host, None);
+    let probe_result = exec.probe(&host, None);
     let probe = match probe_result {
         Ok(p) if p.ok => {
             {
@@ -293,8 +299,7 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64, cred: &crate::cli::credential_args::Crede
             total: None,
         })
         .ok();
-    let exec = crate::core::ssh::SshExecutor::from_config()?;
-    let detected_ue = crate::core::discovery::detect_ue_versions(&exec, &host)?;
+    let detected_ue = crate::core::discovery::detect_ue_versions(exec, &host)?;
     // PowerShell `query-ue-versions.ps1` sorts version ascending, so picking
     // index 0 marks the OLDEST install as primary — wrong, downstream
     // DDC/PSO jobs that fall back to `is_primary` would pick the wrong engine.
@@ -348,7 +353,7 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64, cred: &crate::cli::credential_args::Crede
             total: None,
         })
         .ok();
-    let detected_gpus = crate::core::discovery::detect_gpus(&exec, &host)?;
+    let detected_gpus = crate::core::discovery::detect_gpus(exec, &host)?;
     {
         let db = ctx.require_db()?;
         // Convert DetectedGpu → GpuInfo
@@ -402,6 +407,7 @@ fn deep_scan(
     machine_ids: Vec<i64>,
     all: bool,
     cred: &crate::cli::credential_args::CredentialArgs,
+    exec: &dyn RemoteExecutor,
 ) -> UecmResult<()> {
     let ids = {
         let db = ctx.require_db()?;
@@ -415,7 +421,6 @@ fn deep_scan(
         cred.resolve(db)?
     };
     let sub_cred = crate::cli::credential_args::CredentialArgs::inline(resolved.clone(), cred.auth_method);
-    let ssh_exec = SshExecutor::from_config()?;
 
     ctx.emitter
         .emit_event(&Event::Started {
@@ -454,7 +459,7 @@ fn deep_scan(
         // Explicit reachability probe so we can tell "WinRM closed" (skip) apart
         // from "reachable but detection failed" (failure). `refresh` re-probes —
         // the small double-probe is worth the accurate classification.
-        let probe_ok = ssh_exec.probe(&host, None).map(|r| r.ok).unwrap_or(false);
+        let probe_ok = exec.probe(&host, None).map(|r| r.ok).unwrap_or(false);
         if !probe_ok {
             skipped += 1;
             ctx.emitter
@@ -472,7 +477,7 @@ fn deep_scan(
             continue;
         }
 
-        if let Err(e) = refresh(ctx, *id, &sub_cred) {
+        if let Err(e) = refresh(ctx, *id, &sub_cred, exec) {
             failed += 1;
             ctx.emitter
                 .emit_event(&Event::Completed {
@@ -715,8 +720,21 @@ fn authorize(
 mod tests {
     use super::*;
     use crate::cli::output::{NdjsonEmitter, Emitter};
+    use crate::core::ssh::{NodeScript, ProbeResult, RemoteExecutor, ScriptOutput};
     use crate::data::{open_in_memory, schema};
     use std::path::PathBuf;
+
+    /// Hermetic probe seam for refresh/deep_scan tests: always "unreachable",
+    /// so machines are skipped without spawning real ssh / touching the keystore.
+    struct UnreachableExec;
+    impl RemoteExecutor for UnreachableExec {
+        fn run(&self, _host: &str, _script: &NodeScript) -> UecmResult<ScriptOutput> {
+            Err(UecmError::SshConnect("unreachable (test)".into()))
+        }
+        fn probe(&self, _host: &str, _user: Option<&str>) -> UecmResult<ProbeResult> {
+            Err(UecmError::SshConnect("unreachable (test)".into()))
+        }
+    }
 
     fn setup() -> (crate::data::Db, Vec<u8>) {
         let db = open_in_memory().expect("open :memory:");
@@ -773,10 +791,11 @@ mod tests {
         add(&mut ctx, "10.0.0.1".to_string(), Some("m1".to_string())).unwrap();
         add(&mut ctx, "10.0.0.2".to_string(), Some("m2".to_string())).unwrap();
 
-        // No creds; on non-Windows the WinRM probe inside refresh fails, so both
-        // machines are skipped — but the batch must still complete with Ok.
+        // Injected UnreachableExec makes every probe fail, so both machines are
+        // skipped — but the batch must still complete with Ok. (Hermetic: no real
+        // ssh / keystore touch.)
         let cred = crate::cli::credential_args::CredentialArgs::inline(None, crate::cli::credential_args::AuthMethod::Negotiate);
-        let res = deep_scan(&mut ctx, vec![1, 2], false, &cred);
+        let res = deep_scan(&mut ctx, vec![1, 2], false, &cred, &UnreachableExec);
         assert!(res.is_ok(), "batch must complete even when every machine is skipped");
     }
 
@@ -793,7 +812,7 @@ mod tests {
         // id 999 does not exist → refresh returns InvalidInput → classified as a
         // failure (not a WinRM skip), but the batch still completes Ok.
         let cred = crate::cli::credential_args::CredentialArgs::inline(None, crate::cli::credential_args::AuthMethod::Negotiate);
-        let res = deep_scan(&mut ctx, vec![999], false, &cred);
+        let res = deep_scan(&mut ctx, vec![999], false, &cred, &UnreachableExec);
         assert!(res.is_ok(), "batch completes; per-machine failure is reported in summary");
     }
 
@@ -848,7 +867,7 @@ mod tests {
             json_mode: true,
         };
         let cred = crate::cli::credential_args::CredentialArgs::inline(None, crate::cli::credential_args::AuthMethod::Negotiate);
-        let res = deep_scan(&mut ctx, vec![], false, &cred);
+        let res = deep_scan(&mut ctx, vec![], false, &cred, &UnreachableExec);
         assert!(res.is_err(), "no --machine-ids and no --all must error");
     }
 
