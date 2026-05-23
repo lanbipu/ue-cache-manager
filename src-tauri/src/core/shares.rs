@@ -7,7 +7,7 @@
 //! caller can persist it to cmdkey/DPAPI/SQLite immediately after the script
 //! returns success — see `commands::shares::create_share`.
 
-use crate::core::powershell;
+use crate::core::ssh::{run_json, NodeScript, SshExecutor};
 use crate::error::{UecmError, UecmResult};
 use serde::{Deserialize, Serialize};
 
@@ -31,17 +31,16 @@ pub fn create_mode_a(
     operator_user: Option<&str>,
     operator_pass: Option<&str>,
 ) -> UecmResult<ShareCreateResult> {
-    let mut args: Vec<&str> = vec![
-        "-HostName", host,
-        "-ShareName", share_name,
-        "-LocalPath", local_path,
-    ];
-    if let (Some(u), Some(p)) = (operator_user, operator_pass) {
-        args.extend(["-Username", u, "-Password", p]);
-    }
-    let result: ShareScriptResult = powershell::run_json(
-        &powershell::script_path("setup-share-mode-a.ps1"),
-        &args,
+    let _ = (operator_user, operator_pass); // SSH key auth; per-call WinRM cred ignored until A5.
+    let exec = SshExecutor::from_config()?;
+    let result: ShareScriptResult = run_json(
+        &exec,
+        host,
+        &NodeScript {
+            name: "setup-share-mode-a.ps1",
+            args: serde_json::json!({ "ShareName": share_name, "LocalPath": local_path }),
+            ssh_user: None,
+        },
     )?;
     if !result.ok {
         return Err(UecmError::OperationFailed(format!(
@@ -64,19 +63,21 @@ pub fn create_mode_b(
     operator_user: Option<&str>,
     operator_pass: Option<&str>,
 ) -> UecmResult<ShareCreateResult> {
-    let mut args: Vec<&str> = vec![
-        "-HostName", host,
-        "-ShareName", share_name,
-        "-LocalPath", local_path,
-        "-SvcUsername", svc_user,
-        "-SvcPassword", svc_pass,
-    ];
-    if let (Some(u), Some(p)) = (operator_user, operator_pass) {
-        args.extend(["-Username", u, "-Password", p]);
-    }
-    let result: ShareScriptResult = powershell::run_json(
-        &powershell::script_path("setup-share-mode-b.ps1"),
-        &args,
+    let _ = (operator_user, operator_pass); // SSH key auth; per-call WinRM cred ignored until A5.
+    let exec = SshExecutor::from_config()?;
+    let result: ShareScriptResult = run_json(
+        &exec,
+        host,
+        &NodeScript {
+            name: "setup-share-mode-b.ps1",
+            args: serde_json::json!({
+                "ShareName": share_name,
+                "LocalPath": local_path,
+                "SvcUsername": svc_user,
+                "SvcPassword": svc_pass,
+            }),
+            ssh_user: None,
+        },
     )?;
     if !result.ok {
         return Err(UecmError::OperationFailed(format!(
@@ -125,19 +126,5 @@ mod tests {
         let a = generate_svc_password();
         let b = generate_svc_password();
         assert_ne!(a, b);
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn create_mode_a_returns_powershell_error_on_non_windows() {
-        let result = create_mode_a("HOST", "DDC", "D:\\DDC", None, None);
-        assert!(matches!(result, Err(UecmError::PowerShell(_))));
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn create_mode_b_returns_powershell_error_on_non_windows() {
-        let result = create_mode_b("HOST", "DDC", "D:\\DDC", "ddc-svc", "pass", None, None);
-        assert!(matches!(result, Err(UecmError::PowerShell(_))));
     }
 }
