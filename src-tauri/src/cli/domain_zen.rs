@@ -607,11 +607,10 @@ fn invoke_detect_binary(
     creds: Option<&(String, String)>,
     auth_method: &str,
 ) -> UecmResult<zen_binary::BinaryDetection> {
-    let body = crate::core::powershell::read_script("zen-detect-binary.ps1")?;
-    let raw: String = match creds {
-        Some((u, p)) => crate::core::winrm::invoke_with_credential(host, &body, u, p, auth_method)?,
-        None => crate::core::winrm::invoke(host, &body)?,
-    };
+    // SSH key auth (uecm-svc); operator creds/auth_method ignored (P4 removes the
+    // params). zen-detect-binary takes no args (param-less; ignores stdin).
+    let _ = (creds, auth_method);
+    let raw: String = run_node(host, "zen-detect-binary.ps1", serde_json::json!({}))?;
 
     // PS sidecars emit exit 0 even on expected failures, with `{ok:false,
     // message:"..."}` as the envelope (T1.8 contract). If we forward that
@@ -1810,6 +1809,24 @@ pub(crate) fn run_remote(
         Some((u, p)) => crate::core::winrm::invoke_with_credential(host, body, u, p, auth_method),
         None => crate::core::winrm::invoke(host, body),
     }
+}
+
+/// Run a staged node-pure zen script over SSH (`-File`), args via stdin JSON.
+/// Returns stdout (the `{ok,...}` envelope; the script's `ok` flag is the source
+/// of truth, so a non-zero exit still surfaces its stdout — mirrors the old
+/// run_remote contract). SSH key auth (uecm-svc); operator creds are gone.
+/// Replaces build_param_script + run_remote (WinRM) as zen migrates in P2.
+fn run_node(host: &str, script_name: &'static str, args: serde_json::Value) -> UecmResult<String> {
+    use crate::core::ssh::RemoteExecutor;
+    let exec = crate::core::ssh::SshExecutor::from_config()?;
+    let out = exec.run(
+        host,
+        &crate::core::ssh::NodeScript { name: script_name, args, ssh_user: None },
+    )?;
+    if out.stdout.trim().is_empty() && out.exit_code != 0 {
+        return Err(crate::core::ssh::map_exit(out.exit_code, &out.stderr));
+    }
+    Ok(out.stdout)
 }
 
 /// Parse a `{ ok: bool, ... }` envelope from a sidecar. Hardened per codex
