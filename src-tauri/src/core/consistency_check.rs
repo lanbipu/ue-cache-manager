@@ -2,7 +2,7 @@
 //! Driver across N hosts. snapshot() invokes the PS sidecar; compare() is a
 //! pure function over the resulting snapshots.
 
-use crate::core::powershell;
+use crate::core::ssh::{run_json, NodeScript, RemoteExecutor};
 use crate::error::{UecmError, UecmResult};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -54,14 +54,15 @@ pub enum Inconsistency {
     MissingUe { hosts: Vec<String> },
 }
 
-pub fn snapshot(host: &str, creds: Option<(&str, &str)>) -> UecmResult<HostSnapshot> {
-    let mut args: Vec<&str> = vec!["-HostName", host];
-    if let Some((u, p)) = creds {
-        args.extend(["-Username", u, "-Password", p]);
-    }
-    let r: ScriptResult = powershell::run_json(
-        &powershell::script_path("consistency-snapshot.ps1"),
-        &args,
+pub fn snapshot(exec: &dyn RemoteExecutor, host: &str) -> UecmResult<HostSnapshot> {
+    let r: ScriptResult = run_json(
+        exec,
+        host,
+        &NodeScript {
+            name: "consistency-snapshot.ps1",
+            args: serde_json::json!({}),
+            ssh_user: None,
+        },
     )?;
     if !r.ok {
         return Err(UecmError::OperationFailed(r.message.unwrap_or_default()));
@@ -140,6 +141,29 @@ pub fn compare(snaps: &[HostSnapshot]) -> Vec<Inconsistency> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::ssh::{NodeScript, ProbeResult, RemoteExecutor, ScriptOutput};
+
+    struct FakeExec(String);
+    impl RemoteExecutor for FakeExec {
+        fn run(&self, _h: &str, _s: &NodeScript) -> UecmResult<ScriptOutput> {
+            Ok(ScriptOutput { stdout: self.0.clone(), stderr: String::new(), exit_code: 0 })
+        }
+        fn probe(&self, _h: &str, _u: Option<&str>) -> UecmResult<ProbeResult> {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn snapshot_parses_and_sets_host() {
+        let exec = FakeExec(
+            r#"{"ok":true,"data":{"host":"NODE","ue_installs":[{"Version":"5.4","Path":"C:\\UE"}],"gpu":null,"rhi":"DX12","projects":[],"renderstream_version":null}}"#
+                .to_string(),
+        );
+        let s = snapshot(&exec, "RENDER-07").unwrap();
+        assert_eq!(s.host, "RENDER-07"); // overridden from arg, not the script's "NODE"
+        assert_eq!(s.ue_installs.len(), 1);
+        assert_eq!(s.rhi.as_deref(), Some("DX12"));
+    }
 
     fn snap(host: &str, ue: &str, gpu_name: &str, drv: &str, rs: Option<&str>) -> HostSnapshot {
         HostSnapshot {

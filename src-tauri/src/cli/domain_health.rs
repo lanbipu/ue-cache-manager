@@ -58,15 +58,11 @@ pub fn handle(ctx: &mut Ctx<'_>, action: HealthAction) -> UecmResult<()> {
         ),
         HealthAction::Runs { limit } => list_runs(ctx, limit),
         HealthAction::Results { scan_run_id } => list_results(ctx, scan_run_id),
-        HealthAction::ConsistencyCheck { hosts, cred } => {
-            let db = ctx.require_db()?;
-            let creds = cred.resolve(db)?;
+        HealthAction::ConsistencyCheck { hosts, cred: _ } => {
+            let exec = crate::core::ssh::SshExecutor::from_config()?;
             let mut snaps = Vec::new();
             for h in &hosts {
-                snaps.push(crate::core::consistency_check::snapshot(
-                    h,
-                    creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
-                )?);
+                snaps.push(crate::core::consistency_check::snapshot(&exec, h)?);
             }
             let findings = crate::core::consistency_check::compare(&snaps);
             ctx.emitter.emit_result(&serde_json::json!({
