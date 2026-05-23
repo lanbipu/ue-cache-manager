@@ -14,6 +14,16 @@
 
 ## 迁移配方（Migration Recipe）—— 所有域共用，先读懂这一节
 
+### ⚠️ 通用陷阱（Task 1 真节点验证逼出，提内层块到顶层时必看）
+
+原 sidecar 的内层 `$script` 经 `Invoke-Command` 跑在**远程会话默认环境**，且返回值被 **deserialize** 后才 ConvertTo-Json。提到顶层直接跑 + 直接序列化会触发以下坑——全部在 `scan-command-line-args.ps1` 上踩过并修复：
+
+1. **别套 `$ErrorActionPreference = 'Stop'`**：内层逻辑是按默认 `Continue` 写的（依赖 per-item try/catch + `-ErrorAction SilentlyContinue`）。套 `Stop` 会把原本容忍的非终止错误变终止 → 整脚本 abort。顶层用 `'Continue'`，只靠最外层 try/catch 兜灾难性错误。
+2. **守护真节点上可能为 null 的输入**：如 `Get-CimInstance Win32_Service` 里驱动服务的 `PathName` 为 `$null`，`[regex]::Match($null,…)` 抛终止异常。函数入口加 `if ([string]::IsNullOrEmpty($x)) { return ... }`。
+3. **收集用 `ArrayList` 不用 `Generic.List`，且 `[void]$x.Add(...)`**：Windows PowerShell 5.1 `ConvertTo-Json` 序列化**活的** `Generic.List[object]`（内含 pscustomobject + 嵌套 hashtable）会抛 `ArgumentException`「参数类型不匹配」（原经 Invoke-Command 反序列化才没事）。用 `New-Object System.Collections.ArrayList` + `[void]$findings.Add(...)`（ArrayList.Add 返回 index，不 `[void]` 会污染 stdout JSON）。
+
+> 每域改完**必须 lanPC 真节点跑一次**——这三个坑单测（FakeExec 喂预置 JSON）发现不了，只有真节点 PS 5.1 + 真数据才暴露。
+
 ### A. 节点纯脚本改写（两种情况）
 
 **情况 1：内层块无参数**（`ArgumentList=0`，如 command-line-scan / consistency / renderstream）。
