@@ -84,6 +84,109 @@ pub fn map_exit(code: i32, stderr: &str) -> UecmError {
     }
 }
 
+/// 失败时组装错误明细。节点脚本约定可能把结构化 `{ok:false,message}` 写到 stdout
+/// 后再非零退出；只取 stderr 会把这条信息丢掉，所以非空 stdout 必须纳入。
+pub fn failure_detail(stdout: &str, stderr: &str) -> String {
+    let stdout = stdout.trim();
+    let stderr = stderr.trim();
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (true, _) => stderr.to_string(),
+        (false, true) => stdout.to_string(),
+        (false, false) => format!("{stderr}\n[stdout] {stdout}"),
+    }
+}
+
+use std::io::Write;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+
+/// 生产传输实现：用系统 ssh 在节点跑预置脚本，参数 JSON 经 stdin 喂入。
+pub struct SshExecutor {
+    pub key_path: PathBuf,
+    pub known_hosts: PathBuf,
+    pub default_user: String, // "uecm-svc"
+    pub staging_root: String, // STAGING_ROOT
+}
+
+impl SshExecutor {
+    /// GBK 兜底解码（节点 PowerShell 5.1 在中文系统可能吐 CP936 stderr）。
+    fn decode(bytes: &[u8]) -> String {
+        match std::str::from_utf8(bytes) {
+            Ok(s) => s.to_string(),
+            Err(_) => encoding_rs::GBK.decode(bytes).0.into_owned(),
+        }
+    }
+}
+
+impl RemoteExecutor for SshExecutor {
+    fn run(&self, host: &str, script: &NodeScript) -> UecmResult<String> {
+        let user = script.ssh_user.as_deref().unwrap_or(&self.default_user);
+        let args = build_ssh_args(
+            &self.key_path.to_string_lossy(),
+            &self.known_hosts.to_string_lossy(),
+            user,
+            host,
+            script.name,
+            &self.staging_root,
+        );
+        let mut child = Command::new("ssh")
+            .args(&args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| UecmError::SshConnect(format!("spawn ssh failed: {e}")))?;
+        // 参数 JSON 经 stdin 喂入（不上命令行，secret 不暴露在节点进程列表里）。
+        {
+            let stdin = child
+                .stdin
+                .as_mut()
+                .ok_or_else(|| UecmError::SshConnect("open ssh stdin failed".into()))?;
+            let payload = serde_json::to_vec(&script.args)
+                .map_err(|e| UecmError::InvalidInput(format!("encode args: {e}")))?;
+            stdin.write_all(&payload)?;
+        }
+        let out = child.wait_with_output()?;
+        let code = out.status.code().unwrap_or(-1);
+        if !out.status.success() {
+            let detail = failure_detail(&Self::decode(&out.stdout), &Self::decode(&out.stderr));
+            return Err(map_exit(code, &detail));
+        }
+        Ok(Self::decode(&out.stdout))
+    }
+
+    fn probe(&self, host: &str) -> UecmResult<ProbeResult> {
+        let started = std::time::Instant::now();
+        let mut args = build_ssh_args(
+            &self.key_path.to_string_lossy(),
+            &self.known_hosts.to_string_lossy(),
+            &self.default_user,
+            host,
+            "noop",
+            &self.staging_root,
+        );
+        // probe 不跑脚本：把最后的远程命令替换为一个 noop。
+        if let Some(last) = args.last_mut() {
+            *last = "powershell.exe -NoProfile -Command exit 0".into();
+        }
+        let out = Command::new("ssh")
+            .args(&args)
+            .output()
+            .map_err(|e| UecmError::SshConnect(format!("spawn ssh failed: {e}")))?;
+        let latency_ms = started.elapsed().as_millis() as i64;
+        if out.status.success() {
+            Ok(ProbeResult {
+                ok: true,
+                message: "ssh ok".into(),
+                latency_ms,
+            })
+        } else {
+            let code = out.status.code().unwrap_or(-1);
+            Err(map_exit(code, &Self::decode(&out.stderr)))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,5 +226,61 @@ mod tests {
             }
             other => panic!("expected NodeScript, got {other:?}"),
         }
+    }
+
+    struct FakeExec(String);
+    impl RemoteExecutor for FakeExec {
+        fn run(&self, _h: &str, _s: &NodeScript) -> UecmResult<String> {
+            Ok(self.0.clone())
+        }
+        fn probe(&self, _h: &str) -> UecmResult<ProbeResult> {
+            Ok(ProbeResult {
+                ok: true,
+                message: "fake".into(),
+                latency_ms: 1,
+            })
+        }
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct Demo {
+        ok: bool,
+        value: i64,
+    }
+
+    #[test]
+    fn run_json_parses_node_stdout() {
+        let exec = FakeExec(r#"{"ok":true,"value":42}"#.to_string());
+        let script = NodeScript {
+            name: "x.ps1",
+            args: serde_json::json!({}),
+            ssh_user: None,
+        };
+        let d: Demo = run_json(&exec, "RENDER-01", &script).unwrap();
+        assert!(d.ok && d.value == 42);
+    }
+
+    #[test]
+    fn failure_detail_preserves_structured_stdout() {
+        // 节点脚本把结构化失败写 stdout、stderr 为空：信息不能丢。
+        let d = failure_detail(r#"{"ok":false,"message":"disk full"}"#, "");
+        assert!(d.contains("disk full"));
+        // stdout + stderr 都有：两者都保留。
+        let d2 = failure_detail(r#"{"ok":false}"#, "winrm noise");
+        assert!(d2.contains("winrm noise") && d2.contains("ok"));
+        // 只有 stderr：原样。
+        assert_eq!(failure_detail("", "boom"), "boom");
+    }
+
+    #[test]
+    fn run_json_surfaces_bad_json_as_node_script_error() {
+        let exec = FakeExec("not json".to_string());
+        let script = NodeScript {
+            name: "x.ps1",
+            args: serde_json::json!({}),
+            ssh_user: None,
+        };
+        let err = run_json::<Demo>(&exec, "RENDER-01", &script).unwrap_err();
+        assert!(matches!(err, UecmError::NodeScript { .. }));
     }
 }
