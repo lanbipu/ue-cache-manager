@@ -1,13 +1,12 @@
 //! Tauri commands for the INI scanner: dispatch a scan, list findings,
 //! apply / skip a single finding.
 
-use crate::core::credentials as core_credentials;
 use crate::core::ini_apply::{self, ApplyContext};
 use crate::core::ini_diagnostics::EnvVarState;
 use crate::core::ini_scanner::{self, ScanInputs};
 use crate::core::env_vars;
 use crate::data::{
-    credentials as data_credentials, ini_findings, machine_ue_installs,
+    ini_findings, machine_ue_installs,
     machines as data_machines, scan_runs, Db, IniFinding,
 };
 use crate::error::{UecmError, UecmResult};
@@ -276,10 +275,12 @@ pub fn apply_finding(
         .ok_or_else(|| UecmError::InvalidInput(format!("finding {} not found", finding_id)))?;
     let machine = data_machines::find_by_id(&db, f.machine_id)?
         .ok_or_else(|| UecmError::InvalidInput(format!("machine {} not found", f.machine_id)))?;
-    let cred = data_credentials::find_by_alias(&db, &credential_alias)?
-        .ok_or_else(|| UecmError::InvalidInput(format!("credential '{}' not found", credential_alias)))?;
-    let password = core_credentials::resolve_password(&credential_alias)?;
-    let ctx = ApplyContext { host: &machine.ip, credential: (&cred.username, &password) };
+    // SSH key auth: ini_apply routes through ini_editor::*_with_credential which
+    // ignore the credential, so pass empties instead of resolving DPAPI. The
+    // credential_alias param stays as an accepted-ignored shim (Vue compat);
+    // ApplyContext.credential itself is removed in P4.
+    let _ = &credential_alias;
+    let ctx = ApplyContext { host: &machine.ip, credential: ("", "") };
     let backup = ini_apply::apply(&ctx, &f)?;
     ini_findings::mark_fixed(&db, finding_id)?;
     Ok(backup)
