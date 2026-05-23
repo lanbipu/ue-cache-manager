@@ -178,9 +178,16 @@ pub enum MachineAction {
     },
     /// Show machine detail (UE installs, GPUs, last-seen).
     Detail { id: i64 },
-    /// Delete a machine row.
+    /// Delete machine(s): a single positional id, or a batch via --machine-ids / --all.
     Delete {
-        id: i64,
+        /// Machine row id (single delete). Omit when using --machine-ids / --all.
+        id: Option<i64>,
+        /// Delete these machine ids (comma-separated).
+        #[arg(long, value_name = "M1,M2,...", value_delimiter = ',', conflicts_with_all = ["id", "all"])]
+        machine_ids: Vec<i64>,
+        /// Delete every machine in inventory.
+        #[arg(long, conflicts_with_all = ["id", "machine_ids"])]
+        all: bool,
         #[arg(long)]
         yes: bool,
         #[arg(long)]

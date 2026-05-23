@@ -17,7 +17,9 @@ pub fn handle(ctx: &mut Ctx<'_>, action: MachineAction) -> UecmResult<()> {
         MachineAction::Add { ip, hostname } => add(ctx, ip, hostname),
         MachineAction::Refresh { id, cred } => refresh(ctx, id, &cred),
         MachineAction::Detail { id } => detail(ctx, id),
-        MachineAction::Delete { id, yes, dry_run } => delete(ctx, id, yes, dry_run),
+        MachineAction::Delete { id, machine_ids, all, yes, dry_run } => {
+            delete(ctx, id, machine_ids, all, yes, dry_run)
+        }
         MachineAction::Rename { id, hostname } => rename(ctx, id, hostname),
         MachineAction::DeepScan { machine_ids, all, cred } => deep_scan(ctx, machine_ids, all, &cred),
         MachineAction::Authorize { machine_ids, all, save_as, cred } => {
@@ -82,33 +84,83 @@ fn detail(ctx: &mut Ctx<'_>, id: i64) -> UecmResult<()> {
     Ok(())
 }
 
-fn delete(ctx: &mut Ctx<'_>, id: i64, yes: bool, dry_run: bool) -> UecmResult<()> {
+fn delete(
+    ctx: &mut Ctx<'_>,
+    id: Option<i64>,
+    machine_ids: Vec<i64>,
+    all: bool,
+    yes: bool,
+    dry_run: bool,
+) -> UecmResult<()> {
     let outcome = destructive::check(yes, dry_run, "machine.delete")?;
 
-    let db = ctx.require_db()?;
-    // Check existence first so a typo / repeated delete fails loudly instead
-    // of pretending success. `machines::delete` itself is row-count-agnostic.
-    if machines::find_by_id(db, id)?.is_none() {
-        return Err(UecmError::InvalidInput(format!(
-            "machine id={} not found (already deleted or wrong id)",
-            id
-        )));
-    }
+    // Resolve the target set, validating existence up front so a typo / bad id
+    // fails loudly and atomically — never delete the good ones then choke on a
+    // bad one. Scoped db borrow so it's released before we touch ctx.emitter.
+    let ids: Vec<i64> = {
+        let db = ctx.require_db()?;
+        match id {
+            // Single positional id (back-compat).
+            Some(single) => {
+                if machines::find_by_id(db, single)?.is_none() {
+                    return Err(UecmError::InvalidInput(format!(
+                        "machine id={} not found (already deleted or wrong id)",
+                        single
+                    )));
+                }
+                vec![single]
+            }
+            // --all: every machine currently in inventory (all known to exist).
+            None if all => machines::list_all(db)?
+                .into_iter()
+                .filter_map(|m| m.id)
+                .collect(),
+            // --machine-ids: explicit set; every id must exist or the whole
+            // batch is rejected (no partial deletes).
+            None => {
+                if machine_ids.is_empty() {
+                    return Err(UecmError::InvalidInput(
+                        "one of <id> / --machine-ids / --all is required".into(),
+                    ));
+                }
+                let mut missing: Vec<i64> = Vec::new();
+                for m in &machine_ids {
+                    if machines::find_by_id(db, *m)?.is_none() {
+                        missing.push(*m);
+                    }
+                }
+                if !missing.is_empty() {
+                    return Err(UecmError::InvalidInput(format!(
+                        "machine id(s) not found: {:?} (nothing deleted)",
+                        missing
+                    )));
+                }
+                machine_ids.clone()
+            }
+        }
+    };
 
     if outcome == Outcome::DryRun {
         destructive::emit_plan(
             ctx.emitter.as_mut(),
             "machine.delete",
-            json!({ "id": id }),
+            json!({ "ids": ids }),
         );
         return Ok(());
     }
 
-    machines::delete(db, id)?;
+    // Every id was validated above, so delete them all — no silent skips.
+    let count = ids.len();
+    {
+        let db = ctx.require_db()?;
+        for target in &ids {
+            machines::delete(db, *target)?;
+        }
+    }
 
     let summary = json!({
-        "id": id,
-        "deleted": true,
+        "deleted": ids,
+        "count": count,
     });
     ctx.emitter.emit_event(&Event::Completed { summary }).ok();
     Ok(())
@@ -706,7 +758,7 @@ mod tests {
         rename(&mut ctx, 1, "renamed-host".to_string()).expect("rename should succeed");
 
         // Delete should work
-        delete(&mut ctx, 1, true, false).expect("delete should succeed");
+        delete(&mut ctx, Some(1), vec![], false, true, false).expect("delete should succeed");
 
         // Verify that we got past all operations
         // (output checking omitted as NdjsonEmitter writes to a moved buffer)
@@ -817,7 +869,7 @@ mod tests {
         };
 
         // Try to delete without --yes or --dry-run
-        let result = delete(&mut ctx, 1, false, false);
+        let result = delete(&mut ctx, Some(1), vec![], false, false, false);
         assert!(result.is_err(), "delete without --yes or --dry-run should fail");
 
         if let Err(UecmError::InvalidInput(msg)) = result {
@@ -844,5 +896,92 @@ mod tests {
         scan(&mut ctx, "203.0.113.0/30", 200).unwrap();
         // Note: we can't easily inspect the buffer here since NdjsonEmitter writes to a moved Vec.
         // But the fact that scan() didn't error means it emitted events successfully.
+    }
+
+    fn ctx_with(db: crate::data::Db) -> Ctx<'static> {
+        let emitter: Box<dyn Emitter> = Box::new(NdjsonEmitter::new(Vec::new()));
+        Ctx { db: Some(db), db_path: PathBuf::from(":memory:"), emitter, json_mode: true }
+    }
+
+    #[test]
+    fn delete_all_removes_every_machine() {
+        let (db, _buf) = setup();
+        let mut ctx = ctx_with(db);
+        add(&mut ctx, "10.0.0.1".into(), None).unwrap();
+        add(&mut ctx, "10.0.0.2".into(), None).unwrap();
+        add(&mut ctx, "10.0.0.3".into(), None).unwrap();
+
+        delete(&mut ctx, None, vec![], true, true, false).expect("delete --all should succeed");
+
+        let remaining = machines::list_all(ctx.db.as_ref().unwrap()).unwrap();
+        assert!(remaining.is_empty(), "delete --all must remove every machine, got {}", remaining.len());
+    }
+
+    #[test]
+    fn delete_machine_ids_removes_selected_only() {
+        let (db, _buf) = setup();
+        let mut ctx = ctx_with(db);
+        add(&mut ctx, "10.0.0.1".into(), None).unwrap(); // id 1
+        add(&mut ctx, "10.0.0.2".into(), None).unwrap(); // id 2
+        add(&mut ctx, "10.0.0.3".into(), None).unwrap(); // id 3
+
+        delete(&mut ctx, None, vec![1, 2], false, true, false).expect("delete --machine-ids should succeed");
+
+        let remaining = machines::list_all(ctx.db.as_ref().unwrap()).unwrap();
+        assert_eq!(remaining.len(), 1, "only the unselected machine should survive");
+        assert_eq!(remaining[0].id, Some(3));
+    }
+
+    #[test]
+    fn delete_single_positional_id_still_works() {
+        let (db, _buf) = setup();
+        let mut ctx = ctx_with(db);
+        add(&mut ctx, "10.0.0.1".into(), None).unwrap(); // id 1
+        add(&mut ctx, "10.0.0.2".into(), None).unwrap(); // id 2
+
+        delete(&mut ctx, Some(1), vec![], false, true, false).expect("single-id delete should still work");
+
+        let remaining = machines::list_all(ctx.db.as_ref().unwrap()).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, Some(2));
+    }
+
+    #[test]
+    fn delete_all_without_yes_is_blocked() {
+        let (db, _buf) = setup();
+        let mut ctx = ctx_with(db);
+        add(&mut ctx, "10.0.0.1".into(), None).unwrap();
+
+        let res = delete(&mut ctx, None, vec![], true, false, false);
+        assert!(res.is_err(), "delete --all without --yes must be blocked");
+
+        let remaining = machines::list_all(ctx.db.as_ref().unwrap()).unwrap();
+        assert_eq!(remaining.len(), 1, "nothing must be deleted when destructive check blocks");
+    }
+
+    #[test]
+    fn delete_with_no_target_errors() {
+        let (db, _buf) = setup();
+        let mut ctx = ctx_with(db);
+        add(&mut ctx, "10.0.0.1".into(), None).unwrap();
+
+        // no id, no --machine-ids, no --all
+        let res = delete(&mut ctx, None, vec![], false, true, false);
+        assert!(res.is_err(), "delete with no target selector must error");
+    }
+
+    #[test]
+    fn delete_machine_ids_with_missing_id_errors_and_deletes_nothing() {
+        let (db, _buf) = setup();
+        let mut ctx = ctx_with(db);
+        add(&mut ctx, "10.0.0.1".into(), None).unwrap(); // id 1 (exists)
+        // id 99 does not exist
+
+        let res = delete(&mut ctx, None, vec![1, 99], false, true, false);
+        assert!(res.is_err(), "batch delete with a missing id must fail loudly, not silently skip");
+
+        // Atomic: a bad batch must not delete the valid ids either.
+        let remaining = machines::list_all(ctx.db.as_ref().unwrap()).unwrap();
+        assert_eq!(remaining.len(), 1, "a rejected batch must leave every machine intact");
     }
 }
