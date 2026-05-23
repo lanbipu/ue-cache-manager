@@ -34,23 +34,33 @@ try {
         exit 1
     }
 
-    # PsExec writes "Connecting to local system..." status lines to stderr, and
-    # cmdkey also writes to stderr on success. With $ErrorActionPreference='Stop',
-    # PowerShell turns a native command's stderr (merged via 2>&1) into a
-    # terminating error, so drop to 'Continue' around these calls and rely on the
-    # explicit cmdkey /list verification below to decide success.
+    # cmdkey + PsExec are native exes that write status to stderr; with
+    # $ErrorActionPreference='Stop' PowerShell turns native stderr into a
+    # terminating error, so drop to 'Continue' around these calls.
+    #
+    # Verify the SYSTEM cmdkey by FILE, not by capturing PsExec's stdout. When the
+    # parent runs non-interactively (over SSH), PsExec does not relay the child
+    # cmdkey's stdout back through our pipe (verified on a real node: the capture
+    # came back empty), so we have the SYSTEM cmd redirect `cmdkey /list` to a file
+    # and read that. This code ran under WinRM Invoke-Command before, where the
+    # pipe relay worked, which hid the gap. The svc username is ASCII, so it
+    # matches even when the surrounding cmdkey text is in the console CJK codepage.
+    $listFile = Join-Path $env:ProgramData ("UECM\uecm-cmdkey-list-{0}.txt" -f $PID)
     $prevPref = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
         cmdkey.exe "/add:$TargetHost" "/user:$SvcUsername" "/pass:$SvcPassword" 2>&1 | Out-Null
-        & $psexec -accepteula -nobanner -s -i 0 cmdkey.exe "/add:$TargetHost" "/user:$SvcUsername" "/pass:$SvcPassword" 2>&1 | Out-Null
-        $listOut = (& $psexec -accepteula -nobanner -s -i 0 cmdkey.exe /list:$TargetHost 2>&1) -join "`n"
+        & $psexec -accepteula -nobanner -s cmdkey.exe "/add:$TargetHost" "/user:$SvcUsername" "/pass:$SvcPassword" 2>&1 | Out-Null
+        Remove-Item -LiteralPath $listFile -ErrorAction SilentlyContinue
+        & $psexec -accepteula -nobanner -s cmd.exe /c "cmdkey /list:$TargetHost > `"$listFile`" 2>&1" 2>$null | Out-Null
+        $listOut = if (Test-Path -LiteralPath $listFile) { Get-Content -LiteralPath $listFile -Raw -ErrorAction SilentlyContinue } else { "" }
+        Remove-Item -LiteralPath $listFile -ErrorAction SilentlyContinue
     }
     finally {
         $ErrorActionPreference = $prevPref
     }
 
-    if ($listOut -notmatch [regex]::Escape($SvcUsername)) {
+    if ([string]::IsNullOrEmpty($listOut) -or ($listOut -notmatch [regex]::Escape($SvcUsername))) {
         throw "SYSTEM cred verify failed; cmdkey /list under SYSTEM did not show '$SvcUsername'. Got: $listOut"
     }
     @{ ok = $true; message = "user + SYSTEM creds injected for $TargetHost" } | ConvertTo-Json -Compress
