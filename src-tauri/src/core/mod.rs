@@ -34,6 +34,7 @@ pub mod pso_collect;
 pub mod pso_distribute;
 pub mod psexec;
 pub mod renderstream_service;
+pub mod secrets;
 pub mod shares;
 pub mod ssh;
 pub mod ue_log_parser;
