@@ -145,6 +145,32 @@ pub fn rename(db: &Db, id: i64, new_hostname: &str) -> UecmResult<()> {
     Ok(())
 }
 
+/// Returns the per-machine SSH login user, or None when unset (caller uses
+/// the default `uecm-svc`). Added in migration 022 for the SSH transport.
+pub fn get_ssh_user(db: &Db, id: i64) -> UecmResult<Option<String>> {
+    let conn = db.lock().unwrap();
+    let user: Option<String> = conn.query_row(
+        "SELECT ssh_user FROM machines WHERE id = ?",
+        params![id],
+        |row| row.get(0),
+    )?;
+    Ok(user)
+}
+
+/// Sets (or clears, with `None`) the per-machine SSH login user.
+/// Returns `InvalidInput` when no row matched.
+pub fn set_ssh_user(db: &Db, id: i64, user: Option<&str>) -> UecmResult<()> {
+    let conn = db.lock().unwrap();
+    let updated = conn.execute(
+        "UPDATE machines SET ssh_user = ? WHERE id = ?",
+        params![user, id],
+    )?;
+    if updated == 0 {
+        return Err(UecmError::InvalidInput(format!("machine {} not found", id)));
+    }
+    Ok(())
+}
+
 /// Stamps the machine row with `CURRENT_TIMESTAMP` and a fresh status.
 /// Called by `refresh_machine` so the UI online/offline badge reflects truth.
 pub fn mark_seen(db: &Db, id: i64, status: &str) -> UecmResult<()> {
@@ -176,6 +202,17 @@ mod tests {
         let m = Machine::new("RENDER-01", "192.168.10.21");
         let id = insert(&db, &m).unwrap();
         assert!(id > 0);
+    }
+
+    #[test]
+    fn ssh_user_round_trips_and_defaults_none() {
+        let db = setup();
+        let id = insert(&db, &Machine::new("RENDER-09", "192.168.10.29")).unwrap();
+        assert_eq!(get_ssh_user(&db, id).unwrap(), None);
+        set_ssh_user(&db, id, Some("uecm-svc")).unwrap();
+        assert_eq!(get_ssh_user(&db, id).unwrap(), Some("uecm-svc".to_string()));
+        set_ssh_user(&db, id, None).unwrap();
+        assert_eq!(get_ssh_user(&db, id).unwrap(), None);
     }
 
     #[test]

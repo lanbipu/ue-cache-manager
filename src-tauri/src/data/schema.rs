@@ -364,6 +364,12 @@ const MIGRATIONS: &[(&str, &str)] = &[
         ALTER TABLE machine_ue_installs ADD COLUMN zenserver_intree_sha256 TEXT;
         "#,
     ),
+    (
+        "022_machines_ssh_user",
+        r#"
+        ALTER TABLE machines ADD COLUMN ssh_user TEXT;
+        "#,
+    ),
 ];
 
 pub fn migrate(conn: &mut Connection) -> UecmResult<()> {
