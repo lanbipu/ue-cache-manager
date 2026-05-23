@@ -9,7 +9,8 @@ use crate::core::ini_diagnostics_zen::{
     MachineZenVersion, ZenRuleContext, ZenRuleContextOwned,
 };
 use crate::core::zen::rules_loader as zen_rules_loader;
-use crate::core::{loopback, powershell};
+use crate::core::loopback;
+use crate::core::ssh::{run_json, NodeScript, SshExecutor};
 use crate::data::{machine_zen_install, zen_binary_expected, zen_endpoints, Db};
 use crate::error::{UecmError, UecmResult};
 use rusqlite::params;
@@ -80,23 +81,21 @@ pub fn read_file(
     target: &TargetFile,
     cred: Option<(&str, &str)>,
 ) -> UecmResult<Option<ParsedFile>> {
+    // SSH key auth: per-call WinRM cred no longer used (param kept until A5 cleanup).
+    let _ = cred;
     if loopback::is_loopback_target(host) {
-        let _ = cred;
         return read_local_file(target);
     }
 
-    let mut args: Vec<String> = vec![
-        "-HostName".into(), host.into(),
-        "-FilePath".into(), target.path.clone(),
-    ];
-    if let Some((u, p)) = cred {
-        args.push("-Username".into()); args.push(u.into());
-        args.push("-Password".into()); args.push(p.into());
-    }
-    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let result: ReadFileResult = powershell::run_json(
-        &powershell::script_path("read-ini-file.ps1"),
-        &arg_refs,
+    let exec = SshExecutor::from_config()?;
+    let result: ReadFileResult = run_json(
+        &exec,
+        host,
+        &NodeScript {
+            name: "read-ini-file.ps1",
+            args: serde_json::json!({ "FilePath": target.path }),
+            ssh_user: None,
+        },
     )?;
     if !result.ok {
         return Err(UecmError::OperationFailed(format!(

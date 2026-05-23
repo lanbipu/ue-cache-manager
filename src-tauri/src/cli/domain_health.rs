@@ -58,15 +58,11 @@ pub fn handle(ctx: &mut Ctx<'_>, action: HealthAction) -> UecmResult<()> {
         ),
         HealthAction::Runs { limit } => list_runs(ctx, limit),
         HealthAction::Results { scan_run_id } => list_results(ctx, scan_run_id),
-        HealthAction::ConsistencyCheck { hosts, cred } => {
-            let db = ctx.require_db()?;
-            let creds = cred.resolve(db)?;
+        HealthAction::ConsistencyCheck { hosts, cred: _ } => {
+            let exec = crate::core::ssh::SshExecutor::from_config()?;
             let mut snaps = Vec::new();
             for h in &hosts {
-                snaps.push(crate::core::consistency_check::snapshot(
-                    h,
-                    creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
-                )?);
+                snaps.push(crate::core::consistency_check::snapshot(&exec, h)?);
             }
             let findings = crate::core::consistency_check::compare(&snaps);
             ctx.emitter.emit_result(&serde_json::json!({
@@ -75,25 +71,17 @@ pub fn handle(ctx: &mut Ctx<'_>, action: HealthAction) -> UecmResult<()> {
             })).ok();
             Ok(())
         }
-        HealthAction::ScanCommandLine { host, cred } => {
-            let db = ctx.require_db()?;
-            let creds = cred.resolve(db)?;
-            let hits = crate::core::command_line_scanner::scan(
-                &host,
-                creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
-            )?;
+        HealthAction::ScanCommandLine { host, cred: _ } => {
+            // SSH key auth: per-call WinRM creds no longer used (kept on the CLI
+            // surface until A5 cleanup). Discovery/scan run over the SSH executor.
+            let exec = crate::core::ssh::SshExecutor::from_config()?;
+            let hits = crate::core::command_line_scanner::scan(&exec, &host)?;
             ctx.emitter.emit_result(&hits).ok();
             Ok(())
         }
-        HealthAction::FileStats { host, local_path, shared_path, cred } => {
-            let db = ctx.require_db()?;
-            let creds = cred.resolve(db)?;
-            let stats = crate::core::ddc_file_stats::run(
-                &host,
-                &local_path,
-                &shared_path,
-                creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
-            )?;
+        HealthAction::FileStats { host, local_path, shared_path, cred: _ } => {
+            let exec = crate::core::ssh::SshExecutor::from_config()?;
+            let stats = crate::core::ddc_file_stats::run(&exec, &host, &local_path, &shared_path)?;
             let imbalance = crate::core::ddc_file_stats::classify_imbalance(&stats);
             ctx.emitter.emit_result(&serde_json::json!({
                 "stats": stats,
@@ -110,9 +98,8 @@ pub fn handle(ctx: &mut Ctx<'_>, action: HealthAction) -> UecmResult<()> {
             let verify = crate::core::ue_log_verify::run_for_host(
                 &host, &editor_exe, &project, timeout, creds_ref,
             )?;
-            let stats = crate::core::ddc_file_stats::run(
-                &host, &local_path, &shared_path, creds_ref,
-            ).ok();
+            let ddc_exec = crate::core::ssh::SshExecutor::from_config()?;
+            let stats = crate::core::ddc_file_stats::run(&ddc_exec, &host, &local_path, &shared_path).ok();
             let advisories = crate::core::ddc_symptom_recognizer::analyze(&verify, stats.as_ref());
             ctx.emitter.emit_result(&serde_json::json!({
                 "verify": verify,
@@ -283,10 +270,10 @@ fn run_with_rt(
             })
             .ok();
 
-        let probes: HashMap<String, crate::core::health_check::CheckOutcome> =
-            if should_skip_winrm(&resolved_cred) {
-                build_no_creds_row()
-            } else {
+        // SSH key auth: L2/L3 probes always run over SSH now (no WinRM credential
+        // gate). The old no-credential skip is obsolete -- health_probes::run no
+        // longer needs a per-call credential.
+        let probes: HashMap<String, crate::core::health_check::CheckOutcome> = {
                 let cred_opt = Some((op_user.as_str(), op_pass.as_str()));
                 match health_probes::run(
                     &machine.ip,
@@ -450,19 +437,15 @@ fn run_with_rt(
         // Augment with rs_service from core::renderstream_service (ps_emitted=false
         // in PROBE_REGISTRY, so the round-trip does not provide it). Probe failure
         // leaves the slot untouched.
-        let cred_opt_for_rs = if resolved_cred.is_some() {
-            Some((op_user.as_str(), op_pass.as_str()))
-        } else {
-            None
-        };
-        if let Ok(rs_report) = crate::core::renderstream_service::report(
-            &machine.ip,
-            cred_opt_for_rs,
-        ) {
-            row.insert(
-                "rs_service".into(),
-                crate::core::renderstream_service::into_check_outcome(&rs_report),
-            );
+        // RenderStream service probe runs over the SSH executor (key auth).
+        // Best-effort: a keystore or probe failure leaves the slot untouched.
+        if let Ok(rs_exec) = crate::core::ssh::SshExecutor::from_config() {
+            if let Ok(rs_report) = crate::core::renderstream_service::report(&rs_exec, &machine.ip) {
+                row.insert(
+                    "rs_service".into(),
+                    crate::core::renderstream_service::into_check_outcome(&rs_report),
+                );
+            }
         }
 
         let machine_checks = row.len() as i64;
@@ -639,10 +622,6 @@ fn derive_ini_outcome(
     })
 }
 
-pub(crate) fn should_skip_winrm(resolved_cred: &Option<(String, String)>) -> bool {
-    resolved_cred.is_none()
-}
-
 /// Inject L1 (port-layer) outcomes into a probe row. Runs the 3 TCP probes
 /// against the host and merges their outcomes into the given map. Existing
 /// keys are NOT overwritten — uses `entry().or_insert()` so a row that
@@ -666,27 +645,6 @@ pub(crate) async fn inject_l1_ports(
         );
         row.entry(k).or_insert(v);
     }
-}
-
-/// Build a row of `na` outcomes for every probe that requires creds. Used when
-/// the operator runs `health run` without `--cred-alias` / `--user` — L1 ports
-/// still run (in run_with_rt), but L2/L3 probes are skipped and reported as
-/// `na` so the `skipped` counter (introduced in T6) increments correctly.
-fn build_no_creds_row() -> std::collections::HashMap<String, crate::core::health_check::CheckOutcome> {
-    use std::collections::HashMap;
-    let mut row = HashMap::new();
-    for k in crate::core::probe_keys::offline_probe_keys() {
-        row.insert(
-            k.into(),
-            crate::core::health_check::CheckOutcome {
-                status: "na".into(),
-                message: "credentials not provided; authenticated probes skipped".into(),
-                sample: "".into(),
-                remediation: "Provide --cred-alias <alias> (or --user/--pass-stdin) to enable L2 and L3 probes.".into(),
-            },
-        );
-    }
-    row
 }
 
 fn list_runs(ctx: &mut Ctx<'_>, limit: i64) -> UecmResult<()> {
@@ -798,27 +756,6 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let r = rt.block_on(super::scan_and_probe_l1("10.0.0.0/16", 50));
         assert!(matches!(r, Err(crate::error::UecmError::InvalidInput(_))));
-    }
-
-    #[test]
-    fn should_skip_winrm_when_creds_absent() {
-        assert!(super::should_skip_winrm(&None));
-        assert!(!super::should_skip_winrm(&Some(("u".into(), "p".into()))));
-    }
-
-    #[test]
-    fn build_no_creds_row_marks_all_authenticated_probes_as_na() {
-        let row = super::build_no_creds_row();
-        let expected = crate::core::probe_keys::offline_probe_keys();
-        assert_eq!(row.len(), expected.len());
-        for key in &expected {
-            let o = row.get(*key).expect(&format!("missing key: {}", key));
-            assert_eq!(o.status, "na", "{} should be na", key);
-            assert!(
-                o.remediation.contains("--cred-alias") || o.remediation.contains("credential"),
-                "{} remediation should mention credentials, got: {}", key, o.remediation
-            );
-        }
     }
 
     #[tokio::test]

@@ -1,6 +1,7 @@
 //! Single-machine INI section read + key write via PowerShell sidecar.
 
-use crate::core::{loopback, powershell};
+use crate::core::loopback;
+use crate::core::ssh::{run_json, NodeScript, SshExecutor};
 use crate::error::{UecmError, UecmResult};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -30,13 +31,15 @@ pub fn read_section(host: &str, file_path: &str, section: &str) -> UecmResult<Ve
         return read_section_local(file_path, section);
     }
 
-    let result: ReadResult = powershell::run_json(
-        &powershell::script_path("read-ini-section.ps1"),
-        &[
-            "-HostName", host,
-            "-FilePath", file_path,
-            "-Section", section,
-        ],
+    let exec = SshExecutor::from_config()?;
+    let result: ReadResult = run_json(
+        &exec,
+        host,
+        &NodeScript {
+            name: "read-ini-section.ps1",
+            args: serde_json::json!({ "FilePath": file_path, "Section": section }),
+            ssh_user: None,
+        },
     )?;
     if !result.ok {
         return Err(UecmError::OperationFailed(format!(
@@ -58,15 +61,18 @@ pub fn set_key(
         return write_key_local(file_path, section, name, Some(value));
     }
 
-    let result: WriteResult = powershell::run_json(
-        &powershell::script_path("write-ini-key.ps1"),
-        &[
-            "-HostName", host,
-            "-FilePath", file_path,
-            "-Section", section,
-            "-Name", name,
-            "-Value", value,
-        ],
+    let exec = SshExecutor::from_config()?;
+    let result: WriteResult = run_json(
+        &exec,
+        host,
+        &NodeScript {
+            name: "write-ini-key.ps1",
+            args: serde_json::json!({
+                "FilePath": file_path, "Section": section, "Name": name,
+                "Value": value, "Remove": false
+            }),
+            ssh_user: None,
+        },
     )?;
     if !result.ok {
         return Err(UecmError::OperationFailed(format!(
@@ -77,74 +83,28 @@ pub fn set_key(
     Ok(result.backup_path)
 }
 
-/// Same as `read_section`, but authenticates the WinRM session with explicit
-/// `username` + `password` instead of inheriting the caller's identity.
+/// SSH key auth: explicit-credential variants delegate to the base fns (which
+/// handle loopback + SSH). Per-call WinRM creds ignored; signatures kept until A5.
 pub fn read_section_with_credential(
     host: &str,
     file_path: &str,
     section: &str,
-    username: &str,
-    password: &str,
+    _username: &str,
+    _password: &str,
 ) -> UecmResult<Vec<IniKey>> {
-    if loopback::is_loopback_target(host) {
-        let _ = (username, password);
-        return read_section_local(file_path, section);
-    }
-
-    let result: ReadResult = powershell::run_json(
-        &powershell::script_path("read-ini-section.ps1"),
-        &[
-            "-HostName", host,
-            "-FilePath", file_path,
-            "-Section", section,
-            "-Username", username,
-            "-Password", password,
-        ],
-    )?;
-    if !result.ok {
-        return Err(UecmError::OperationFailed(format!(
-            "read INI failed: {}",
-            result.message
-        )));
-    }
-    Ok(result.keys)
+    read_section(host, file_path, section)
 }
 
-/// Same as `set_key`, but authenticates the WinRM session with explicit
-/// `username` + `password` instead of inheriting the caller's identity.
 pub fn set_key_with_credential(
     host: &str,
     file_path: &str,
     section: &str,
     name: &str,
     value: &str,
-    username: &str,
-    password: &str,
+    _username: &str,
+    _password: &str,
 ) -> UecmResult<String> {
-    if loopback::is_loopback_target(host) {
-        let _ = (username, password);
-        return write_key_local(file_path, section, name, Some(value));
-    }
-
-    let result: WriteResult = powershell::run_json(
-        &powershell::script_path("write-ini-key.ps1"),
-        &[
-            "-HostName", host,
-            "-FilePath", file_path,
-            "-Section", section,
-            "-Name", name,
-            "-Value", value,
-            "-Username", username,
-            "-Password", password,
-        ],
-    )?;
-    if !result.ok {
-        return Err(UecmError::OperationFailed(format!(
-            "write INI failed: {}",
-            result.message
-        )));
-    }
-    Ok(result.backup_path)
+    set_key(host, file_path, section, name, value)
 }
 
 /// Removes a key from an INI section on a remote host. Authenticates with
@@ -163,13 +123,19 @@ pub fn remove_key_with_credential(
         return write_key_local(file_path, section, name, None);
     }
 
-    let result: WriteResult = powershell::run_json(
-        &powershell::script_path("write-ini-key.ps1"),
-        &[
-            "-HostName", host, "-FilePath", file_path, "-Section", section,
-            "-Name", name, "-RemoveKey",
-            "-Username", username, "-Password", password,
-        ],
+    let _ = (username, password); // SSH key auth; per-call WinRM cred ignored (kept until A5).
+    let exec = SshExecutor::from_config()?;
+    let result: WriteResult = run_json(
+        &exec,
+        host,
+        &NodeScript {
+            name: "write-ini-key.ps1",
+            args: serde_json::json!({
+                "FilePath": file_path, "Section": section, "Name": name,
+                "Value": "", "Remove": true
+            }),
+            ssh_user: None,
+        },
     )?;
     if !result.ok {
         return Err(UecmError::OperationFailed(format!(
@@ -352,14 +318,19 @@ pub fn set_backend_field_with_credential(
         write_backend_field_local(file_path, section, node_name, field, value)?;
         return Ok(format!("wrote {}.{} locally", node_name, field));
     }
-    let r: BackendFieldResult = powershell::run_json(
-        &powershell::script_path("set-backend-field.ps1"),
-        &[
-            "-HostName", host, "-FilePath", file_path,
-            "-SectionName", section, "-NodeName", node_name,
-            "-FieldName", field, "-FieldValue", value,
-            "-Username", username, "-Password", password,
-        ],
+    let _ = (username, password); // SSH key auth; per-call WinRM cred ignored (kept until A5).
+    let exec = SshExecutor::from_config()?;
+    let r: BackendFieldResult = run_json(
+        &exec,
+        host,
+        &NodeScript {
+            name: "set-backend-field.ps1",
+            args: serde_json::json!({
+                "FilePath": file_path, "SectionName": section, "NodeName": node_name,
+                "FieldName": field, "FieldValue": value
+            }),
+            ssh_user: None,
+        },
     )?;
     if !r.ok { return Err(UecmError::OperationFailed(r.message)); }
     Ok(r.message)
@@ -369,67 +340,10 @@ pub fn set_backend_field_with_credential(
 mod tests {
     use super::*;
 
-    #[cfg(not(windows))]
-    #[test]
-    fn read_section_returns_powershell_error_on_non_windows() {
-        let result = read_section("RENDER-01", "C:\\proj\\Config\\DefaultEngine.ini", "Core.System");
-        assert!(matches!(result, Err(UecmError::PowerShell(_))));
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn set_key_returns_powershell_error_on_non_windows() {
-        let result = set_key(
-            "RENDER-01",
-            "C:\\proj\\Config\\DefaultEngine.ini",
-            "Core.System",
-            "Paths",
-            "../Content",
-        );
-        assert!(matches!(result, Err(UecmError::PowerShell(_))));
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn read_section_with_credential_returns_powershell_error_on_non_windows() {
-        let result = read_section_with_credential(
-            "RENDER-01",
-            "C:\\proj\\Config\\DefaultEngine.ini",
-            "Core.System",
-            "admin",
-            "p@ss",
-        );
-        assert!(matches!(result, Err(UecmError::PowerShell(_))));
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn set_key_with_credential_returns_powershell_error_on_non_windows() {
-        let result = set_key_with_credential(
-            "RENDER-01",
-            "C:\\proj\\Config\\DefaultEngine.ini",
-            "Core.System",
-            "Paths",
-            "../Content",
-            "admin",
-            "p@ss",
-        );
-        assert!(matches!(result, Err(UecmError::PowerShell(_))));
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn remove_key_with_credential_returns_powershell_error_on_non_windows() {
-        let result = remove_key_with_credential(
-            "h",
-            "f",
-            "s",
-            "k",
-            "u",
-            "p",
-        );
-        assert!(result.is_err());
-    }
+    // (Old `#[cfg(not(windows))]` "returns PowerShell error" tests removed: remote
+    // read/write paths now go over SSH — they error at ssh connect and from_config
+    // would touch the real config dir. Loopback behavior is covered by the tests
+    // below; remote behavior is validated on a real node.)
 
     #[test]
     fn set_key_with_credential_writes_directly_for_loopback_target() {

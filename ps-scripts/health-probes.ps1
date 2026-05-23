@@ -1,44 +1,18 @@
-# Runs 13 health probes against a remote host in one Invoke-Command round-trip.
-# Layer assignment lives in src-tauri/src/core/probe_keys.rs -- this file MUST
-# stay in sync (drift test: cargo test core::probe_keys::tests::powershell_script_results_hashtable_matches_registry).
+# Runs 13 health probes locally on the target. Node-pure (shipped + executed via SSH -File).
+# Layer assignment lives in src-tauri/src/core/probe_keys.rs -- this file MUST stay in
+# sync (drift test: cargo test core::probe_keys::tests::powershell_script_results_hashtable_matches_registry).
 #
-# L2 (bootstrap):  firewall_445, local_account_token_filter, long_paths_enabled, lanman_server
-# L3 (business):   share_reachable, ntfs_perm, cred_user, cred_system, env_vars, env_local, env_shared, system_write, winmgmt
-#
-# L1 (port reachability) runs in Rust -- NOT here.
-# L3 derived (ini_consistency, pso_precaching, gpu_consistency) computed in Rust -- NOT here.
-# rs_service (L3Business) is augmented post round-trip in Rust via core::renderstream_service.
-#
+# stdin: JSON { ShareUnc, SvcUsername, ExpectedSharedDataCachePath, ExpectedLocalDataCachePath }
 # Output: JSON { ok, results: { <key>: {status, message, sample, remediation}, ... }, message }
-
-param(
-    [Parameter(Mandatory=$true)] [string]$HostName,
-    [string]$ShareUnc = "",
-    [string]$SvcUsername = "",
-    [string]$ExpectedSharedDataCachePath = "",
-    [string]$ExpectedLocalDataCachePath = "",
-    [string]$Username,
-    [string]$Password,
-    [switch]$Local
-)
-
 [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
-
 $ErrorActionPreference = 'Stop'
 
-function Build-CredentialOrNull {
-    param([string]$User, [string]$Pass)
-    if ([string]::IsNullOrEmpty($User) -or [string]::IsNullOrEmpty($Pass)) { return $null }
-    $User = $User.Trim()
-    if ([string]::IsNullOrEmpty($User)) { return $null }
-    if ($User.StartsWith(".\") -or $User.StartsWith("./")) { $User = $User.Substring(2) }
-    $secure = ConvertTo-SecureString -String $Pass -AsPlainText -Force
-    return New-Object System.Management.Automation.PSCredential($User, $secure)
-}
-
 try {
-    $script = {
-        param($ShareUnc, $SvcUsername, $ExpectedSharedDataCachePath, $ExpectedLocalDataCachePath)
+    $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    $ShareUnc                    = if ($p.ShareUnc) { "$($p.ShareUnc)" } else { "" }
+    $SvcUsername                 = if ($p.SvcUsername) { "$($p.SvcUsername)" } else { "" }
+    $ExpectedSharedDataCachePath = if ($p.ExpectedSharedDataCachePath) { "$($p.ExpectedSharedDataCachePath)" } else { "" }
+    $ExpectedLocalDataCachePath  = if ($p.ExpectedLocalDataCachePath) { "$($p.ExpectedLocalDataCachePath)" } else { "" }
 
         function Probe-Firewall445 {
             try {
@@ -270,24 +244,8 @@ try {
             system_write               = (Probe-SystemWrite)
             winmgmt                    = (Probe-Winmgmt)
         }
-        return $results
-    }
-    if ($Local) {
-        $r = & $script $ShareUnc $SvcUsername $ExpectedSharedDataCachePath $ExpectedLocalDataCachePath
-    } else {
-        $cred = Build-CredentialOrNull -User $Username -Pass $Password
-        $invokeArgs = @{
-            ComputerName = $HostName
-            ScriptBlock  = $script
-            ArgumentList = @($ShareUnc, $SvcUsername, $ExpectedSharedDataCachePath, $ExpectedLocalDataCachePath)
-            ErrorAction  = 'Stop'
-            Authentication = 'Negotiate'
-        }
-        if ($cred) { $invokeArgs['Credential'] = $cred }
-        $r = Invoke-Command @invokeArgs
-    }
 
-    @{ ok = $true; results = $r; message = '' } | ConvertTo-Json -Compress -Depth 6
+    @{ ok = $true; results = $results; message = '' } | ConvertTo-Json -Compress -Depth 6
 }
 catch {
     @{ ok = $false; results = @{}; message = $_.Exception.Message } | ConvertTo-Json -Compress

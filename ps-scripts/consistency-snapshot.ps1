@@ -1,13 +1,14 @@
 # Single-host snapshot of UE installs, RenderStream plugin version, default RHI,
 # GPU/Driver, and project paths on common drives. JSON to stdout.
-param(
-    [Parameter(Mandatory=$true)] [string]$HostName,
-    [string]$Username,
-    [string]$Password
-)
-$ErrorActionPreference = 'Stop'
+#
+# Node-pure: runs locally on the target (shipped + executed via SSH -File).
+# Takes no args. Output: JSON { ok, data }
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
+# Best-effort snapshot: body uses -ErrorAction SilentlyContinue + try/catch and ran
+# under the remote session's default 'Continue' before. Do NOT use 'Stop' here.
+$ErrorActionPreference = 'Continue'
 
-$script = {
+try {
     # UE installs: read registry
     $ueInstalls = @()
     $keyPaths = @('HKLM:\SOFTWARE\EpicGames\Unreal Engine', 'HKLM:\SOFTWARE\WOW6432Node\EpicGames\Unreal Engine')
@@ -19,7 +20,7 @@ $script = {
                 if ($installed) {
                     $ueInstalls += [pscustomobject]@{
                         Version = $v.PSChildName
-                        Path = $installed
+                        Path    = $installed
                     }
                 }
             }
@@ -65,25 +66,17 @@ $script = {
         if ($d3 -and $d3.Version) { $rsVersion = $d3.Version }
     } catch {}
 
-    @{
-        ue_installs = $ueInstalls
-        gpu = $gpuInfo
-        rhi = $rhi
-        projects = $projectDirs
+    $data = @{
+        ue_installs          = $ueInstalls
+        gpu                  = $gpuInfo
+        rhi                  = $rhi
+        projects             = $projectDirs
         renderstream_version = $rsVersion
-        host = $env:COMPUTERNAME
+        host                 = $env:COMPUTERNAME
     }
+    @{ ok = $true; data = $data } | ConvertTo-Json -Compress -Depth 6
 }
-
-try {
-    $result = if ($Username) {
-        $pass = ConvertTo-SecureString $Password -AsPlainText -Force
-        $cred = New-Object System.Management.Automation.PSCredential($Username, $pass)
-        Invoke-Command -ComputerName $HostName -Credential $cred -Authentication Default -ScriptBlock $script
-    } else {
-        Invoke-Command -ComputerName $HostName -ScriptBlock $script
-    }
-    @{ ok = $true; data = $result } | ConvertTo-Json -Compress -Depth 6
-} catch {
+catch {
     @{ ok = $false; message = $_.Exception.Message } | ConvertTo-Json -Compress
+    exit 1
 }

@@ -735,6 +735,10 @@ pub enum DdcAction {
         /// Cache backend gate (T3.6). See `ddc generate --help` for semantics.
         #[arg(long, default_value = "auto", value_enum)]
         backend: BackendChoice,
+        /// SecretStore alias for the source share's SMB credential. Omit to
+        /// auto-derive from a Mode B share registered on the source host.
+        #[arg(long)]
+        source_smb_cred_alias: Option<String>,
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
@@ -780,6 +784,10 @@ pub enum PsoAction {
         yes: bool,
         #[arg(long)]
         dry_run: bool,
+        /// SecretStore alias for the source share's SMB credential. Omit to
+        /// auto-derive from a Mode B share registered on the source host.
+        #[arg(long)]
+        source_smb_cred_alias: Option<String>,
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },

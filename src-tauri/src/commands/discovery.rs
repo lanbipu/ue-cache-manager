@@ -86,7 +86,8 @@ pub fn refresh_machine(db: State<'_, Db>, machine_id: i64) -> UecmResult<Refresh
     }
 
     // UE detect + persist BEFORE GPU detect — partial-failure tolerance.
-    let detected_ue = match discovery::detect_ue_versions(&machine.ip) {
+    let exec = crate::core::ssh::SshExecutor::from_config()?;
+    let detected_ue = match discovery::detect_ue_versions(&exec, &machine.ip) {
         Ok(v) => v,
         Err(e) => return Ok(refresh_err(machine_id, true, format!("UE detection failed: {}", e))),
     };
@@ -142,7 +143,7 @@ pub fn refresh_machine(db: State<'_, Db>, machine_id: i64) -> UecmResult<Refresh
 
     // GPU detect AFTER UE is persisted. If GPU fails, return what we have —
     // do NOT use `refresh_err` here because that drops the persisted UE list.
-    let detected_gpus = match discovery::detect_gpus(&machine.ip) {
+    let detected_gpus = match discovery::detect_gpus(&exec, &machine.ip) {
         Ok(v) => v,
         Err(e) => {
             return Ok(RefreshResult {

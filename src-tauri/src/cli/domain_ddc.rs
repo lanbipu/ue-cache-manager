@@ -25,7 +25,7 @@ pub fn handle(ctx: &mut Ctx<'_>, action: DdcAction) -> UecmResult<()> {
         DdcAction::Verify { project_id, source_machine, backend, cred } => {
             verify(ctx, project_id, source_machine, backend, &cred)
         }
-        DdcAction::Distribute { project_id, source_machine, targets, yes, dry_run, backend, cred } => {
+        DdcAction::Distribute { project_id, source_machine, targets, yes, dry_run, backend, source_smb_cred_alias, cred } => {
             let outcome = destructive::check(yes, dry_run, "ddc.distribute")?;
             distribute(
                 ctx,
@@ -34,6 +34,7 @@ pub fn handle(ctx: &mut Ctx<'_>, action: DdcAction) -> UecmResult<()> {
                 &targets,
                 outcome == Outcome::DryRun,
                 backend,
+                source_smb_cred_alias.as_deref(),
                 &cred,
             )
         }
@@ -367,6 +368,7 @@ fn distribute(
     target_ids: &[i64],
     dry_run: bool,
     backend_choice: BackendChoice,
+    source_smb_cred_alias: Option<&str>,
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
     let db = ctx.require_db()?.clone();
@@ -404,17 +406,29 @@ fn distribute(
                 ))
             })?;
 
-    // Dry-run must not consume `--pass-stdin` or decrypt DPAPI — preview
-    // paths are required to avoid any secret-reading side effects so they
-    // stay safe to run from CI / AI agents. `plan()` accepts None for the
-    // credential snippets without altering its validation logic; the result
-    // we emit back to the user lists target machines and UNC paths, never
-    // resolved passwords.
-    let (op_user, op_pass) = if dry_run {
+    // Source SMB now comes from the SecretStore (explicit alias or auto-derived
+    // from the source host's Mode B/A share), not the operator WinRM cred — the
+    // operator->target leg is SSH key auth. Dry-run resolves the same share/UNC
+    // and runs the same validation, but skips reading the secret (read_secret =
+    // false), so previews stay side-effect-free yet show the real source UNC.
+    let (op_user, op_pass, smb) = if dry_run {
         cred.preflight(&db)?;
-        (None, None)
+        let smb = pak_distribute::resolve_source_smb(
+            &db,
+            source_machine_id,
+            source_smb_cred_alias,
+            false,
+        )?;
+        (None, None, smb)
     } else {
-        resolve_creds(&db, cred)?
+        let (op_user, op_pass) = resolve_creds(&db, cred)?;
+        let smb = pak_distribute::resolve_source_smb(
+            &db,
+            source_machine_id,
+            source_smb_cred_alias,
+            true,
+        )?;
+        (op_user, op_pass, smb)
     };
 
     let profile = pak_distribute::DistributeProfile::ddc_pak();
@@ -426,11 +440,11 @@ fn distribute(
         &source_location,
         target_ids,
         project_id,
-        None, // named_share_unc — not exposed in CLI for now
-        op_user.clone(),
-        op_pass.clone(),
+        smb.named_share_unc.as_deref(), // managed-share UNC paired with the SMB cred
         op_user,
         op_pass,
+        smb.user,
+        smb.pass,
     )?;
 
     if plan.is_empty() {

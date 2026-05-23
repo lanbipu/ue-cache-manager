@@ -294,10 +294,8 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64, cred: &crate::cli::credential_args::Crede
             total: None,
         })
         .ok();
-    let detected_ue = match &creds {
-        Some((u, p)) => crate::core::discovery::detect_ue_versions_with_credential(&host, u, p, cred.auth_method.as_str())?,
-        None => crate::core::discovery::detect_ue_versions(&host)?,
-    };
+    let exec = crate::core::ssh::SshExecutor::from_config()?;
+    let detected_ue = crate::core::discovery::detect_ue_versions(&exec, &host)?;
     // PowerShell `query-ue-versions.ps1` sorts version ascending, so picking
     // index 0 marks the OLDEST install as primary — wrong, downstream
     // DDC/PSO jobs that fall back to `is_primary` would pick the wrong engine.
@@ -351,10 +349,7 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64, cred: &crate::cli::credential_args::Crede
             total: None,
         })
         .ok();
-    let detected_gpus = match &creds {
-        Some((u, p)) => crate::core::discovery::detect_gpus_with_credential(&host, u, p, cred.auth_method.as_str())?,
-        None => crate::core::discovery::detect_gpus(&host)?,
-    };
+    let detected_gpus = crate::core::discovery::detect_gpus(&exec, &host)?;
     {
         let db = ctx.require_db()?;
         // Convert DetectedGpu → GpuInfo

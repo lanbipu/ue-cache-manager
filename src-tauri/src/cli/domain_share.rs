@@ -65,9 +65,8 @@ pub fn handle(ctx: &mut Ctx<'_>, action: ShareAction) -> UecmResult<()> {
             if outcome == Outcome::DryRun {
                 // Dry-run validates that a Mode-B share alias EXISTS for the
                 // target, without decrypting it. The real `--yes` path runs
-                // `find_share_svc_password` which calls DPAPI; doing that
-                // here would make `--dry-run` fail on non-Windows and read
-                // secret material unnecessarily.
+                // `find_share_svc_password` which reads the SecretStore; doing
+                // that here would read secret material unnecessarily.
                 let alias_prefix = format!("share-{}-", target_host);
                 let alias_present = data_shares::list_all(db)?.into_iter().any(|s| {
                     s.credential_alias
@@ -174,16 +173,11 @@ fn create(
                 op_user,
                 op_pass,
             )?;
-            // Persist svc credential to cmdkey + DPAPI so subsequent
-            // `inject-system-cred` / Robocopy fan-out can resolve it.
+            // Persist svc password to the cross-platform SecretStore (AES-GCM)
+            // so subsequent `inject-system-cred` / Robocopy fan-out can resolve
+            // it from any operator OS. Replaces the old cmdkey + DPAPI path.
             let svc_alias = format!("share-{}-{}", host, share);
-            crate::core::credentials::store(&svc_alias, svc_user, &svc_pass)?;
-            if let Err(dpapi_err) =
-                crate::core::credentials::store_password(&svc_alias, &svc_pass)
-            {
-                let _ = crate::core::credentials::delete(&svc_alias);
-                return Err(dpapi_err);
-            }
+            crate::core::secrets::SecretStore::from_config()?.put(&svc_alias, &svc_pass)?;
             (r, ShareMode::Managed, Some(svc_alias))
         }
         other => {
@@ -248,7 +242,7 @@ fn inject_system_cred(
         None => (None, None),
     };
 
-    // Look up the share's svc password from the DPAPI alias created during `share create`.
+    // Look up the share's svc password from the SecretStore alias created during `share create`.
     // The alias scheme matches `share create`: `share-<host>-<share>`. For
     // inject-system-cred we only know target_host + svc_user, so we look for
     // ANY alias starting with `share-<target_host>-`.
@@ -277,7 +271,7 @@ fn inject_system_cred(
 }
 
 /// Looks up the svc password for any Mode-B share on `target_host`. Returns
-/// `InvalidInput` if no matching alias exists in DPAPI / SQLite.
+/// `InvalidInput` if no matching alias exists in the SecretStore / SQLite.
 fn find_share_svc_password(
     db: &crate::data::Db,
     target_host: &str,
@@ -295,13 +289,15 @@ fn find_share_svc_password(
             target_host
         ))
     })?;
-    crate::core::credentials::resolve_password(&alias).map_err(|e| {
-        UecmError::InvalidInput(format!(
-            "DPAPI lookup for alias '{}' failed: {}. The share may have been created \
-             outside this CLI; re-create or recover the svc password manually.",
-            alias, e
-        ))
-    })
+    crate::core::secrets::SecretStore::from_config()?
+        .get(&alias)?
+        .ok_or_else(|| {
+            UecmError::InvalidInput(format!(
+                "no stored svc password for alias '{}'. The share may have been created \
+                 outside this CLI; re-create it via `share create --mode b`.",
+                alias
+            ))
+        })
 }
 
 #[cfg(test)]

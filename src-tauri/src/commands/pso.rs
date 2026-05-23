@@ -301,11 +301,18 @@ pub async fn distribute_pso_cache(
     })?;
     let (operator_user, operator_pass) =
         resolve_operator_creds(&db, request.operator_credential_alias.as_deref())?;
-    let (source_smb_user, source_smb_pass) = if request.source_smb_credential_alias.is_some() {
-        resolve_operator_creds(&db, request.source_smb_credential_alias.as_deref())?
-    } else {
-        (operator_user.clone(), operator_pass.clone())
-    };
+    // Source SMB access from the SecretStore: explicit alias, else auto-derived
+    // from a Mode B share on the source host. No longer the operator WinRM cred.
+    // NOTE (sub-project B): the UI's share-credential dropdown must pass a
+    // SecretStore/share alias here, not a DPAPI cred alias; `None` now means
+    // "auto-derive", not "same as operator".
+    let smb = crate::core::pak_distribute::resolve_source_smb(
+        &db,
+        file.source_machine_id,
+        request.source_smb_credential_alias.as_deref(),
+        true,
+    )?;
+    let (source_smb_user, source_smb_pass) = (smb.user, smb.pass);
 
     if !request.force_gpu_mismatch {
         let matrix = crate::core::gpu_consistency::build_matrix(&db)?;
@@ -330,12 +337,18 @@ pub async fn distribute_pso_cache(
         }
     }
 
+    // Explicit request UNC wins; else the auto-derived managed-share UNC paired
+    // with the SMB cred (so ddc-svc mounts the share it actually has rights to).
+    let named_unc = request
+        .named_share_unc
+        .clone()
+        .or(smb.named_share_unc.clone());
     let plan = pso_distribute::plan(
         &db,
         &source_machine.ip,
         &file,
         &request.target_machine_ids,
-        request.named_share_unc.as_deref(),
+        named_unc.as_deref(),
         operator_user.clone(),
         operator_pass.clone(),
         source_smb_user,

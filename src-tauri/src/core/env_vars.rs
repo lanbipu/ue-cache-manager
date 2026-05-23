@@ -1,6 +1,6 @@
 //! Single-machine environment variable read/write via PowerShell sidecar.
 
-use crate::core::powershell;
+use crate::core::ssh::{run_json, NodeScript, SshExecutor};
 use crate::error::{UecmError, UecmResult};
 use serde::Deserialize;
 
@@ -18,13 +18,15 @@ pub struct GetResult {
 }
 
 pub fn set(host: &str, name: &str, value: &str) -> UecmResult<()> {
-    let result: SetResult = powershell::run_json(
-        &powershell::script_path("setx-machine.ps1"),
-        &[
-            "-HostName", host,
-            "-Name", name,
-            "-Value", value,
-        ],
+    let exec = SshExecutor::from_config()?;
+    let result: SetResult = run_json(
+        &exec,
+        host,
+        &NodeScript {
+            name: "setx-machine.ps1",
+            args: serde_json::json!({ "Name": name, "Value": value }),
+            ssh_user: None,
+        },
     )?;
     if !result.ok {
         return Err(UecmError::OperationFailed(format!(
@@ -36,12 +38,15 @@ pub fn set(host: &str, name: &str, value: &str) -> UecmResult<()> {
 }
 
 pub fn get(host: &str, name: &str) -> UecmResult<Option<String>> {
-    let result: GetResult = powershell::run_json(
-        &powershell::script_path("getx-machine.ps1"),
-        &[
-            "-HostName", host,
-            "-Name", name,
-        ],
+    let exec = SshExecutor::from_config()?;
+    let result: GetResult = run_json(
+        &exec,
+        host,
+        &NodeScript {
+            name: "getx-machine.ps1",
+            args: serde_json::json!({ "Name": name }),
+            ssh_user: None,
+        },
     )?;
     if !result.ok {
         return Err(UecmError::OperationFailed(format!(
@@ -52,91 +57,27 @@ pub fn get(host: &str, name: &str) -> UecmResult<Option<String>> {
     Ok(result.value)
 }
 
-/// Same as `set`, but authenticates the WinRM session with explicit
-/// `username` + `password` instead of inheriting the caller's identity.
+/// SSH key auth: the explicit-credential variants now delegate to `set`/`get`
+/// (per-call WinRM creds are ignored; signatures kept for callers until A5 cleanup).
 pub fn set_with_credential(
     host: &str,
     name: &str,
     value: &str,
-    username: &str,
-    password: &str,
+    _username: &str,
+    _password: &str,
 ) -> UecmResult<()> {
-    let result: SetResult = powershell::run_json(
-        &powershell::script_path("setx-machine.ps1"),
-        &[
-            "-HostName", host,
-            "-Name", name,
-            "-Value", value,
-            "-Username", username,
-            "-Password", password,
-        ],
-    )?;
-    if !result.ok {
-        return Err(UecmError::OperationFailed(format!(
-            "set env var failed: {}",
-            result.message
-        )));
-    }
-    Ok(())
+    set(host, name, value)
 }
 
-/// Same as `get`, but authenticates the WinRM session with explicit
-/// `username` + `password` instead of inheriting the caller's identity.
 pub fn get_with_credential(
     host: &str,
     name: &str,
-    username: &str,
-    password: &str,
+    _username: &str,
+    _password: &str,
 ) -> UecmResult<Option<String>> {
-    let result: GetResult = powershell::run_json(
-        &powershell::script_path("getx-machine.ps1"),
-        &[
-            "-HostName", host,
-            "-Name", name,
-            "-Username", username,
-            "-Password", password,
-        ],
-    )?;
-    if !result.ok {
-        return Err(UecmError::OperationFailed(format!(
-            "get env var failed: {}",
-            result.message
-        )));
-    }
-    Ok(result.value)
+    get(host, name)
 }
 
-#[cfg(all(test, not(windows)))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn set_returns_powershell_error_on_non_windows() {
-        let result = set("RENDER-01", "UE-SharedDataCachePath", "\\\\HOST\\DDC");
-        assert!(matches!(result, Err(UecmError::PowerShell(_))));
-    }
-
-    #[test]
-    fn get_returns_powershell_error_on_non_windows() {
-        let result = get("RENDER-01", "UE-SharedDataCachePath");
-        assert!(matches!(result, Err(UecmError::PowerShell(_))));
-    }
-
-    #[test]
-    fn set_with_credential_returns_powershell_error_on_non_windows() {
-        let result = set_with_credential(
-            "RENDER-01",
-            "UE-SharedDataCachePath",
-            "\\\\HOST\\DDC",
-            "admin",
-            "p@ss",
-        );
-        assert!(matches!(result, Err(UecmError::PowerShell(_))));
-    }
-
-    #[test]
-    fn get_with_credential_returns_powershell_error_on_non_windows() {
-        let result = get_with_credential("RENDER-01", "UE-SharedDataCachePath", "admin", "p@ss");
-        assert!(matches!(result, Err(UecmError::PowerShell(_))));
-    }
-}
+// (Old `#[cfg(not(windows))]` "returns PowerShell error" tests removed: set/get now
+// go over SSH — on a dev box they error at ssh connect, and from_config would touch
+// the real config dir. Remote behavior is validated on a real node.)

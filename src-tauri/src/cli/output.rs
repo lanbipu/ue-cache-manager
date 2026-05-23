@@ -89,6 +89,10 @@ pub fn error_code(err: &UecmError) -> &'static str {
         UecmError::Configuration(_) | UecmError::Database(_) | UecmError::Io(_) => {
             "environment_error"
         }
+        UecmError::SshConnect(_) => "ssh_connect",
+        UecmError::NodeScript { .. } => "node_script_failed",
+        UecmError::Timeout(_) => "timeout",
+        UecmError::ScriptStaging(_) => "script_staging_failed",
     }
 }
 
@@ -103,6 +107,8 @@ pub fn exit_code_for(err: &UecmError) -> i32 {
         UecmError::Configuration(_) | UecmError::Database(_) | UecmError::Io(_) => 3,
         UecmError::PowerShell(_) => 4,
         UecmError::OperationFailed(_) => 1,
+        UecmError::NodeScript { .. } => 4,
+        UecmError::SshConnect(_) | UecmError::Timeout(_) | UecmError::ScriptStaging(_) => 3,
     }
 }
 

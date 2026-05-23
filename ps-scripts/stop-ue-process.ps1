@@ -1,41 +1,21 @@
-param(
-    [Parameter(Mandatory=$true)] [string]$HostName,
-    [Parameter(Mandatory=$true)] [int]$TargetPid,
-    [string]$Username,
-    [string]$Password
-)
-
+# Force-stops a process by PID on the target.
+#
+# Node-pure: runs locally on the target (shipped + executed via SSH -File).
+# stdin: JSON { "TargetPid": <int> }
+# Output: JSON { ok, killed, message }
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
 $ErrorActionPreference = 'Stop'
 
-function Build-CredentialOrNull {
-    param([string]$User, [string]$Pass)
-    if ([string]::IsNullOrEmpty($User) -or [string]::IsNullOrEmpty($Pass)) { return $null }
-    $secure = ConvertTo-SecureString -String $Pass -AsPlainText -Force
-    return New-Object System.Management.Automation.PSCredential($User, $secure)
-}
-
 try {
-    $script = {
-        param($TargetPid)
-        try {
-            Stop-Process -Id $TargetPid -Force -ErrorAction Stop
-            return @{ killed = $true; message = "stopped pid $TargetPid" }
-        } catch {
-            return @{ killed = $false; message = "$($_.Exception.Message)" }
-        }
+    $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    $TargetPid = [int]$p.TargetPid
+    try {
+        Stop-Process -Id $TargetPid -Force -ErrorAction Stop
+        @{ ok = $true; killed = $true; message = "stopped pid $TargetPid" } | ConvertTo-Json -Compress
     }
-
-    $cred = Build-CredentialOrNull -User $Username -Pass $Password
-    $invokeArgs = @{
-        ComputerName = $HostName
-        ScriptBlock = $script
-        ArgumentList = @($TargetPid)
-        ErrorAction = 'Stop'
+    catch {
+        @{ ok = $true; killed = $false; message = "$($_.Exception.Message)" } | ConvertTo-Json -Compress
     }
-    if ($cred) { $invokeArgs['Credential'] = $cred }
-    $r = Invoke-Command @invokeArgs
-
-    @{ ok = $true; killed = "$($r.killed)" -eq "True"; message = "$($r.message)" } | ConvertTo-Json -Compress
 }
 catch {
     @{ ok = $false; killed = $false; message = "$($_.Exception.Message)" } | ConvertTo-Json -Compress

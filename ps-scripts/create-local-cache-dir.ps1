@@ -1,16 +1,19 @@
-# Creates the local DDC directory on a remote host with permissive ACLs so
-# both the operator account and SYSTEM (RenderStream Service) can read/write.
-param(
-    [Parameter(Mandatory=$true)] [string]$HostName,
-    [Parameter(Mandatory=$true)] [string]$LocalPath,
-    [string]$ServiceAccount,
-    [string]$Username,
-    [string]$Password
-)
+# Creates the local DDC directory with permissive ACLs so both the operator
+# account and SYSTEM (RenderStream Service) can read/write.
+#
+# Node-pure: runs locally on the target (shipped + executed via SSH -File).
+# stdin: JSON { "LocalPath": "...", "ServiceAccount": "..."|null }
+# Output: JSON { ok, message, path }
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
+# Create-must-succeed: New-Item/Get-Item should fail-hard -> ok:false (icacls is a
+# native exe and won't throw regardless), so Stop is appropriate here.
 $ErrorActionPreference = 'Stop'
 
-$script = {
-    param($LocalPath, $ServiceAccount)
+try {
+    $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    $LocalPath = $p.LocalPath
+    $ServiceAccount = $p.ServiceAccount
+
     if (-not (Test-Path -LiteralPath $LocalPath)) {
         New-Item -ItemType Directory -Path $LocalPath -Force | Out-Null
     }
@@ -21,20 +24,9 @@ $script = {
         icacls $LocalPath /grant "${ServiceAccount}:(OI)(CI)F" /T /C | Out-Null
     }
     $info = Get-Item -LiteralPath $LocalPath
-    @{ path = $info.FullName; created_at = $info.CreationTime.ToString('o') }
+    @{ ok = $true; message = "created $($info.FullName)"; path = $info.FullName } | ConvertTo-Json -Compress
 }
-
-try {
-    $result = if ($Username) {
-        $pass = ConvertTo-SecureString $Password -AsPlainText -Force
-        $cred = New-Object System.Management.Automation.PSCredential($Username, $pass)
-        Invoke-Command -ComputerName $HostName -Credential $cred -Authentication Default `
-            -ScriptBlock $script -ArgumentList $LocalPath, $ServiceAccount
-    } else {
-        Invoke-Command -ComputerName $HostName -ScriptBlock $script `
-            -ArgumentList $LocalPath, $ServiceAccount
-    }
-    @{ ok = $true; message = "created $($result.path)"; path = $result.path } | ConvertTo-Json -Compress
-} catch {
+catch {
     @{ ok = $false; message = $_.Exception.Message } | ConvertTo-Json -Compress
+    exit 1
 }

@@ -1,41 +1,34 @@
-# Returns {file_count, total_bytes} for one or two paths (Local + Shared).
-param(
-    [Parameter(Mandatory=$true)] [string]$HostName,
-    [string]$LocalPath = "",
-    [string]$SharedPath = "",
-    [string]$Username,
-    [string]$Password
-)
-$ErrorActionPreference = 'Stop'
-$script = {
-    param($LocalPath, $SharedPath)
-    function StatPath($p) {
-        if ([string]::IsNullOrEmpty($p)) { return @{ path = ""; ok = $false; file_count = 0; total_bytes = 0; error = "empty" } }
-        try {
-            if (-not (Test-Path -LiteralPath $p)) { return @{ path = $p; ok = $false; file_count = 0; total_bytes = 0; error = "not found" } }
-            $files = Get-ChildItem -LiteralPath $p -Recurse -Force -File -ErrorAction SilentlyContinue
-            $count = ($files | Measure-Object).Count
-            $bytes = ($files | Measure-Object Length -Sum).Sum
-            if (-not $bytes) { $bytes = 0 }
-            @{ path = $p; ok = $true; file_count = $count; total_bytes = [int64]$bytes }
-        } catch {
-            @{ path = $p; ok = $false; error = $_.Exception.Message; file_count = 0; total_bytes = 0 }
-        }
-    }
-    @{
-        local  = (StatPath $LocalPath)
-        shared = (StatPath $SharedPath)
+# Returns {file_count, total_bytes} for one or two paths (Local + Shared DDC).
+#
+# Node-pure: runs locally on the target (shipped + executed via SSH -File).
+# stdin: JSON { "LocalPath": "...", "SharedPath": "..." }
+# Output: JSON { ok, local, shared }
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
+$ErrorActionPreference = 'Continue'
+
+function StatPath($pth) {
+    if ([string]::IsNullOrEmpty($pth)) { return @{ path = ""; ok = $false; file_count = 0; total_bytes = 0; error = "empty" } }
+    try {
+        if (-not (Test-Path -LiteralPath $pth)) { return @{ path = $pth; ok = $false; file_count = 0; total_bytes = 0; error = "not found" } }
+        $files = Get-ChildItem -LiteralPath $pth -Recurse -Force -File -ErrorAction SilentlyContinue
+        $count = ($files | Measure-Object).Count
+        $bytes = ($files | Measure-Object Length -Sum).Sum
+        if (-not $bytes) { $bytes = 0 }
+        @{ path = $pth; ok = $true; file_count = $count; total_bytes = [int64]$bytes }
+    } catch {
+        @{ path = $pth; ok = $false; error = $_.Exception.Message; file_count = 0; total_bytes = 0 }
     }
 }
+
 try {
-    $r = if ($Username) {
-        $pass = ConvertTo-SecureString $Password -AsPlainText -Force
-        $cred = New-Object System.Management.Automation.PSCredential($Username, $pass)
-        Invoke-Command -ComputerName $HostName -Credential $cred -Authentication Default -ScriptBlock $script -ArgumentList $LocalPath, $SharedPath
-    } else {
-        Invoke-Command -ComputerName $HostName -ScriptBlock $script -ArgumentList $LocalPath, $SharedPath
-    }
-    @{ ok = $true; local = $r.local; shared = $r.shared } | ConvertTo-Json -Compress -Depth 5
-} catch {
+    $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    @{
+        ok     = $true
+        local  = (StatPath $p.LocalPath)
+        shared = (StatPath $p.SharedPath)
+    } | ConvertTo-Json -Compress -Depth 5
+}
+catch {
     @{ ok = $false; message = $_.Exception.Message } | ConvertTo-Json -Compress
+    exit 1
 }

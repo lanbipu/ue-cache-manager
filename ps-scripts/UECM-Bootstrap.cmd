@@ -57,6 +57,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS1%" ^
 
 set "PS_EXIT=%ERRORLEVEL%"
 
+REM ====== SSH transport onboarding (parallel to WinRM during migration) ======
+REM Best-effort: SSH problems do not fail the bootstrap while WinRM is primary.
+set "SSH_PS1=%SCRIPT_DIR%enable-ssh.ps1"
+set "UECM_PUB=%SCRIPT_DIR%uecm.pub"
+if exist "%SSH_PS1%" if exist "%UECM_PUB%" powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SSH_PS1%" -PublicKeyPath "%UECM_PUB%" -StagingSourceDir "%SCRIPT_DIR%"
+
 echo.
 if "%PS_EXIT%"=="0" (
     echo ================================================================

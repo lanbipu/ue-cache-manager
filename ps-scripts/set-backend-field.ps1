@@ -1,15 +1,12 @@
-param(
-    [Parameter(Mandatory=$true)] [string]$HostName,
-    [Parameter(Mandatory=$true)] [string]$FilePath,
-    [Parameter(Mandatory=$true)] [string]$SectionName,
-    [Parameter(Mandatory=$true)] [string]$NodeName,
-    [Parameter(Mandatory=$true)] [string]$FieldName,
-    [Parameter(Mandatory=$true)] [string]$FieldValue,
-    [string]$Username, [string]$Password
-)
+# Sets a field inside a struct-style INI backend node, e.g. NodeName=(Key=Val,...). Node-pure (SSH -File).
+# stdin: JSON { "FilePath","SectionName","NodeName","FieldName","FieldValue" }
+# Output: JSON { ok, message }
+[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
 $ErrorActionPreference = 'Stop'
-$script = {
-    param($FilePath, $SectionName, $NodeName, $FieldName, $FieldValue)
+try {
+    $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    $FilePath = $p.FilePath; $SectionName = $p.SectionName; $NodeName = $p.NodeName
+    $FieldName = $p.FieldName; $FieldValue = $p.FieldValue
     if (-not (Test-Path -LiteralPath $FilePath)) { throw "file not found: $FilePath" }
     $lines = Get-Content -LiteralPath $FilePath
     $inSection = $false
@@ -57,18 +54,9 @@ $script = {
     }
     if (-not $handled) { throw "section [$SectionName] node $NodeName not found" }
     Set-Content -LiteralPath $FilePath -Value $out -Encoding UTF8
+    @{ ok = $true; message = "set $NodeName.$FieldName=$FieldValue" } | ConvertTo-Json -Compress
 }
-try {
-    if ($Username) {
-        $pass = ConvertTo-SecureString $Password -AsPlainText -Force
-        $cred = New-Object System.Management.Automation.PSCredential($Username, $pass)
-        Invoke-Command -ComputerName $HostName -Credential $cred -Authentication Default `
-            -ScriptBlock $script -ArgumentList $FilePath, $SectionName, $NodeName, $FieldName, $FieldValue
-    } else {
-        Invoke-Command -ComputerName $HostName -ScriptBlock $script `
-            -ArgumentList $FilePath, $SectionName, $NodeName, $FieldName, $FieldValue
-    }
-    @{ ok = $true; message = "set $NodeName.$FieldName=$FieldValue on $HostName" } | ConvertTo-Json -Compress
-} catch {
+catch {
     @{ ok = $false; message = $_.Exception.Message } | ConvertTo-Json -Compress
+    exit 1
 }

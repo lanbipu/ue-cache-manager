@@ -1,31 +1,13 @@
-param(
-    [Parameter(Mandatory=$true)] [string]$HostName,
-    [Parameter(Mandatory=$true)] [string]$FilePath,
-    [Parameter(Mandatory=$true)] [string]$Section,
-    [Parameter(Mandatory=$true)] [string]$Name,
-    [string]$Value = "",
-    [switch]$RemoveKey,
-    [string]$Username,
-    [string]$Password
-)
-
+# Sets or removes a key in an INI [section] (with .bak backup). Node-pure (SSH -File).
+# stdin: JSON { "FilePath","Section","Name","Value","Remove" }
+# Output: JSON { ok, backup_path, message }
 [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
-
 $ErrorActionPreference = 'Stop'
-
-function Build-CredentialOrNull {
-    param([string]$User, [string]$Pass)
-    if ([string]::IsNullOrEmpty($User) -or [string]::IsNullOrEmpty($Pass)) { return $null }
-    $User = $User.Trim()
-    if ([string]::IsNullOrEmpty($User)) { return $null }
-    if ($User.StartsWith(".\") -or $User.StartsWith("./")) { $User = $User.Substring(2) }
-    $secure = ConvertTo-SecureString -String $Pass -AsPlainText -Force
-    return New-Object System.Management.Automation.PSCredential($User, $secure)
-}
-
 try {
-    $script = {
-        param($FilePath, $Section, $Name, $Value, $Remove)
+    $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    $FilePath = $p.FilePath; $Section = $p.Section; $Name = $p.Name
+    $Value = if ($null -ne $p.Value) { "$($p.Value)" } else { "" }
+    $Remove = [bool]$p.Remove
         if (-not (Test-Path $FilePath)) { throw "file not found: $FilePath" }
         $backup = "$FilePath.bak.$(Get-Date -UFormat '%Y%m%d-%H%M%S')"
         Copy-Item -Path $FilePath -Destination $backup -Force
@@ -70,19 +52,7 @@ try {
             $written = $true
         }
         Set-Content -Path $FilePath -Value $out -Encoding UTF8
-        return "$backup"
-    }
-    $cred = Build-CredentialOrNull -User $Username -Pass $Password
-    $invokeArgs = @{
-        ComputerName = $HostName
-        ScriptBlock  = $script
-        ArgumentList = @($FilePath, $Section, $Name, $Value, [bool]$RemoveKey)
-        ErrorAction  = 'Stop'
-        Authentication = 'Negotiate'
-    }
-    if ($cred) { $invokeArgs['Credential'] = $cred }
-    $remoteResult = Invoke-Command @invokeArgs
-    @{ ok = $true; backup_path = "$remoteResult"; message = "wrote $Name in [$Section]" } | ConvertTo-Json -Compress
+    @{ ok = $true; backup_path = "$backup"; message = "wrote $Name in [$Section]" } | ConvertTo-Json -Compress
 }
 catch {
     @{ ok = $false; backup_path = ""; message = $_.Exception.Message } | ConvertTo-Json -Compress

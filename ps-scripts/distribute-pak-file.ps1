@@ -1,114 +1,61 @@
-param(
-    [Parameter(Mandatory=$true)] [string]$HostName,
-    [Parameter(Mandatory=$true)] [string]$SourceUnc,
-    [Parameter(Mandatory=$true)] [string]$TargetLocal,
-    [string]$Username,
-    [string]$Password,
-    [string]$SourceSmbUser,
-    [string]$SourceSmbPass,
-    [switch]$PreflightOnly
-)
-
+# Robocopy a DDC pak set from a source SMB share into a local dir.
+#
+# Node-pure: runs locally on the target (shipped + executed via SSH -File).
+# stdin: JSON { "SourceUnc","TargetLocal",["SourceSmbUser","SourceSmbPass"],["PreflightOnly":bool] }
+# Output: JSON { ok, exit_code, bytes_copied, stdout_tail, [message] }
+[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; chcp 65001 | Out-Null
 $ErrorActionPreference = 'Stop'
 
-function Build-CredentialOrNull {
-    param([string]$User, [string]$Pass)
-    if ([string]::IsNullOrEmpty($User) -or [string]::IsNullOrEmpty($Pass)) { return $null }
-    $secure = ConvertTo-SecureString -String $Pass -AsPlainText -Force
-    return New-Object System.Management.Automation.PSCredential($User, $secure)
-}
-
 try {
-    $script = {
-        param($SourceUnc, $TargetLocal, $SmbUser, $SmbPass, $PreflightOnly)
-        if (-not (Test-Path -LiteralPath $TargetLocal)) {
-            New-Item -Path $TargetLocal -ItemType Directory -Force | Out-Null
-        }
+    $p = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    $SourceUnc = $p.SourceUnc
+    $TargetLocal = $p.TargetLocal
+    $SmbUser = $p.SourceSmbUser
+    $SmbPass = $p.SourceSmbPass
+    $PreflightOnly = [bool]$p.PreflightOnly
+    if ([string]::IsNullOrWhiteSpace($SourceUnc) -or [string]::IsNullOrWhiteSpace($TargetLocal)) {
+        throw "SourceUnc and TargetLocal are required"
+    }
 
-        $driveName = "uecmsrc$([System.Diagnostics.Process]::GetCurrentProcess().Id)"
-        $smbCred = $null
+    if (-not (Test-Path -LiteralPath $TargetLocal)) {
+        New-Item -Path $TargetLocal -ItemType Directory -Force | Out-Null
+    }
+    $driveName = "uecmsrc$PID"
+    $mounted = $false
+    try {
         if (-not [string]::IsNullOrEmpty($SmbUser) -and -not [string]::IsNullOrEmpty($SmbPass)) {
             $secure = ConvertTo-SecureString -String $SmbPass -AsPlainText -Force
             $smbCred = New-Object System.Management.Automation.PSCredential($SmbUser, $secure)
+            New-PSDrive -Name $driveName -PSProvider FileSystem -Root $SourceUnc -Credential $smbCred -ErrorAction Stop | Out-Null
+            $mounted = $true
         }
-
-        $mounted = $false
+        if (-not (Test-Path -LiteralPath $SourceUnc)) {
+            throw "source UNC unreachable: $SourceUnc"
+        }
+        if ($PreflightOnly) {
+            @{ ok = $true; exit_code = "0"; bytes_copied = "0"; stdout_tail = "preflight ok"; preflight = $true } | ConvertTo-Json -Compress
+            return
+        }
+        $stdoutPath = Join-Path -Path $env:TEMP -ChildPath "robocopy-stdout-$PID.log"
+        $stderrPath = Join-Path -Path $env:TEMP -ChildPath "robocopy-stderr-$PID.log"
+        $roboArgs = @("$SourceUnc", "$TargetLocal", "*.ddp", '/E', '/R:3', '/W:5', '/NP', '/NDL', '/NJH', '/NJS', '/BYTES')
+        $proc = Start-Process -FilePath 'robocopy.exe' -ArgumentList $roboArgs -PassThru -Wait -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+        $code = $proc.ExitCode
+        $stdout = Get-Content -LiteralPath $stdoutPath -Raw -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $stdoutPath -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $stderrPath -ErrorAction SilentlyContinue
+        $bytesCopied = 0
         try {
-            if ($smbCred) {
-                New-PSDrive -Name $driveName -PSProvider FileSystem -Root $SourceUnc -Credential $smbCred -ErrorAction Stop | Out-Null
-                $mounted = $true
-            }
-            if (-not (Test-Path -LiteralPath $SourceUnc)) {
-                throw "source UNC unreachable from target session: $SourceUnc"
-            }
-            if ($PreflightOnly) {
-                return @{
-                    ok = $true
-                    exit_code = "0"
-                    bytes_copied = "0"
-                    stdout_tail = "preflight ok"
-                    preflight = $true
-                }
-            }
-
-            $stdoutPath = Join-Path -Path $env:TEMP -ChildPath "robocopy-stdout-$PID.log"
-            $stderrPath = Join-Path -Path $env:TEMP -ChildPath "robocopy-stderr-$PID.log"
-            $roboArgs = @(
-                "$SourceUnc",
-                "$TargetLocal",
-                "*.ddp",
-                '/E',
-                '/R:3',
-                '/W:5',
-                '/NP',
-                '/NDL',
-                '/NJH',
-                '/NJS',
-                '/BYTES'
-            )
-            $proc = Start-Process -FilePath 'robocopy.exe' -ArgumentList $roboArgs -PassThru -Wait -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
-            $code = $proc.ExitCode
-            $stdout = Get-Content -LiteralPath $stdoutPath -Raw -ErrorAction SilentlyContinue
-            Remove-Item -LiteralPath $stdoutPath -ErrorAction SilentlyContinue
-            Remove-Item -LiteralPath $stderrPath -ErrorAction SilentlyContinue
-
-            $bytesCopied = 0
-            try {
-                $m = [regex]::Matches($stdout, 'Bytes\s*:\s*(\d+)')
-                if ($m.Count -gt 0) { $bytesCopied = [long]$m[0].Groups[1].Value }
-            } catch {}
-            return @{
-                ok = ($code -lt 8)
-                exit_code = "$code"
-                bytes_copied = "$bytesCopied"
-                stdout_tail = if ($stdout) { ($stdout -split "`n" | Select-Object -Last 30) -join "`n" } else { "" }
-                preflight = $false
-            }
-        }
-        finally {
-            if ($mounted) {
-                Remove-PSDrive -Name $driveName -Force -ErrorAction SilentlyContinue
-            }
-        }
+            $m = [regex]::Matches($stdout, 'Bytes\s*:\s*(\d+)')
+            if ($m.Count -gt 0) { $bytesCopied = [long]$m[0].Groups[1].Value }
+        } catch {}
+        $tail = if ($stdout) { ($stdout -split "`n" | Select-Object -Last 30) -join "`n" } else { "" }
+        # robocopy exit < 8 = success (0-7 are informational/partial; >=8 = error)
+        @{ ok = ($code -lt 8); exit_code = "$code"; bytes_copied = "$bytesCopied"; stdout_tail = "$tail"; preflight = $false } | ConvertTo-Json -Compress
     }
-
-    $cred = Build-CredentialOrNull -User $Username -Pass $Password
-    $invokeArgs = @{
-        ComputerName = $HostName
-        ScriptBlock = $script
-        ArgumentList = @($SourceUnc, $TargetLocal, $SourceSmbUser, $SourceSmbPass, [bool]$PreflightOnly)
-        ErrorAction = 'Stop'
+    finally {
+        if ($mounted) { Remove-PSDrive -Name $driveName -Force -ErrorAction SilentlyContinue }
     }
-    if ($cred) { $invokeArgs['Credential'] = $cred }
-    $r = Invoke-Command @invokeArgs
-
-    @{
-        ok = "$($r.ok)" -eq "True"
-        exit_code = "$($r.exit_code)"
-        bytes_copied = "$($r.bytes_copied)"
-        stdout_tail = "$($r.stdout_tail)"
-        preflight = $PreflightOnly.IsPresent
-    } | ConvertTo-Json -Compress
 }
 catch {
     @{ ok = $false; exit_code = "-1"; bytes_copied = "0"; stdout_tail = ""; message = "$($_.Exception.Message)" } | ConvertTo-Json -Compress

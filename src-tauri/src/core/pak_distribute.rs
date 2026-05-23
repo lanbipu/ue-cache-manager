@@ -1,6 +1,8 @@
 //! Robocopy fan-out planning and per-target execution for DDC Pak files.
 
-use crate::core::powershell;
+#[cfg(windows)]
+use crate::core::powershell; // decode_subprocess_output, used by the loopback robocopy path
+use crate::core::ssh::{run_json, NodeScript, SshExecutor};
 use crate::data::{
     machines as data_machines,
     project_locations::{self, ProjectLocation},
@@ -197,39 +199,134 @@ fn path_ends_with_segments(path: &str, suffix: &str) -> bool {
         .all(|(left, right)| left.eq_ignore_ascii_case(right))
 }
 
-fn build_distribute_args(
-    _profile: &DistributeProfile,
-    item: &DistributePlanItem,
-    preflight: bool,
-) -> Vec<String> {
-    let mut args = vec![
-        "-HostName".to_string(),
-        item.target_host.clone(),
-        "-SourceUnc".into(),
-        item.source_unc.clone(),
-        "-TargetLocal".into(),
-        item.target_local.clone(),
-    ];
+/// Source-share SMB access for a distribute run: the share UNC the target pulls
+/// from, plus the credential to mount it. An open (Mode A) share has a UNC but
+/// no credential; a managed (Mode B) share has both.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SourceSmb {
+    pub named_share_unc: Option<String>,
+    pub user: Option<String>,
+    pub pass: Option<String>,
+}
+
+/// DB-only source-share decision: which share UNC the target pulls from, and
+/// which SecretStore alias (if any) holds its credential. No secret read, so
+/// `--dry-run` and the real path share the exact same share/UNC selection and
+/// the same validation errors. The `ddc-svc` account only has rights to its
+/// managed share (not the admin `D$`), so under SSH key auth a source with no
+/// usable share is an error, never a silent `\\host\D$` fallback.
+fn resolve_source_share(
+    db: &Db,
+    source_machine_id: i64,
+    explicit_alias: Option<&str>,
+) -> UecmResult<(Option<String>, Option<String>)> {
+    use crate::data::share_configs::{self, ShareMode};
+    let shares = share_configs::find_by_host(db, source_machine_id)?;
+
+    // Explicit alias: must name a share registered on the source host, so its
+    // UNC pairs with the cred (no admin-D$ fallback the target can't read).
+    if let Some(alias) = explicit_alias {
+        let share = shares
+            .iter()
+            .find(|s| s.credential_alias.as_deref() == Some(alias))
+            .ok_or_else(|| {
+                UecmError::InvalidInput(format!(
+                    "source SMB alias '{alias}' matches no share on the source host; \
+                     register it with `share create --mode b` first"
+                ))
+            })?;
+        return Ok((Some(share.unc_path.clone()), Some(alias.to_string())));
+    }
+
+    // Auto-derive: a single Mode B share, else a single Mode A share. Never
+    // guess between several — the CLI has no per-share selector.
+    let managed: Vec<&share_configs::ShareConfig> = shares
+        .iter()
+        .filter(|s| s.mode == ShareMode::Managed && s.credential_alias.is_some())
+        .collect();
+    if managed.len() > 1 {
+        return Err(UecmError::InvalidInput(format!(
+            "source host has {} Mode B shares; pass --source-smb-cred-alias to choose one",
+            managed.len()
+        )));
+    }
+    if let Some(share) = managed.first() {
+        return Ok((Some(share.unc_path.clone()), share.credential_alias.clone()));
+    }
+
+    let open: Vec<&share_configs::ShareConfig> =
+        shares.iter().filter(|s| s.mode == ShareMode::Open).collect();
+    if open.len() > 1 {
+        return Err(UecmError::InvalidInput(format!(
+            "source host has {} Mode A shares; keep one open share, or use a Mode B \
+             share with --source-smb-cred-alias",
+            open.len()
+        )));
+    }
+    if let Some(share) = open.first() {
+        return Ok((Some(share.unc_path.clone()), None));
+    }
+
+    Err(UecmError::InvalidInput(
+        "source host has no registered share; create one with `share create` \
+         (Mode A open or Mode B managed) before distributing"
+            .to_string(),
+    ))
+}
+
+/// Resolve how the target node reads the source share, including the SMB
+/// credential. Set `read_secret = false` for dry-run previews: the share/UNC
+/// selection and all validation still run, but the SecretStore password is not
+/// read (so the cred fields stay `None`). Mode B svc account is `ddc-svc` by
+/// convention; the SecretStore holds only the password, so the user is fixed.
+pub fn resolve_source_smb(
+    db: &Db,
+    source_machine_id: i64,
+    explicit_alias: Option<&str>,
+    read_secret: bool,
+) -> UecmResult<SourceSmb> {
+    let (named_share_unc, secret_alias) =
+        resolve_source_share(db, source_machine_id, explicit_alias)?;
+    let (user, pass) = match (secret_alias, read_secret) {
+        (Some(alias), true) => {
+            let pass = crate::core::secrets::SecretStore::from_config()?
+                .get(&alias)?
+                .ok_or_else(|| {
+                    UecmError::InvalidInput(format!(
+                        "Mode B share secret '{alias}' missing from SecretStore; \
+                         re-run `share create --mode b`"
+                    ))
+                })?;
+            (Some("ddc-svc".to_string()), Some(pass))
+        }
+        _ => (None, None),
+    };
+    Ok(SourceSmb {
+        named_share_unc,
+        user,
+        pass,
+    })
+}
+
+/// stdin JSON for the node-pure distribute scripts. The operator→target WinRM
+/// cred is gone (SSH key auth); only the target→source SMB cred is forwarded.
+fn build_distribute_payload(item: &DistributePlanItem, preflight: bool) -> serde_json::Value {
+    let mut obj = serde_json::json!({
+        "SourceUnc": item.source_unc,
+        "TargetLocal": item.target_local,
+        "PreflightOnly": preflight,
+    });
+    let map = obj.as_object_mut().expect("json object");
     if let Some(file_name) = &item.file_name {
-        args.push("-FileName".into());
-        args.push(file_name.clone());
+        map.insert("FileName".into(), file_name.clone().into());
     }
-    if let (Some(user), Some(pass)) = (item.credential_user.as_deref(), item.credential_pass.as_deref()) {
-        args.push("-Username".into());
-        args.push(user.into());
-        args.push("-Password".into());
-        args.push(pass.into());
+    if let (Some(user), Some(pass)) =
+        (item.source_smb_user.as_deref(), item.source_smb_pass.as_deref())
+    {
+        map.insert("SourceSmbUser".into(), user.into());
+        map.insert("SourceSmbPass".into(), pass.into());
     }
-    if let (Some(user), Some(pass)) = (item.source_smb_user.as_deref(), item.source_smb_pass.as_deref()) {
-        args.push("-SourceSmbUser".into());
-        args.push(user.into());
-        args.push("-SourceSmbPass".into());
-        args.push(pass.into());
-    }
-    if preflight {
-        args.push("-PreflightOnly".into());
-    }
-    args
+    obj
 }
 
 pub async fn preflight_one(item: &DistributePlanItem) -> UecmResult<()> {
@@ -253,10 +350,16 @@ pub async fn preflight_one_with_profile(
         return Ok(());
     }
 
-    let args = build_distribute_args(profile, item, true);
-    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
-    let result: DistributeRaw =
-        powershell::run_json(&powershell::script_path(profile.ps_script), &args_ref)?;
+    let exec = SshExecutor::from_config()?;
+    let result: DistributeRaw = run_json(
+        &exec,
+        &item.target_host,
+        &NodeScript {
+            name: profile.ps_script,
+            args: build_distribute_payload(item, true),
+            ssh_user: None,
+        },
+    )?;
     if !result.ok {
         return Err(UecmError::OperationFailed(
             result
@@ -280,10 +383,16 @@ pub async fn run_one_with_profile(
         return run_local_robocopy(profile, &item, false);
     }
 
-    let args = build_distribute_args(profile, &item, false);
-    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
-    let result: DistributeRaw =
-        powershell::run_json(&powershell::script_path(profile.ps_script), &args_ref)?;
+    let exec = SshExecutor::from_config()?;
+    let result: DistributeRaw = run_json(
+        &exec,
+        &item.target_host,
+        &NodeScript {
+            name: profile.ps_script,
+            args: build_distribute_payload(&item, false),
+            ssh_user: None,
+        },
+    )?;
     Ok(DistributeOutcome {
         target_machine_id: item.target_machine_id,
         ok: result.ok,
@@ -410,6 +519,59 @@ mod tests {
             discovery_status: crate::data::DiscoveryStatus::Auto,
             discovered_at: None,
         }
+    }
+
+    fn share(host: i64, name: &str, mode: crate::data::share_configs::ShareMode, alias: Option<&str>) -> crate::data::share_configs::ShareConfig {
+        crate::data::share_configs::ShareConfig {
+            id: None,
+            host_machine_id: host,
+            share_name: name.into(),
+            unc_path: format!("\\\\SOURCE\\{name}"),
+            local_path: format!("D:\\{name}"),
+            mode,
+            credential_alias: alias.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn resolve_source_smb_errors_without_any_share() {
+        let (db, source, _t, _p) = setup();
+        // No share on the source: the SSH target can't read admin D$ → error,
+        // and dry-run (read_secret=false) catches it too.
+        assert!(resolve_source_smb(&db, source, None, false).is_err());
+        assert!(resolve_source_smb(&db, source, None, true).is_err());
+    }
+
+    #[test]
+    fn resolve_source_smb_uses_open_share_unc_without_cred() {
+        use crate::data::share_configs::{insert, ShareMode};
+        let (db, source, _t, _p) = setup();
+        insert(&db, &share(source, "DDC", ShareMode::Open, None)).unwrap();
+        let smb = resolve_source_smb(&db, source, None, true).unwrap();
+        assert_eq!(smb.named_share_unc.as_deref(), Some("\\\\SOURCE\\DDC"));
+        assert_eq!(smb.user, None);
+        assert_eq!(smb.pass, None);
+    }
+
+    #[test]
+    fn resolve_source_smb_errors_with_multiple_managed_or_open_shares() {
+        use crate::data::share_configs::{insert, ShareMode};
+        let (db, source, _t, _p) = setup();
+        insert(&db, &share(source, "DDC", ShareMode::Managed, Some("share-SOURCE-DDC"))).unwrap();
+        insert(&db, &share(source, "PSO", ShareMode::Managed, Some("share-SOURCE-PSO"))).unwrap();
+        assert!(resolve_source_smb(&db, source, None, false).is_err());
+
+        let (db2, src2, _t2, _p2) = setup();
+        insert(&db2, &share(src2, "A", ShareMode::Open, None)).unwrap();
+        insert(&db2, &share(src2, "B", ShareMode::Open, None)).unwrap();
+        assert!(resolve_source_smb(&db2, src2, None, false).is_err());
+    }
+
+    #[test]
+    fn resolve_source_smb_explicit_alias_requires_matching_share() {
+        let (db, source, _t, _p) = setup();
+        // Alias given but no share row references it → error (no admin-D$ fallback).
+        assert!(resolve_source_smb(&db, source, Some("share-SOURCE-DDC"), false).is_err());
     }
 
     #[test]
