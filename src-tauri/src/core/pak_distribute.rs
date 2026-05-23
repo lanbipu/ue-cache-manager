@@ -199,9 +199,9 @@ fn path_ends_with_segments(path: &str, suffix: &str) -> bool {
         .all(|(left, right)| left.eq_ignore_ascii_case(right))
 }
 
-/// Source-share SMB access for a distribute run: the managed-share UNC the
-/// target should pull from, plus the credential to mount it. Empty (`None`s)
-/// means "no managed share / no cred" — fine for an open Mode A source.
+/// Source-share SMB access for a distribute run: the share UNC the target pulls
+/// from, plus the credential to mount it. An open (Mode A) share has a UNC but
+/// no credential; a managed (Mode B) share has both.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SourceSmb {
     pub named_share_unc: Option<String>,
@@ -209,13 +209,18 @@ pub struct SourceSmb {
     pub pass: Option<String>,
 }
 
-/// Resolve how the target node reads the source share. Auto-derive (no explicit
-/// alias) finds a Managed (Mode B) share on the source host and returns BOTH its
-/// `unc_path` AND the SecretStore credential A3-7 wrote — they must stay paired,
-/// because the `ddc-svc` account only has rights to that managed share, not the
-/// admin `D$` share. An explicit alias selects the matching managed share (so
-/// its UNC is used too); if none matches, the cred still resolves but the UNC is
-/// left to the caller's admin-share fallback.
+/// Resolve how the target node reads the source share. The `ddc-svc` account
+/// only has rights to its managed share (not the admin `D$`), so the UNC and
+/// cred must stay paired. Under SSH key auth the target has no credential for
+/// `D$`, so a source with no share can't be read — that's an error, not a
+/// silent admin-share fallback.
+///
+/// - explicit alias → that share's UNC + the SecretStore secret (fail if the
+///   secret is missing).
+/// - one Managed (Mode B) share → its UNC + secret (fail if missing).
+/// - several Managed shares → error asking for an explicit alias (never guess).
+/// - an Open (Mode A) share → its UNC, no credential.
+/// - nothing registered → error (create a share first).
 ///
 /// Mode B svc account is `ddc-svc` by convention (see `share create`); the
 /// SecretStore holds only the password, so the username is fixed here.
@@ -225,36 +230,67 @@ pub fn resolve_source_smb(
     explicit_alias: Option<&str>,
 ) -> UecmResult<SourceSmb> {
     use crate::data::share_configs::{self, ShareMode};
-    let share = share_configs::find_by_host(db, source_machine_id)?
-        .into_iter()
-        .find(|s| {
-            s.mode == ShareMode::Managed
-                && s.credential_alias.is_some()
-                && explicit_alias.map_or(true, |a| s.credential_alias.as_deref() == Some(a))
-        });
+    let shares = share_configs::find_by_host(db, source_machine_id)?;
     let store = crate::core::secrets::SecretStore::from_config()?;
-    if let Some(share) = share {
-        let alias = share.credential_alias.expect("filtered to Some");
-        let pass = store.get(&alias)?;
+
+    if let Some(alias) = explicit_alias {
+        // Operator-chosen cred. Pair it with the matching share's UNC if it is
+        // registered; otherwise the operator owns the source-path arrangement.
+        let unc = shares
+            .iter()
+            .find(|s| s.credential_alias.as_deref() == Some(alias))
+            .map(|s| s.unc_path.clone());
+        let pass = store.get(alias)?.ok_or_else(|| {
+            UecmError::InvalidInput(format!(
+                "no SecretStore entry for source SMB alias '{alias}'; re-run `share create --mode b`"
+            ))
+        })?;
         return Ok(SourceSmb {
-            named_share_unc: pass.as_ref().map(|_| share.unc_path.clone()),
-            user: pass.as_ref().map(|_| "ddc-svc".to_string()),
-            pass,
+            named_share_unc: unc,
+            user: Some("ddc-svc".to_string()),
+            pass: Some(pass),
         });
     }
-    // No managed share matched. An explicit alias still resolves a cred (UNC
-    // unknown → admin-share fallback); no alias → nothing (open Mode A source).
-    match explicit_alias {
-        Some(alias) => {
-            let pass = store.get(alias)?;
-            Ok(SourceSmb {
-                named_share_unc: None,
-                user: pass.as_ref().map(|_| "ddc-svc".to_string()),
-                pass,
-            })
-        }
-        None => Ok(SourceSmb::default()),
+
+    let managed: Vec<&share_configs::ShareConfig> = shares
+        .iter()
+        .filter(|s| s.mode == ShareMode::Managed && s.credential_alias.is_some())
+        .collect();
+    if managed.len() > 1 {
+        return Err(UecmError::InvalidInput(format!(
+            "source host has {} Mode B shares; pass --source-smb-cred-alias to choose one",
+            managed.len()
+        )));
     }
+    if let Some(share) = managed.first() {
+        let alias = share.credential_alias.as_deref().expect("filtered to Some");
+        let pass = store.get(alias)?.ok_or_else(|| {
+            UecmError::InvalidInput(format!(
+                "Mode B share '{}' has no SecretStore secret; re-run `share create --mode b`",
+                share.unc_path
+            ))
+        })?;
+        return Ok(SourceSmb {
+            named_share_unc: Some(share.unc_path.clone()),
+            user: Some("ddc-svc".to_string()),
+            pass: Some(pass),
+        });
+    }
+
+    // An open (Mode A) share needs no credential.
+    if let Some(open) = shares.iter().find(|s| s.mode == ShareMode::Open) {
+        return Ok(SourceSmb {
+            named_share_unc: Some(open.unc_path.clone()),
+            user: None,
+            pass: None,
+        });
+    }
+
+    Err(UecmError::InvalidInput(
+        "source host has no registered share; create one with `share create` \
+         (Mode A open or Mode B managed) before distributing"
+            .to_string(),
+    ))
 }
 
 /// stdin JSON for the node-pure distribute scripts. The operator→target WinRM
@@ -470,33 +506,43 @@ mod tests {
         }
     }
 
+    fn share(host: i64, name: &str, mode: crate::data::share_configs::ShareMode, alias: Option<&str>) -> crate::data::share_configs::ShareConfig {
+        crate::data::share_configs::ShareConfig {
+            id: None,
+            host_machine_id: host,
+            share_name: name.into(),
+            unc_path: format!("\\\\SOURCE\\{name}"),
+            local_path: format!("D:\\{name}"),
+            mode,
+            credential_alias: alias.map(str::to_string),
+        }
+    }
+
     #[test]
-    fn resolve_source_smb_none_without_managed_share() {
-        use crate::data::share_configs::{insert, ShareConfig, ShareMode};
-        let (db, source, _target, _project) = setup();
-        // No shares registered → empty (open Mode A path on the node).
-        assert_eq!(
-            resolve_source_smb(&db, source, None).unwrap(),
-            SourceSmb::default()
-        );
-        // An Open (Mode A) share contributes no managed UNC / cred either.
-        insert(
-            &db,
-            &ShareConfig {
-                id: None,
-                host_machine_id: source,
-                share_name: "DDC".into(),
-                unc_path: "\\\\SOURCE\\DDC".into(),
-                local_path: "D:\\DDC".into(),
-                mode: ShareMode::Open,
-                credential_alias: None,
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            resolve_source_smb(&db, source, None).unwrap(),
-            SourceSmb::default()
-        );
+    fn resolve_source_smb_errors_without_any_share() {
+        let (db, source, _t, _p) = setup();
+        // No share on the source: the SSH target can't read admin D$ → error.
+        assert!(resolve_source_smb(&db, source, None).is_err());
+    }
+
+    #[test]
+    fn resolve_source_smb_uses_open_share_unc_without_cred() {
+        use crate::data::share_configs::{insert, ShareMode};
+        let (db, source, _t, _p) = setup();
+        insert(&db, &share(source, "DDC", ShareMode::Open, None)).unwrap();
+        let smb = resolve_source_smb(&db, source, None).unwrap();
+        assert_eq!(smb.named_share_unc.as_deref(), Some("\\\\SOURCE\\DDC"));
+        assert_eq!(smb.user, None);
+        assert_eq!(smb.pass, None);
+    }
+
+    #[test]
+    fn resolve_source_smb_requires_alias_with_multiple_managed_shares() {
+        use crate::data::share_configs::{insert, ShareMode};
+        let (db, source, _t, _p) = setup();
+        insert(&db, &share(source, "DDC", ShareMode::Managed, Some("share-SOURCE-DDC"))).unwrap();
+        insert(&db, &share(source, "PSO", ShareMode::Managed, Some("share-SOURCE-PSO"))).unwrap();
+        assert!(resolve_source_smb(&db, source, None).is_err());
     }
 
     #[test]
