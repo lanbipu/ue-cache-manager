@@ -1,6 +1,5 @@
 //! Tauri commands for the cluster health check.
 
-use crate::core::credentials as core_credentials;
 use crate::core::health_check::{
     aggregate_gpu_consistency, probe_tcp_ports, zen_health_for_machine, CheckOutcome,
 };
@@ -71,9 +70,7 @@ pub fn run_health_check(
     if machine_ids.is_empty() {
         return Err(UecmError::InvalidInput("machine_ids required".into()));
     }
-    let cred_row = data_credentials::find_by_alias(&db, &credential_alias)?
-        .ok_or_else(|| UecmError::InvalidInput(format!("credential '{}' not found", credential_alias)))?;
-    let password = core_credentials::resolve_password(&credential_alias)?;
+    let _ = credential_alias; // accepted-but-ignored shim (SSH key auth); Vue still sends it.
 
     let scan_id = scan_runs::insert(&db, "health", &machine_ids)?;
 
@@ -138,7 +135,7 @@ pub fn run_health_check(
             &svc_username,
             eff_expected_shared,
             &expected_local_path,
-            Some((&cred_row.username, &password)),
+            None,
         ) {
             Ok(map) => map,
             Err(e) => {
@@ -212,7 +209,7 @@ pub fn run_health_check(
         let ini_outcome = derive_ini_outcome(&db, mid)?;
 
         let pso_outcome = derive_pso_cvar_outcome(
-            &machine.ip, &cred_row.username, &password,
+            &machine.ip,
             project_paths_per_machine.get(&mid).cloned().unwrap_or_default(),
         );
 
@@ -336,8 +333,6 @@ fn derive_ini_outcome(db: &Db, machine_id: i64) -> UecmResult<CheckOutcome> {
 
 fn derive_pso_cvar_outcome(
     host: &str,
-    username: &str,
-    password: &str,
     project_roots: Vec<String>,
 ) -> CheckOutcome {
     if project_roots.is_empty() {
@@ -352,7 +347,7 @@ fn derive_pso_cvar_outcome(
         path: format!("{}\\Config\\ConsoleVariables.ini", project_roots[0].trim_end_matches('\\')),
         category: crate::core::ini_diagnostics::Category::Project,
     };
-    let parsed = match ini_scanner::read_file(host, &target, Some((username, password))) {
+    let parsed = match ini_scanner::read_file(host, &target, None) {
         Ok(Some(pf)) => pf,
         Ok(None) => return CheckOutcome { status: "warning".into(), message: "ConsoleVariables.ini missing".into(), sample: target.path, remediation: String::new() },
         Err(e) => return CheckOutcome { status: "offline".into(), message: e.to_string(), sample: target.path, remediation: String::new() },

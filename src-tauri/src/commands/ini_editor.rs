@@ -1,8 +1,7 @@
 //! Tauri commands for reading + writing INI keys on a single remote machine.
 
-use crate::core::credentials as core_credentials;
 use crate::core::ini_editor;
-use crate::data::{credentials as data_credentials, machines as data_machines, Db};
+use crate::data::{machines as data_machines, Db};
 use crate::error::{UecmError, UecmResult};
 use serde::Serialize;
 use tauri::State;
@@ -51,21 +50,9 @@ pub fn read_ini_section_with_credential(
     section: String,
     credential_alias: String,
 ) -> UecmResult<Vec<ini_editor::IniKey>> {
+    let _ = credential_alias; // accepted-but-ignored shim (SSH key auth); Vue still sends it.
     let host = ip_for(&db, machine_id)?;
-    let cred = data_credentials::find_by_alias(&db, &credential_alias)?.ok_or_else(|| {
-        UecmError::InvalidInput(format!(
-            "credential alias '{}' not found",
-            credential_alias
-        ))
-    })?;
-    let password = core_credentials::resolve_password(&credential_alias)?;
-    ini_editor::read_section_with_credential(
-        &host,
-        &file_path,
-        &section,
-        &cred.username,
-        &password,
-    )
+    ini_editor::read_section(&host, &file_path, &section)
 }
 
 #[tauri::command]
@@ -78,22 +65,8 @@ pub fn set_ini_key_with_credential(
     value: String,
     credential_alias: String,
 ) -> UecmResult<WriteIniResponse> {
+    let _ = credential_alias; // accepted-but-ignored shim (SSH key auth); Vue still sends it.
     let host = ip_for(&db, machine_id)?;
-    let cred = data_credentials::find_by_alias(&db, &credential_alias)?.ok_or_else(|| {
-        UecmError::InvalidInput(format!(
-            "credential alias '{}' not found",
-            credential_alias
-        ))
-    })?;
-    let password = core_credentials::resolve_password(&credential_alias)?;
-    let backup_path = ini_editor::set_key_with_credential(
-        &host,
-        &file_path,
-        &section,
-        &name,
-        &value,
-        &cred.username,
-        &password,
-    )?;
+    let backup_path = ini_editor::set_key(&host, &file_path, &section, &name, &value)?;
     Ok(WriteIniResponse { backup_path })
 }

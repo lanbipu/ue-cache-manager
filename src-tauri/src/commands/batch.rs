@@ -2,29 +2,13 @@
 //! once, then fans out to N machines via core::batch::run_batch, forwarding
 //! progress events to the frontend via the `batch-progress` Tauri event.
 
-use crate::core::{batch, credentials as core_creds, env_vars, ini_editor};
-use crate::data::{credentials as data_creds, machines as data_machines, Db};
+use crate::core::{batch, env_vars, ini_editor};
+use crate::data::{machines as data_machines, Db};
 use crate::error::{UecmError, UecmResult};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
 const BATCH_EVENT_NAME: &str = "batch-progress";
-
-struct ResolvedCred {
-    username: String,
-    password: String,
-}
-
-fn resolve(db: &Db, alias: &str) -> UecmResult<ResolvedCred> {
-    let cred = data_creds::find_by_alias(db, alias)?.ok_or_else(|| {
-        UecmError::InvalidInput(format!("credential alias '{}' not found", alias))
-    })?;
-    let password = core_creds::resolve_password(alias)?;
-    Ok(ResolvedCred {
-        username: cred.username,
-        password,
-    })
-}
 
 fn ip_for(db: &Db, machine_id: i64) -> UecmResult<String> {
     Ok(data_machines::find_by_id(db, machine_id)?
@@ -41,7 +25,7 @@ pub async fn batch_set_env_var(
     value: String,
     credential_alias: String,
 ) -> UecmResult<()> {
-    let cred = Arc::new(resolve(&db, &credential_alias)?);
+    let _ = credential_alias; // accepted-but-ignored shim (SSH key auth); Vue still sends it.
     let ips: Vec<(i64, String)> = machine_ids
         .iter()
         .map(|id| ip_for(&db, *id).map(|ip| (*id, ip)))
@@ -51,12 +35,10 @@ pub async fn batch_set_env_var(
     let value = Arc::new(value);
 
     let mut rx = batch::run_batch(machine_ids, batch::DEFAULT_MAX_CONCURRENCY, {
-        let cred = cred.clone();
         let name = name.clone();
         let value = value.clone();
         let ip_lookup = ip_lookup.clone();
         move |machine_id| {
-            let cred = cred.clone();
             let name = name.clone();
             let value = value.clone();
             let host = ip_lookup.get(&machine_id).cloned();
@@ -65,13 +47,7 @@ pub async fn batch_set_env_var(
                     UecmError::InvalidInput(format!("machine {} not in lookup", machine_id))
                 })?;
                 tokio::task::spawn_blocking(move || {
-                    env_vars::set_with_credential(
-                        &host,
-                        &name,
-                        &value,
-                        &cred.username,
-                        &cred.password,
-                    )
+                    env_vars::set(&host, &name, &value)
                 })
                 .await
                 .map_err(|e| UecmError::OperationFailed(format!("join error: {}", e)))?
@@ -97,7 +73,7 @@ pub async fn batch_set_ini_key(
     value: String,
     credential_alias: String,
 ) -> UecmResult<()> {
-    let cred = Arc::new(resolve(&db, &credential_alias)?);
+    let _ = credential_alias; // accepted-but-ignored shim (SSH key auth); Vue still sends it.
     let ips: Vec<(i64, String)> = machine_ids
         .iter()
         .map(|id| ip_for(&db, *id).map(|ip| (*id, ip)))
@@ -109,14 +85,12 @@ pub async fn batch_set_ini_key(
     let value = Arc::new(value);
 
     let mut rx = batch::run_batch(machine_ids, batch::DEFAULT_MAX_CONCURRENCY, {
-        let cred = cred.clone();
         let file_path = file_path.clone();
         let section = section.clone();
         let name = name.clone();
         let value = value.clone();
         let ip_lookup = ip_lookup.clone();
         move |machine_id| {
-            let cred = cred.clone();
             let file_path = file_path.clone();
             let section = section.clone();
             let name = name.clone();
@@ -127,16 +101,8 @@ pub async fn batch_set_ini_key(
                     UecmError::InvalidInput(format!("machine {} not in lookup", machine_id))
                 })?;
                 tokio::task::spawn_blocking(move || {
-                    ini_editor::set_key_with_credential(
-                        &host,
-                        &file_path,
-                        &section,
-                        &name,
-                        &value,
-                        &cred.username,
-                        &cred.password,
-                    )
-                    .map(|_backup| ())
+                    ini_editor::set_key(&host, &file_path, &section, &name, &value)
+                        .map(|_backup| ())
                 })
                 .await
                 .map_err(|e| UecmError::OperationFailed(format!("join error: {}", e)))?

@@ -85,9 +85,7 @@ fn scan_inis_summary(
     if machine_ids.is_empty() {
         return Err(UecmError::InvalidInput("machine_ids must not be empty".into()));
     }
-    let cred_row = data_credentials::find_by_alias(&db, &credential_alias)?
-        .ok_or_else(|| UecmError::InvalidInput(format!("credential alias '{}' not found", credential_alias)))?;
-    let password = core_credentials::resolve_password(&credential_alias)?;
+    let _ = credential_alias; // accepted-but-ignored shim (SSH key auth); Vue still sends it.
     let scan_id = scan_runs::insert(&db, "ini", &machine_ids)?;
 
     let mut total_critical = 0i64;
@@ -106,11 +104,11 @@ fn scan_inis_summary(
         let project_roots: Vec<String> = project_paths_per_machine.get(&mid).cloned().unwrap_or_default();
 
         let mut env_state = EnvVarState::default();
-        env_state.shared_data_cache_path = env_vars::get_with_credential(
-            &machine.ip, "UE-SharedDataCachePath", &cred_row.username, &password,
+        env_state.shared_data_cache_path = env_vars::get(
+            &machine.ip, "UE-SharedDataCachePath",
         ).ok().flatten();
-        env_state.local_data_cache_path = env_vars::get_with_credential(
-            &machine.ip, "UE-LocalDataCachePath", &cred_row.username, &password,
+        env_state.local_data_cache_path = env_vars::get(
+            &machine.ip, "UE-LocalDataCachePath",
         ).ok().flatten();
 
         // Auto-enable zen rules when the machine has a registered endpoint.
@@ -134,7 +132,7 @@ fn scan_inis_summary(
 
         let inputs = ScanInputs {
             host: &machine.ip,
-            credential: Some((&cred_row.username, &password)),
+            credential: None,
             installs: &installs,
             user_profile: &user_profile,
             project_roots: &project_roots,
