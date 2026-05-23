@@ -1,13 +1,13 @@
 @echo off
-REM UECM WinRM Bootstrap — one-click entry point.
+REM UECM WinRM Bootstrap -- one-click entry point.
 REM Double-click this file. If not running elevated, it relaunches itself
 REM with UAC; once elevated it runs UECM-Bootstrap-WinRM.ps1 with all the
 REM switches UECM expects.
 
-REM Admin check via fltmc.exe — native Windows tool that needs admin token but
+REM Admin check via fltmc.exe -- native Windows tool that needs admin token but
 REM does NOT depend on the Server / LanmanServer service. (NET SESSION would
 REM falsely report non-zero when LanmanServer is stopped, which is exactly the
-REM state -EnableSmbServer is meant to fix → that would cause an infinite UAC
+REM state -EnableSmbServer is meant to fix -> that would cause an infinite UAC
 REM relaunch loop.)
 fltmc >nul 2>&1
 if %errorlevel% NEQ 0 (
@@ -44,6 +44,8 @@ REM =======================================================================
 
 set "ADMIN_ARGS="
 if not "%UECM_LOCAL_ADMIN_PASSWORD%"=="" set ADMIN_ARGS=-CreateLocalAdmin -LocalAdminName "%UECM_LOCAL_ADMIN%" -LocalAdminPassword "%UECM_LOCAL_ADMIN_PASSWORD%"
+set "SSH_ADMIN_ARGS="
+if not "%UECM_LOCAL_ADMIN_PASSWORD%"=="" set SSH_ADMIN_ARGS=-CreateLocalAdmin -LocalAdminName "%UECM_LOCAL_ADMIN%" -LocalAdminPassword "%UECM_LOCAL_ADMIN_PASSWORD%"
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS1%" ^
     -NetworkCategory Private ^
@@ -61,7 +63,7 @@ REM ====== SSH transport onboarding (parallel to WinRM during migration) ======
 REM Best-effort: SSH problems do not fail the bootstrap while WinRM is primary.
 set "SSH_PS1=%SCRIPT_DIR%enable-ssh.ps1"
 set "UECM_PUB=%SCRIPT_DIR%uecm.pub"
-if exist "%SSH_PS1%" if exist "%UECM_PUB%" powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SSH_PS1%" -PublicKeyPath "%UECM_PUB%" -StagingSourceDir "%SCRIPT_DIR%"
+if exist "%SSH_PS1%" if exist "%UECM_PUB%" powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SSH_PS1%" -PublicKeyPath "%UECM_PUB%" -StagingSourceDir "%SCRIPT_DIR%" -EnableSmbServer -EnableWmi -EnableLongPaths -PowerProfile HighPerformance -SetExecutionPolicy RemoteSigned %SSH_ADMIN_ARGS%
 
 echo.
 if "%PS_EXIT%"=="0" (
