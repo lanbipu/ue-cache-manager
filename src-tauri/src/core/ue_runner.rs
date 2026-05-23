@@ -1,6 +1,5 @@
 //! Async UE process orchestrator. Spawns UE and tails the project log.
 
-use crate::core::powershell;
 use crate::error::{UecmError, UecmResult};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -339,30 +338,21 @@ async fn start_process(spec: &UeRunSpec) -> UecmResult<StartScriptResult> {
 }
 
 fn start_remote_process(spec: &UeRunSpec) -> UecmResult<StartScriptResult> {
-    let mut args = vec![
-        "-HostName".to_string(),
-        spec.host.clone(),
-        "-EnginePath".into(),
-        spec.engine_path.clone(),
-        "-ProjectPath".into(),
-        spec.project_path.clone(),
-    ];
-    for arg in &spec.extra_args {
-        args.push("-ExtraArgs".into());
-        args.push(arg.clone());
-    }
-    if let (Some(user), Some(pass)) = (
-        spec.credential_user.as_deref(),
-        spec.credential_pass.as_deref(),
-    ) {
-        args.push("-Username".into());
-        args.push(user.into());
-        args.push("-Password".into());
-        args.push(pass.into());
-    }
-    let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
-    let result: StartScriptResult =
-        powershell::run_json(&powershell::script_path("start-ue-process.ps1"), &args_ref)?;
+    // SSH key auth; per-call WinRM cred ignored (kept on spec until A5).
+    let exec = crate::core::ssh::SshExecutor::from_config()?;
+    let result: StartScriptResult = crate::core::ssh::run_json(
+        &exec,
+        &spec.host,
+        &crate::core::ssh::NodeScript {
+            name: "start-ue-process.ps1",
+            args: serde_json::json!({
+                "EnginePath": spec.engine_path,
+                "ProjectPath": spec.project_path,
+                "ExtraArgs": spec.extra_args,
+            }),
+            ssh_user: None,
+        },
+    )?;
     if !result.ok {
         return Err(UecmError::OperationFailed(
             result.message.unwrap_or_else(|| "spawn failed".into()),
@@ -444,22 +434,17 @@ async fn read_tail(
                 );
                 return read_tail_local(log_path, offset);
             }
-            let mut args = vec![
-                "-HostName".to_string(),
-                host.to_string(),
-                "-LogPath".into(),
-                log_path.to_string(),
-                "-LastReadOffset".into(),
-                offset.to_string(),
-            ];
-            if let (Some(user), Some(pass)) = (user, pass) {
-                args.push("-Username".into());
-                args.push(user.into());
-                args.push("-Password".into());
-                args.push(pass.into());
-            }
-            let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
-            powershell::run_json(&powershell::script_path("tail-ue-log.ps1"), &args_ref)
+            let _ = (user, pass); // SSH key auth; per-call WinRM cred ignored (kept until A5).
+            let exec = crate::core::ssh::SshExecutor::from_config()?;
+            crate::core::ssh::run_json(
+                &exec,
+                host,
+                &crate::core::ssh::NodeScript {
+                    name: "tail-ue-log.ps1",
+                    args: serde_json::json!({ "LogPath": log_path, "LastReadOffset": offset }),
+                    ssh_user: None,
+                },
+            )
         }
         UeRunnerBackend::Local => read_tail_local(log_path, offset),
     }
@@ -515,21 +500,17 @@ async fn stop_process(
                 );
                 return stop_local_process(pid);
             }
-            let mut args = vec![
-                "-HostName".to_string(),
-                host.to_string(),
-                "-TargetPid".into(),
-                pid.to_string(),
-            ];
-            if let (Some(user), Some(pass)) = (user, pass) {
-                args.push("-Username".into());
-                args.push(user.into());
-                args.push("-Password".into());
-                args.push(pass.into());
-            }
-            let args_ref: Vec<&str> = args.iter().map(String::as_str).collect();
-            let result: StopScriptResult =
-                powershell::run_json(&powershell::script_path("stop-ue-process.ps1"), &args_ref)?;
+            let _ = (user, pass); // SSH key auth; per-call WinRM cred ignored (kept until A5).
+            let exec = crate::core::ssh::SshExecutor::from_config()?;
+            let result: StopScriptResult = crate::core::ssh::run_json(
+                &exec,
+                host,
+                &crate::core::ssh::NodeScript {
+                    name: "stop-ue-process.ps1",
+                    args: serde_json::json!({ "TargetPid": pid }),
+                    ssh_user: None,
+                },
+            )?;
             if !result.ok || !result.killed {
                 return Err(UecmError::OperationFailed(result.message));
             }
