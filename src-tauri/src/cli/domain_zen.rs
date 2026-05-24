@@ -599,9 +599,8 @@ fn detect_binary(
 
 /// Run `zen-detect-binary.ps1` against `host` and parse the JSON payload.
 ///
-/// Routes through `core::winrm::invoke_json*` so the sidecar runs remotely on
-/// the target. The script body is forwarded inline (no args required by the
-/// script itself).
+/// Runs the sidecar remotely on the target over SSH. The script body is
+/// forwarded inline (no args required by the script itself).
 fn invoke_detect_binary(
     host: &str,
     creds: Option<&(String, String)>,

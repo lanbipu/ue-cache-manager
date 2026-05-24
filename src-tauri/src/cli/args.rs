@@ -52,12 +52,7 @@ pub enum Domain {
         #[command(subcommand)]
         action: MachineAction,
     },
-    /// WinRM probe + onboarding.
-    Winrm {
-        #[command(subcommand)]
-        action: WinrmAction,
-    },
-    /// SSH transport onboarding + probe (replaces the retiring winrm domain).
+    /// SSH transport onboarding + probe (replaced the retired winrm domain).
     Ssh {
         #[command(subcommand)]
         action: SshAction,
@@ -281,54 +276,6 @@ pub enum SecretAction {
         /// Preview without deleting.
         #[arg(long)]
         dry_run: bool,
-    },
-}
-
-// ---------- winrm ----------
-#[derive(Subcommand, Debug)]
-pub enum WinrmAction {
-    /// Probe a single host's WinRM endpoint.
-    Probe { host: String },
-    /// Print the manual WinRM enable script (no-arg PS1 body).
-    BootstrapScript {
-        /// Write to this file instead of stdout.
-        #[arg(long)]
-        output: Option<String>,
-    },
-    /// Remote bootstrap WinRM via PsExec.
-    Bootstrap {
-        host: String,
-        #[arg(long)]
-        user: String,
-        /// Password (leaks into shell history; prefer --pass-stdin).
-        #[arg(long, group = "bootstrap_secret", conflicts_with = "pass_stdin")]
-        pass: Option<String>,
-        /// Read password from stdin (one line).
-        #[arg(long, group = "bootstrap_secret", conflicts_with = "pass")]
-        pass_stdin: bool,
-        #[arg(long)]
-        enable_local_admin: bool,
-    },
-    /// Preflight check whether Path B (remote PsExec bootstrap) is viable for a host.
-    /// Default mode: TCP 135/445 + ADMIN$ mount + write probe (zero-trace on target).
-    /// With --probe: also actually runs PsExec to test SCM service registration
-    /// (writes one service install/remove pair to target Event Log).
-    Preflight {
-        /// Target host (IP or hostname).
-        host: String,
-        /// Local administrator username on target (e.g. Administrator).
-        #[arg(long)]
-        user: String,
-        /// Password (leaks into shell history; prefer --pass-stdin).
-        #[arg(long, group = "preflight_secret", conflicts_with = "pass_stdin")]
-        pass: Option<String>,
-        /// Read password from stdin (one line).
-        #[arg(long, group = "preflight_secret", conflicts_with = "pass")]
-        pass_stdin: bool,
-        /// Run the actual PsExec SCM probe. Without this flag, preflight stops at
-        /// ADMIN$ mount + write test (cannot detect UAC remote token filter blocks).
-        #[arg(long)]
-        probe: bool,
     },
 }
 
