@@ -4,7 +4,7 @@ use crate::data::Db;
 use crate::error::UecmResult;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct PsoCacheFile {
     pub id: Option<i64>,
     pub project_id: i64,

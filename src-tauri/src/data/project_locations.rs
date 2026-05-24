@@ -5,7 +5,7 @@ use crate::error::{UecmError, UecmResult};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DiscoveryStatus {
     Auto,
@@ -35,7 +35,7 @@ impl DiscoveryStatus {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct ProjectLocation {
     pub id: Option<i64>,
     pub project_id: i64,

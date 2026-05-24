@@ -57,6 +57,63 @@ pub fn operations() -> &'static [Operation] {
         Operation { operation_id: "winrm.bootstrap_script", summary: "Print the manual WinRM enable script",                 cli_command: "uecm-cli winrm bootstrap-script",side_effects: SideEffects{writes:false,external_calls:false,idempotent:true},  exit_codes: &[0,3] },
         Operation { operation_id: "winrm.bootstrap",        summary: "Remote bootstrap WinRM via PsExec",                    cli_command: "uecm-cli winrm bootstrap",       side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,1,2,4] },
         Operation { operation_id: "winrm.preflight",        summary: "Preflight whether Path B remote bootstrap is viable",  cli_command: "uecm-cli winrm preflight",       side_effects: SideEffects{writes:false,external_calls:true, idempotent:true},  exit_codes: &[0,1,2,4] },
+        // ---- Task 6 batch 2: share / env / project / ddc / pso / health / ini / zen ----
+        Operation { operation_id: "share.list",                summary: "List share configs in the local inventory",                       cli_command: "uecm-cli share list",                 side_effects: SideEffects{writes:false,external_calls:false,idempotent:true},  exit_codes: &[0,3] },
+        Operation { operation_id: "share.forget",              summary: "Forget a share config (local inventory only)",                    cli_command: "uecm-cli share forget",               side_effects: SideEffects{writes:true, external_calls:false,idempotent:true},  exit_codes: &[0,2,3] },
+        Operation { operation_id: "share.create",              summary: "Create an SMB share (Mode A open / Mode B dedicated)",            cli_command: "uecm-cli share create",               side_effects: SideEffects{writes:true, external_calls:true, idempotent:false}, exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "share.inject_system_cred",  summary: "Inject the share's SYSTEM-context credential on a client",         cli_command: "uecm-cli share inject-system-cred",   side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "env.get",                   summary: "Read a remote environment variable on one host",                  cli_command: "uecm-cli env get",                    side_effects: SideEffects{writes:false,external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "env.set",                   summary: "Write a remote env var on one or more hosts",                      cli_command: "uecm-cli env set",                    side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "project.list",              summary: "List all projects",                                               cli_command: "uecm-cli project list",               side_effects: SideEffects{writes:false,external_calls:false,idempotent:true},  exit_codes: &[0,3] },
+        Operation { operation_id: "project.locations",         summary: "List all locations for a project",                                cli_command: "uecm-cli project locations",          side_effects: SideEffects{writes:false,external_calls:false,idempotent:true},  exit_codes: &[0,3] },
+        Operation { operation_id: "project.discover",          summary: "Discover .uproject files on a remote machine",                    cli_command: "uecm-cli project discover",           side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "project.create_manual",     summary: "Create a project manually (no discovery)",                        cli_command: "uecm-cli project create-manual",      side_effects: SideEffects{writes:true, external_calls:false,idempotent:true},  exit_codes: &[0,3] },
+        Operation { operation_id: "project.set_location",      summary: "Add or update a location for an existing project",                cli_command: "uecm-cli project set-location",       side_effects: SideEffects{writes:true, external_calls:false,idempotent:true},  exit_codes: &[0,3] },
+        Operation { operation_id: "project.delete",            summary: "Delete a project and cascade its locations",                      cli_command: "uecm-cli project delete",             side_effects: SideEffects{writes:true, external_calls:false,idempotent:true},  exit_codes: &[0,2,3] },
+        Operation { operation_id: "project.delete_location",   summary: "Delete a single project_location row",                            cli_command: "uecm-cli project delete-location",    side_effects: SideEffects{writes:true, external_calls:false,idempotent:true},  exit_codes: &[0,2,3] },
+        Operation { operation_id: "ddc.generate",              summary: "Generate a DDC pak file via UE -DDC=CreatePak",                   cli_command: "uecm-cli ddc generate",               side_effects: SideEffects{writes:true, external_calls:true, idempotent:false}, exit_codes: &[0,1,2,3,4] },
+        Operation { operation_id: "ddc.verify",                summary: "Verify a previously generated .ddp pak exists",                   cli_command: "uecm-cli ddc verify",                 side_effects: SideEffects{writes:false,external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "ddc.distribute",            summary: "Distribute the DDC pak to target machines via Robocopy",          cli_command: "uecm-cli ddc distribute",             side_effects: SideEffects{writes:true, external_calls:true, idempotent:false}, exit_codes: &[0,1,2,3,4] },
+        Operation { operation_id: "pso.verify",                summary: "Verify PSO precaching CVars (R008-R010) for a project",           cli_command: "uecm-cli pso verify",                 side_effects: SideEffects{writes:false,external_calls:false,idempotent:true},  exit_codes: &[0,2,3] },
+        Operation { operation_id: "pso.collect",               summary: "Run UE -game to collect PSO cache files (streaming)",             cli_command: "uecm-cli pso collect",                side_effects: SideEffects{writes:true, external_calls:true, idempotent:false}, exit_codes: &[0,1,2,3,4] },
+        Operation { operation_id: "pso.list",                  summary: "List collected PSO cache files for a project",                    cli_command: "uecm-cli pso list",                   side_effects: SideEffects{writes:false,external_calls:false,idempotent:true},  exit_codes: &[0,3] },
+        Operation { operation_id: "pso.distribute",            summary: "Distribute PSO cache files to target machines",                   cli_command: "uecm-cli pso distribute",             side_effects: SideEffects{writes:true, external_calls:true, idempotent:false}, exit_codes: &[0,1,2,3,4] },
+        Operation { operation_id: "health.run",                summary: "Run L1/L2/L3 health probes with remediation hints",               cli_command: "uecm-cli health run",                 side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "health.runs",               summary: "List recent health scan runs",                                    cli_command: "uecm-cli health runs",                side_effects: SideEffects{writes:false,external_calls:false,idempotent:true},  exit_codes: &[0,3] },
+        Operation { operation_id: "health.results",            summary: "List per-row health results for a scan run",                      cli_command: "uecm-cli health results",             side_effects: SideEffects{writes:false,external_calls:false,idempotent:true},  exit_codes: &[0,3] },
+        Operation { operation_id: "health.consistency_check",  summary: "Snapshot N hosts and report inconsistencies",                     cli_command: "uecm-cli health consistency-check",   side_effects: SideEffects{writes:false,external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "health.scan_command_line",  summary: "Scan shortcuts/bat/services for DDC path overrides",              cli_command: "uecm-cli health scan-command-line",   side_effects: SideEffects{writes:false,external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "health.file_stats",         summary: "Local vs Shared DDC file count/size with imbalance classifier",   cli_command: "uecm-cli health file-stats",          side_effects: SideEffects{writes:false,external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "health.analyze_advisories", summary: "Log verify + file stats then emit symptom advisories",            cli_command: "uecm-cli health analyze-advisories",  side_effects: SideEffects{writes:false,external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "ini.read",                  summary: "Read all keys from one INI section on a single host",             cli_command: "uecm-cli ini read",                   side_effects: SideEffects{writes:false,external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "ini.set",                   summary: "Write a single INI key on one or more hosts",                     cli_command: "uecm-cli ini set",                    side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "ini.remove",                summary: "Remove a single INI key on one or more hosts",                    cli_command: "uecm-cli ini remove",                 side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "ini.scan",                  summary: "Run cluster INI scan across one or more machines",                cli_command: "uecm-cli ini scan",                   side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "ini.runs",                  summary: "List recent INI scan runs",                                       cli_command: "uecm-cli ini runs",                   side_effects: SideEffects{writes:false,external_calls:false,idempotent:true},  exit_codes: &[0,3] },
+        Operation { operation_id: "ini.findings",              summary: "List findings for a given scan run",                              cli_command: "uecm-cli ini findings",               side_effects: SideEffects{writes:false,external_calls:false,idempotent:true},  exit_codes: &[0,3] },
+        Operation { operation_id: "ini.get_finding",           summary: "Get one finding by id",                                           cli_command: "uecm-cli ini get-finding",            side_effects: SideEffects{writes:false,external_calls:false,idempotent:true},  exit_codes: &[0,3] },
+        Operation { operation_id: "ini.apply",                 summary: "Auto-fix a finding's recommendation on the remote machine",       cli_command: "uecm-cli ini apply",                  side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "ini.skip",                  summary: "Mark a finding as skipped",                                       cli_command: "uecm-cli ini skip",                   side_effects: SideEffects{writes:true, external_calls:false,idempotent:true},  exit_codes: &[0,2,3] },
+        Operation { operation_id: "ini.verify_pso_precaching", summary: "Verify PSO precaching CVars in ConsoleVariables.ini",             cli_command: "uecm-cli ini verify-pso-precaching",  side_effects: SideEffects{writes:false,external_calls:false,idempotent:true},  exit_codes: &[0,2,3] },
+        Operation { operation_id: "ini.backend_graph",         summary: "Read/write/scan [DerivedDataBackendGraph] tuple nodes",           cli_command: "uecm-cli ini backend-graph",          side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "ini.gc_pause",              summary: "Pause Shared DDC GC (DeleteUnused=false)",                        cli_command: "uecm-cli ini gc-pause",               side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "ini.gc_resume",             summary: "Resume Shared DDC GC (DeleteUnused=true)",                        cli_command: "uecm-cli ini gc-resume",              side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "zen.status",                summary: "Read-only view of latest probe per endpoint",                     cli_command: "uecm-cli zen status",                 side_effects: SideEffects{writes:false,external_calls:false,idempotent:true},  exit_codes: &[0,3] },
+        Operation { operation_id: "zen.probe",                 summary: "Probe one or more endpoints now and persist each",                cli_command: "uecm-cli zen probe",                  side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3] },
+        Operation { operation_id: "zen.cache_stats",           summary: "Fetch /stats + /stats/z$ now and persist a row",                  cli_command: "uecm-cli zen cache-stats",            side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3] },
+        Operation { operation_id: "zen.detect_binary",         summary: "Run zen-detect-binary sidecar against a machine and persist",     cli_command: "uecm-cli zen detect-binary",          side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "zen.list_endpoints",        summary: "Read-only list of registered zen endpoints",                      cli_command: "uecm-cli zen list-endpoints",         side_effects: SideEffects{writes:false,external_calls:false,idempotent:true},  exit_codes: &[0,3] },
+        Operation { operation_id: "zen.baseline",              summary: "Baseline inspection and lock/unlock",                             cli_command: "uecm-cli zen baseline",               side_effects: SideEffects{writes:true, external_calls:false,idempotent:true},  exit_codes: &[0,2,3] },
+        Operation { operation_id: "zen.register",              summary: "Register a zen endpoint for a machine (idempotent)",              cli_command: "uecm-cli zen register",               side_effects: SideEffects{writes:true, external_calls:false,idempotent:true},  exit_codes: &[0,2,3] },
+        Operation { operation_id: "zen.unregister",            summary: "Delete a registered endpoint",                                    cli_command: "uecm-cli zen unregister",             side_effects: SideEffects{writes:true, external_calls:false,idempotent:true},  exit_codes: &[0,2,3] },
+        Operation { operation_id: "zen.change_role",           summary: "Switch an endpoint's role (local <-> shared_upstream)",           cli_command: "uecm-cli zen change-role",            side_effects: SideEffects{writes:true, external_calls:false,idempotent:true},  exit_codes: &[0,2,3] },
+        Operation { operation_id: "zen.apply_config",          summary: "Render zen.lua and write it to the target host",                  cli_command: "uecm-cli zen apply-config",           side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "zen.lua_preview",           summary: "Render zen.lua to stdout (read-only)",                            cli_command: "uecm-cli zen lua-preview",            side_effects: SideEffects{writes:false,external_calls:false,idempotent:true},  exit_codes: &[0,2,3] },
+        Operation { operation_id: "zen.service",               summary: "Windows-service management for the endpoint's zenserver",         cli_command: "uecm-cli zen service",                side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "zen.urlacl",                summary: "URL ACL (netsh http) management for the endpoint",                cli_command: "uecm-cli zen urlacl",                 side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "zen.enable",                summary: "Enable ZenShared upstream on a project across N machines",        cli_command: "uecm-cli zen enable",                 side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "zen.disable",               summary: "Remove the ZenShared upstream entry from each machine's INI",     cli_command: "uecm-cli zen disable",                side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "zen.verify_rules",          summary: "Resolve the zen INI rule set for a UE version",                   cli_command: "uecm-cli zen verify-rules",           side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
     ];
     OPS
 }
@@ -107,17 +164,69 @@ pub fn operation_id_for(cmd: &Domain) -> &'static str {
             crate::cli::args::SecretAction::List => "secret.list",
             crate::cli::args::SecretAction::Delete { .. } => "secret.delete",
         },
-        // Remaining 8 domains land in a later dispatch (still temporary bottoms):
-        Domain::Env { .. } => "env.unmapped",
-        Domain::Ini { .. } => "ini.unmapped",
-        Domain::Share { .. } => "share.unmapped",
-        Domain::Project { .. } => "project.unmapped",
-        Domain::Health { .. } => "health.unmapped",
+        // ---- Task 6 batch 2: share / env / project / ddc / pso / health / ini / zen ----
+        Domain::Share { action } => match action {
+            crate::cli::args::ShareAction::List => "share.list",
+            crate::cli::args::ShareAction::Forget { .. } => "share.forget",
+            crate::cli::args::ShareAction::Create { .. } => "share.create",
+            crate::cli::args::ShareAction::InjectSystemCred { .. } => "share.inject_system_cred",
+        },
+        Domain::Env { action } => match action {
+            crate::cli::args::EnvAction::Get { .. } => "env.get",
+            crate::cli::args::EnvAction::Set { .. } => "env.set",
+        },
+        Domain::Project { action } => match action {
+            crate::cli::args::ProjectAction::List => "project.list",
+            crate::cli::args::ProjectAction::Locations { .. } => "project.locations",
+            crate::cli::args::ProjectAction::Discover { .. } => "project.discover",
+            crate::cli::args::ProjectAction::CreateManual { .. } => "project.create_manual",
+            crate::cli::args::ProjectAction::SetLocation { .. } => "project.set_location",
+            crate::cli::args::ProjectAction::Delete { .. } => "project.delete",
+            crate::cli::args::ProjectAction::DeleteLocation { .. } => "project.delete_location",
+        },
+        Domain::Ddc { action } => match action {
+            // NB: operation_id is `ddc.*` (domain prefix), NOT the `ddc_pak.*`
+            // DB task-label used by operations::start. `ddc_pak` is not a domain.
+            crate::cli::args::DdcAction::Generate { .. } => "ddc.generate",
+            crate::cli::args::DdcAction::Verify { .. } => "ddc.verify",
+            crate::cli::args::DdcAction::Distribute { .. } => "ddc.distribute",
+        },
+        Domain::Pso { action } => match action {
+            crate::cli::args::PsoAction::Verify { .. } => "pso.verify",
+            crate::cli::args::PsoAction::Collect { .. } => "pso.collect",
+            crate::cli::args::PsoAction::List { .. } => "pso.list",
+            crate::cli::args::PsoAction::Distribute { .. } => "pso.distribute",
+        },
+        Domain::Health { action } => match action {
+            crate::cli::args::HealthAction::Run { .. } => "health.run",
+            crate::cli::args::HealthAction::Runs { .. } => "health.runs",
+            crate::cli::args::HealthAction::Results { .. } => "health.results",
+            crate::cli::args::HealthAction::ConsistencyCheck { .. } => "health.consistency_check",
+            crate::cli::args::HealthAction::ScanCommandLine { .. } => "health.scan_command_line",
+            crate::cli::args::HealthAction::FileStats { .. } => "health.file_stats",
+            crate::cli::args::HealthAction::AnalyzeAdvisories { .. } => "health.analyze_advisories",
+        },
+        Domain::Ini { action } => match action {
+            crate::cli::args::IniAction::Read { .. } => "ini.read",
+            crate::cli::args::IniAction::Set { .. } => "ini.set",
+            crate::cli::args::IniAction::Remove { .. } => "ini.remove",
+            crate::cli::args::IniAction::Scan { .. } => "ini.scan",
+            crate::cli::args::IniAction::Runs { .. } => "ini.runs",
+            crate::cli::args::IniAction::Findings { .. } => "ini.findings",
+            crate::cli::args::IniAction::GetFinding { .. } => "ini.get_finding",
+            crate::cli::args::IniAction::Apply { .. } => "ini.apply",
+            crate::cli::args::IniAction::Skip { .. } => "ini.skip",
+            crate::cli::args::IniAction::VerifyPsoPrecaching { .. } => "ini.verify_pso_precaching",
+            // Nested `backend-graph` sub-subcommands all roll up to one
+            // operation_id (the leaf-count guard treats `ini backend-graph`
+            // as a single leaf — it does not recurse a third level).
+            crate::cli::args::IniAction::BackendGraph { .. } => "ini.backend_graph",
+            crate::cli::args::IniAction::GcPause { .. } => "ini.gc_pause",
+            crate::cli::args::IniAction::GcResume { .. } => "ini.gc_resume",
+        },
         Domain::Gpu { action } => match action {
             crate::cli::args::GpuAction::Matrix => "gpu.matrix",
         },
-        Domain::Ddc { .. } => "ddc.unmapped",
-        Domain::Pso { .. } => "pso.unmapped",
         Domain::Log { action } => match action {
             crate::cli::args::LogAction::VerifyStartup { .. } => "log.verify_startup",
         },
@@ -127,7 +236,27 @@ pub fn operation_id_for(cmd: &Domain) -> &'static str {
         Domain::Deploy { action } => match action {
             crate::cli::args::DeployAction::Ddc { .. } => "deploy.ddc",
         },
-        Domain::Zen { .. } => "zen.unmapped",
+        Domain::Zen { action } => match action {
+            // Nested baseline/service/urlacl sub-subcommands roll up to one id
+            // each (leaf-count guard treats `zen baseline|service|urlacl` as a
+            // single leaf). These ids match the existing DB task labels.
+            crate::cli::args::ZenAction::Status { .. } => "zen.status",
+            crate::cli::args::ZenAction::Probe { .. } => "zen.probe",
+            crate::cli::args::ZenAction::CacheStats { .. } => "zen.cache_stats",
+            crate::cli::args::ZenAction::DetectBinary { .. } => "zen.detect_binary",
+            crate::cli::args::ZenAction::ListEndpoints { .. } => "zen.list_endpoints",
+            crate::cli::args::ZenAction::Baseline { .. } => "zen.baseline",
+            crate::cli::args::ZenAction::Register { .. } => "zen.register",
+            crate::cli::args::ZenAction::Unregister { .. } => "zen.unregister",
+            crate::cli::args::ZenAction::ChangeRole { .. } => "zen.change_role",
+            crate::cli::args::ZenAction::ApplyConfig { .. } => "zen.apply_config",
+            crate::cli::args::ZenAction::LuaPreview { .. } => "zen.lua_preview",
+            crate::cli::args::ZenAction::Service { .. } => "zen.service",
+            crate::cli::args::ZenAction::Urlacl { .. } => "zen.urlacl",
+            crate::cli::args::ZenAction::Enable { .. } => "zen.enable",
+            crate::cli::args::ZenAction::Disable { .. } => "zen.disable",
+            crate::cli::args::ZenAction::VerifyRules { .. } => "zen.verify_rules",
+        },
         Domain::Manifest => "manifest.get",
     }
 }
@@ -187,7 +316,72 @@ pub fn output_schema_for(operation_id: &str) -> serde_json::Value {
         "deploy.ddc"              => dynamic_object_schema(),
         "winrm.bootstrap_script"  => dynamic_object_schema(),
 
-        // Task 6 之前其余域走兜底（schema 完整性测试会盯着 unmapped 不放）：
+        // ---- Task 6 batch 2: share / env / project / ddc / pso / health / ini / zen ----
+        // Typed emit_result(&T): named Serialize structs given schemars::JsonSchema.
+        "share.list"          => serde_json::to_value(schema_for!(Vec<crate::data::share_configs::ShareConfig>)).unwrap(),
+        "project.list"        => serde_json::to_value(schema_for!(Vec<crate::data::Project>)).unwrap(),
+        "project.locations"   => serde_json::to_value(schema_for!(Vec<crate::data::ProjectLocation>)).unwrap(),
+        "pso.list"            => serde_json::to_value(schema_for!(Vec<crate::data::pso_cache_files::PsoCacheFile>)).unwrap(),
+        "health.runs" | "ini.runs"
+                              => serde_json::to_value(schema_for!(Vec<crate::data::scan_runs::ScanRun>)).unwrap(),
+        "health.results"      => serde_json::to_value(schema_for!(Vec<crate::data::health_check_runs::HealthCheckRow>)).unwrap(),
+        "health.scan_command_line"
+                              => serde_json::to_value(schema_for!(Vec<crate::core::command_line_scanner::CmdLineHit>)).unwrap(),
+        "ini.findings"        => serde_json::to_value(schema_for!(Vec<crate::data::IniFinding>)).unwrap(),
+        "ini.get_finding"     => serde_json::to_value(schema_for!(Option<crate::data::IniFinding>)).unwrap(),
+
+        // emit_event(...) streams (Started/Item*/Completed; dry-run emit_plan also
+        // emits Event::Completed) -> event-shaped output.
+        //   share.forget/create/inject_system_cred, env.set, project mutations,
+        //   pso.collect/distribute, health.run, ini set/remove/scan/apply/skip/
+        //   gc_pause/gc_resume.
+        "share.forget" | "share.create" | "share.inject_system_cred"
+        | "env.set"
+        | "project.discover" | "project.create_manual" | "project.set_location"
+        | "project.delete" | "project.delete_location"
+        | "pso.collect" | "pso.distribute"
+        | "health.run"
+        | "ini.set" | "ini.remove" | "ini.scan" | "ini.apply" | "ini.skip"
+        | "ini.gc_pause" | "ini.gc_resume" => event_schema(),
+        // zen ops that emit ONLY an Event stream (incl. dry-run plan):
+        "zen.probe" | "zen.cache_stats" | "zen.detect_binary"
+        | "zen.unregister" | "zen.change_role" | "zen.apply_config" => event_schema(),
+
+        // Dynamic: ad-hoc serde_json::Value emit_result, or a single op (or a
+        // group rolled into one id) that emits multiple unrelated shapes so no
+        // one schema is honest.
+        //   env.get             -> EnvGetOut<'a> (borrowed lifetime; schema_for!
+        //                          needs a concrete lifetime, so dynamic is the
+        //                          honest fallback for the small typed struct).
+        //   ini.read            -> IniReadOut<'a> (same lifetime constraint).
+        //   ini.verify_pso_precaching -> ad-hoc {project_id, machine_ids, note}.
+        //   ini.backend_graph   -> get(ad-hoc json) / set(event|plan) /
+        //                          scan(typed Vec) rolled into one id -> mixed.
+        //   pso.verify          -> ad-hoc {project_id, machine_ids, note}.
+        //   ddc.generate/verify/distribute -> each can stream events OR emit a
+        //                          one-shot ad-hoc result (zen-skip / verify
+        //                          output / dry-run) -> mixed per op.
+        //   health.consistency_check/file_stats/analyze_advisories -> ad-hoc
+        //                          composite {…} json.
+        //   zen.status          -> ad-hoc {endpoints:[…]}.
+        //   zen.list_endpoints  -> typed Vec but rolled in with the rest of the
+        //                          ad-hoc-dominant zen domain (see note below).
+        //   zen.baseline        -> list(typed Vec) / lock/unlock(event) mixed.
+        //   zen.register/lua_preview/verify_rules -> ad-hoc doc json.
+        //   zen.service/urlacl  -> each rolls 3+ sub-subcommands (event + ad-hoc
+        //                          result) into one id -> mixed.
+        //   zen.enable/disable  -> emit BOTH a one-shot ad-hoc result doc AND a
+        //                          terminal Event::Completed -> mixed.
+        "env.get" | "ini.read" | "ini.verify_pso_precaching" | "ini.backend_graph"
+        | "pso.verify"
+        | "ddc.generate" | "ddc.verify" | "ddc.distribute"
+        | "health.consistency_check" | "health.file_stats" | "health.analyze_advisories"
+            => dynamic_object_schema(),
+        s if s.starts_with("zen.") => dynamic_object_schema(),
+
+        // Defensive bottom: every current op_id is classified above; this only
+        // catches a FUTURE op_id that nobody mapped — schema-completeness test
+        // still passes because dynamic_object_schema() is a valid object schema.
         _ => dynamic_object_schema(),
     }
 }

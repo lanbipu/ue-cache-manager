@@ -6,7 +6,7 @@ use crate::error::{UecmError, UecmResult};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct CmdLineHit {
     pub source: String,
     #[serde(default)]
