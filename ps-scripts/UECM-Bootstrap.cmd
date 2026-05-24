@@ -44,8 +44,11 @@ REM =======================================================================
 
 set "ADMIN_ARGS="
 if not "%UECM_LOCAL_ADMIN_PASSWORD%"=="" set ADMIN_ARGS=-CreateLocalAdmin -LocalAdminName "%UECM_LOCAL_ADMIN%" -LocalAdminPassword "%UECM_LOCAL_ADMIN_PASSWORD%"
+REM The SSH service account is ALWAYS uecm-svc (SshExecutor logs in as uecm-svc),
+REM independent of the WinRM local-admin name above. Hardcode it so enable-ssh.ps1
+REM (which rejects any other name) never gets a mismatched account.
 set "SSH_ADMIN_ARGS="
-if not "%UECM_LOCAL_ADMIN_PASSWORD%"=="" set SSH_ADMIN_ARGS=-CreateLocalAdmin -LocalAdminName "%UECM_LOCAL_ADMIN%" -LocalAdminPassword "%UECM_LOCAL_ADMIN_PASSWORD%"
+if not "%UECM_LOCAL_ADMIN_PASSWORD%"=="" set SSH_ADMIN_ARGS=-CreateLocalAdmin -LocalAdminName "uecm-svc" -LocalAdminPassword "%UECM_LOCAL_ADMIN_PASSWORD%"
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS1%" ^
     -NetworkCategory Private ^

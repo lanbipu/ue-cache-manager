@@ -7,7 +7,8 @@ use crate::core::{
     ue_runner::{UeRunnerBackend, UeRunnerEvent},
 };
 use crate::data::{
-    machine_ue_installs, machines as data_machines, project_locations, pso_cache_files, Db,
+    credentials as data_creds, machine_ue_installs, machines as data_machines, project_locations,
+    pso_cache_files, share_configs, CredentialKind, CredentialRecord, Db, ShareConfig, ShareMode,
 };
 use crate::error::{UecmError, UecmResult};
 use serde::{Deserialize, Serialize};
@@ -271,7 +272,7 @@ fn execute_one(
                 )?,
                 "b" | "B" => {
                     let svc_pass = shares::generate_svc_password();
-                    shares::create_mode_b(
+                    let r = shares::create_mode_b(
                         host,
                         &plan.shared_cache.share_name,
                         &plan.shared_cache.server_path,
@@ -279,7 +280,45 @@ fn execute_one(
                         &svc_pass,
                         op_user,
                         op_pass,
-                    )?
+                    )?;
+                    // Persist the generated svc credential + share row so a later
+                    // DistributeDdcPak/Pso (which resolves the source SMB credential
+                    // from the registered share via resolve_source_smb) can mount
+                    // this managed share. Mirrors `share create --mode b`. Without
+                    // this a one-click deploy that creates the share AND distributes
+                    // would hit "source host has no registered share".
+                    let server_host = host_for(db, plan.shared_cache.server_machine_id)?;
+                    let alias = format!("UECM:share:{}:ddc-svc", server_host);
+                    crate::core::secrets::SecretStore::from_config()?.put(&alias, &svc_pass)?;
+                    if data_creds::find_by_alias(db, &alias)?.is_none() {
+                        data_creds::insert(
+                            db,
+                            &CredentialRecord {
+                                id: None,
+                                alias: alias.clone(),
+                                kind: CredentialKind::Share,
+                                username: "ddc-svc".into(),
+                            },
+                        )?;
+                    }
+                    let already = share_configs::find_by_host(db, plan.shared_cache.server_machine_id)?
+                        .into_iter()
+                        .any(|s| s.share_name == plan.shared_cache.share_name);
+                    if !already {
+                        share_configs::insert(
+                            db,
+                            &ShareConfig {
+                                id: None,
+                                host_machine_id: plan.shared_cache.server_machine_id,
+                                share_name: plan.shared_cache.share_name.clone(),
+                                unc_path: r.unc_path.clone(),
+                                local_path: plan.shared_cache.server_path.clone(),
+                                mode: ShareMode::Managed,
+                                credential_alias: Some(alias),
+                            },
+                        )?;
+                    }
+                    r
                 }
                 other => {
                     return Err(UecmError::InvalidInput(format!(
