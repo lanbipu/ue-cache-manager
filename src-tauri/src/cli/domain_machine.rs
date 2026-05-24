@@ -597,36 +597,6 @@ fn deep_scan(
     Ok(())
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum AuthorizeStep {
-    Bootstrap,
-    UsbFallback,
-    /// Shallow preflight returned likely_viable — confirm with a deep SCM probe
-    /// before committing to bootstrap.
-    DeepProbe,
-}
-
-/// Shallow preflight verdict -> next step. `likely_viable` is NOT trusted for
-/// bootstrap: shallow skips the SCM probe, which is exactly where MSA accounts /
-/// UAC-token-filter machines fail. So likely_viable triggers a deep probe rather
-/// than bootstrapping blind (which would surface as a confusing `failed`).
-pub(crate) fn authorize_decision_shallow(verdict: &str) -> AuthorizeStep {
-    match verdict {
-        "viable" => AuthorizeStep::Bootstrap,
-        "likely_viable" => AuthorizeStep::DeepProbe,
-        _ => AuthorizeStep::UsbFallback,
-    }
-}
-
-/// Deep preflight verdict (after the SCM probe) -> final step. No more probing:
-/// only a definitive `viable` proceeds; everything else falls back to USB.
-pub(crate) fn authorize_decision_deep(verdict: &str) -> AuthorizeStep {
-    match verdict {
-        "viable" => AuthorizeStep::Bootstrap,
-        _ => AuthorizeStep::UsbFallback,
-    }
-}
-
 fn authorize(
     ctx: &mut Ctx<'_>,
     machine_ids: Vec<i64>,
@@ -634,143 +604,21 @@ fn authorize(
     save_as: Option<String>,
     cred: &crate::cli::credential_args::CredentialArgs,
 ) -> UecmResult<()> {
-    // Credentials are REQUIRED — preflight + bootstrap need a local admin user/pass.
-    let (user, pass) = {
-        let db = ctx.require_db()?;
-        cred.resolve(db)?.ok_or_else(|| {
-            UecmError::InvalidInput(
-                "machine authorize requires credentials (--cred-alias or --user/--pass-stdin)".into(),
-            )
-        })?
-    };
-
-    // Optional: persist the resolved credential as an alias for later reuse
-    // (so the follow-up `machine deep-scan --cred-alias <alias>` can find it).
-    if let Some(alias) = save_as.as_deref() {
-        crate::cli::domain_cred::save_resolved(ctx, alias, &user, &pass, "winrm")?;
-    }
-
+    // Remote WinRM push has been retired (SSH migration P5a). `machine authorize`
+    // no longer probes / bootstraps; it points the operator at the USB SSH bundle.
+    // `save_as` / `cred` are accepted-and-ignored shims (CLI surface frozen).
+    let _ = (save_as, cred);
     let ids = {
         let db = ctx.require_db()?;
         resolve_target_ids(db, &machine_ids, all)?
     };
-
-    ctx.emitter
-        .emit_event(&Event::Started {
-            task_type: "machine_authorize".into(),
-            task_id: None,
-            metadata: json!({ "machines": ids.len() }),
-        })
-        .ok();
-
-    let mut authorized = 0usize;
-    let mut fallback = 0usize;
-    let mut failed = 0usize;
-    for id in &ids {
-        let host = {
-            let db = ctx.require_db()?;
-            match machines::find_by_id(db, *id)? {
-                Some(m) => m.ip,
-                None => {
-                    failed += 1;
-                    ctx.emitter
-                        .emit_event(&Event::Completed {
-                            summary: json!({ "machine_id": id, "error": "machine not found" }),
-                        })
-                        .ok();
-                    continue;
-                }
-            }
-        };
-
-        // Preflight: shallow first (zero-trace on target — TCP + ADMIN$ only).
-        let pf_shallow = match crate::core::preflight::preflight_path_b(&host, &user, &pass, false) {
-            Ok(r) => r,
-            Err(e) => {
-                failed += 1;
-                ctx.emitter
-                    .emit_event(&Event::Completed {
-                        summary: json!({ "machine_id": id, "host": host, "step": "preflight", "error": e.to_string() }),
-                    })
-                    .ok();
-                continue;
-            }
-        };
-
-        // Shallow likely_viable is not trusted (it skips the SCM probe). Confirm
-        // with a deep probe before bootstrapping; `pf` ends up holding whichever
-        // verdict/reason is authoritative for the final decision.
-        let (final_step, pf) = match authorize_decision_shallow(&pf_shallow.verdict) {
-            AuthorizeStep::DeepProbe => {
-                match crate::core::preflight::preflight_path_b(&host, &user, &pass, true) {
-                    Ok(deep) => (authorize_decision_deep(&deep.verdict), deep),
-                    Err(e) => {
-                        failed += 1;
-                        ctx.emitter
-                            .emit_event(&Event::Completed {
-                                summary: json!({ "machine_id": id, "host": host, "step": "preflight_probe", "error": e.to_string() }),
-                            })
-                            .ok();
-                        continue;
-                    }
-                }
-            }
-            step => (step, pf_shallow),
-        };
-
-        match final_step {
-            AuthorizeStep::Bootstrap => {
-                // Full render-node provisioning: local-admin token filter + SMB/WMI/
-                // LongPaths/ExecutionPolicy/HighPerformance.
-                match crate::core::bootstrap::enable_winrm_with_psexec(&host, &user, &pass, true, true) {
-                    Ok(b) if b.ok => {
-                        authorized += 1;
-                        ctx.emitter
-                            .emit_event(&Event::Completed {
-                                summary: json!({ "machine_id": id, "host": host, "authorized": true, "message": b.message }),
-                            })
-                            .ok();
-                    }
-                    Ok(b) => {
-                        failed += 1;
-                        ctx.emitter
-                            .emit_event(&Event::Completed {
-                                summary: json!({ "machine_id": id, "host": host, "authorized": false, "error": b.message }),
-                            })
-                            .ok();
-                    }
-                    Err(e) => {
-                        failed += 1;
-                        ctx.emitter
-                            .emit_event(&Event::Completed {
-                                summary: json!({ "machine_id": id, "host": host, "step": "bootstrap", "error": e.to_string() }),
-                            })
-                            .ok();
-                    }
-                }
-            }
-            AuthorizeStep::UsbFallback => {
-                fallback += 1;
-                ctx.emitter
-                    .emit_event(&Event::Completed {
-                        summary: json!({
-                            "machine_id": id,
-                            "host": host,
-                            "path_b_unavailable": true,
-                            "verdict": pf.verdict,
-                            "reason": pf.reason,
-                            "hint": "Path B not viable — run `uecm-cli winrm bootstrap-script` and execute it on the machine via USB",
-                        }),
-                    })
-                    .ok();
-            }
-            AuthorizeStep::DeepProbe => unreachable!("deep decision never yields DeepProbe"),
-        }
-    }
-
     ctx.emitter
         .emit_event(&Event::Completed {
-            summary: json!({ "machines": ids.len(), "authorized": authorized, "usb_fallback": fallback, "failed": failed }),
+            summary: json!({
+                "machines": ids.len(),
+                "remote_push": "retired",
+                "hint": "Remote WinRM push is retired. Build a USB onboarding bundle with `uecm-cli ssh package-bootstrap --out <dir>`, run UECM-Bootstrap.cmd on each node, then `uecm-cli machine refresh <id>` over SSH.",
+            }),
         })
         .ok();
     Ok(())
@@ -874,46 +722,6 @@ mod tests {
         let cred = crate::cli::credential_args::CredentialArgs::inline(None);
         let res = deep_scan(&mut ctx, vec![999], false, &cred, &UnreachableExec);
         assert!(res.is_ok(), "batch completes; per-machine failure is reported in summary");
-    }
-
-    #[test]
-    fn shallow_likely_viable_triggers_deep_probe_not_bootstrap() {
-        // Shallow preflight skips the SCM probe — the one check MSA / UAC-token-filter
-        // machines fail. So likely_viable must NOT bootstrap blind; it must trigger a
-        // deep probe to get a definitive verdict first.
-        assert_eq!(authorize_decision_shallow("likely_viable"), AuthorizeStep::DeepProbe);
-        assert_eq!(authorize_decision_shallow("viable"), AuthorizeStep::Bootstrap);
-        assert_eq!(authorize_decision_shallow("blocked"), AuthorizeStep::UsbFallback);
-        assert_eq!(authorize_decision_shallow("uncertain"), AuthorizeStep::UsbFallback);
-        assert_eq!(authorize_decision_shallow("anything-else"), AuthorizeStep::UsbFallback);
-    }
-
-    #[test]
-    fn deep_verdict_only_viable_bootstraps() {
-        // After the deep SCM probe there is no more probing: only a definitive
-        // `viable` proceeds; everything else (including a lingering likely_viable)
-        // falls back to USB.
-        assert_eq!(authorize_decision_deep("viable"), AuthorizeStep::Bootstrap);
-        assert_eq!(authorize_decision_deep("likely_viable"), AuthorizeStep::UsbFallback);
-        assert_eq!(authorize_decision_deep("blocked"), AuthorizeStep::UsbFallback);
-        assert_eq!(authorize_decision_deep("uncertain"), AuthorizeStep::UsbFallback);
-    }
-
-    #[test]
-    fn authorize_requires_credentials() {
-        let (db, buf) = setup();
-        let emitter: Box<dyn Emitter> = Box::new(NdjsonEmitter::new(buf));
-        let mut ctx = Ctx {
-            db: Some(db),
-            db_path: PathBuf::from(":memory:"),
-            emitter,
-            json_mode: true,
-        };
-        add(&mut ctx, "10.0.0.1".to_string(), Some("m1".to_string())).unwrap();
-        // inline(None) resolves to no credentials → authorize must reject.
-        let cred = crate::cli::credential_args::CredentialArgs::inline(None);
-        let res = authorize(&mut ctx, vec![1], false, None, &cred);
-        assert!(matches!(res, Err(UecmError::InvalidInput(_))));
     }
 
     #[test]

@@ -175,7 +175,7 @@ pub enum MachineAction {
         #[arg(long)]
         hostname: Option<String>,
     },
-    /// Refresh a machine: WinRM probe + detect UE installs + GPUs.
+    /// Refresh a machine: SSH probe + detect UE installs + GPUs.
     ///
     /// Plan 3: now accepts credentials. When supplied, all three remote
     /// calls (probe / detect_ue / detect_gpus) authenticate as the given
@@ -206,7 +206,7 @@ pub enum MachineAction {
     /// Rename a machine.
     Rename { id: i64, hostname: String },
     /// Deep scan a set of machines: refresh (UE/GPU) + INI scan + health, per machine.
-    /// WinRM-unreachable machines are skipped (run `machine authorize` first) and the
+    /// SSH-unreachable machines are skipped (re-onboard via UECM-Bootstrap.cmd) and the
     /// batch continues.
     DeepScan {
         #[arg(long, value_name = "M1,M2,...", value_delimiter = ',', conflicts_with = "all")]
@@ -217,16 +217,17 @@ pub enum MachineAction {
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
-    /// Authorize a set of machines for remote management: winrm preflight -> bootstrap
-    /// (Path B remote PsExec). Machines where Path B is not viable fall back to a USB
-    /// script hint. The batch continues past per-machine failures.
+    /// Deprecated: remote WinRM push is retired (SSH migration). Emits guidance to
+    /// build a USB onboarding bundle with `ssh package-bootstrap` and run
+    /// UECM-Bootstrap.cmd on each node. `--save-as` / credential flags are accepted
+    /// but ignored (kept for back-compat).
     Authorize {
         #[arg(long, value_name = "M1,M2,...", value_delimiter = ',', conflicts_with = "all")]
         machine_ids: Vec<i64>,
         /// Authorize every machine in inventory.
         #[arg(long, conflicts_with = "machine_ids")]
         all: bool,
-        /// Save the resolved --user/--pass-stdin credential as this DPAPI alias for reuse.
+        /// Accepted but ignored (remote push retired).
         #[arg(long, value_name = "ALIAS")]
         save_as: Option<String>,
         #[command(flatten)]
