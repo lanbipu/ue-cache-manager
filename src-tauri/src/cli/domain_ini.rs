@@ -1,5 +1,7 @@
 //! `uecm-cli ini <action>` handlers.
 
+use std::collections::HashMap;
+
 use crate::cli::args::{BackendGraphAction, IniAction};
 use crate::cli::credential_args::CredentialArgs;
 use crate::cli::destructive::{self, Outcome};
@@ -13,7 +15,7 @@ use crate::core::ini_diagnostics::EnvVarState;
 use crate::core::env_vars;
 use crate::data::{
     ini_config_snapshots, ini_findings, machine_ue_installs, machines as data_machines,
-    scan_runs, IniFinding,
+    project_locations, scan_runs, IniFinding,
 };
 use crate::error::{UecmError, UecmResult};
 use serde::Serialize;
@@ -120,9 +122,8 @@ pub fn handle(ctx: &mut Ctx<'_>, action: IniAction) -> UecmResult<()> {
             }
         }
         // Plan-3 additions:
-        // TODO(Task 3.4): wire project_id via scan_dispatch
-        IniAction::Scan { machine_ids, project_id: _, machine_id: _, cred } =>
-            scan_cluster(ctx, &machine_ids, std::collections::HashMap::new(), "ini", &cred),
+        IniAction::Scan { machine_ids, project_id, machine_id, cred } =>
+            scan_dispatch(ctx, machine_ids, project_id, machine_id, &cred),
         IniAction::Runs { limit } => list_runs(ctx, limit),
         IniAction::Findings { scan_run_id, severity } => {
             list_findings(ctx, scan_run_id, severity.as_deref())
@@ -560,6 +561,50 @@ fn remove_batch(
 // Plan-3: cluster scan + findings workflow
 // ---------------------------------------------------------------------------
 
+/// Resolve the right machine set and project roots, then delegate to `scan_cluster`.
+///
+/// When `project_id` is `None`, falls back to the original machine-only scan
+/// (empty roots map, scan_type "ini").  When `project_id` is `Some`, the
+/// `project_locations` table is queried for the registered (machine, abs_path)
+/// pairs; if none exist, returns `InvalidInput` so the operator is told to run
+/// `project discover` first.
+fn scan_dispatch(
+    ctx: &mut Ctx<'_>,
+    machine_ids: Vec<i64>,
+    project_id: Option<i64>,
+    machine_id: Option<i64>,
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
+    match project_id {
+        None => scan_cluster(ctx, &machine_ids, HashMap::new(), "ini", cred),
+        Some(pid) => {
+            let (mids, roots) = {
+                let db = ctx.require_db()?;
+                let mut locs = project_locations::list_by_project(db, pid)?;
+                if let Some(only) = machine_id {
+                    locs.retain(|l| l.machine_id == only);
+                }
+                if locs.is_empty() {
+                    return Err(UecmError::InvalidInput(format!(
+                        "project {} has no locations (run `project discover` first)",
+                        pid
+                    )));
+                }
+                let mut roots: HashMap<i64, Vec<String>> = HashMap::new();
+                let mut mids: Vec<i64> = Vec::new();
+                for l in &locs {
+                    roots.entry(l.machine_id).or_default().push(l.abs_path.clone());
+                    if !mids.contains(&l.machine_id) {
+                        mids.push(l.machine_id);
+                    }
+                }
+                (mids, roots)
+            };
+            scan_cluster(ctx, &mids, roots, "ini_project", cred)
+        }
+    }
+}
+
 /// Run a full INI scan across a set of machines identified by DB id.
 ///
 /// Flow mirrors `commands::ini_scanner::scan_inis_summary`:
@@ -571,7 +616,7 @@ fn remove_batch(
 fn scan_cluster(
     ctx: &mut Ctx<'_>,
     machine_ids: &[i64],
-    project_paths_per_machine: std::collections::HashMap<i64, Vec<String>>,
+    project_paths_per_machine: HashMap<i64, Vec<String>>,
     scan_type: &str,
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
@@ -889,10 +934,11 @@ fn verify_pso_precaching(ctx: &mut Ctx<'_>, project_id: i64) -> UecmResult<()> {
             project_id
         )));
     }
+    use std::collections::HashSet;
     let machine_ids: Vec<i64> = locations
         .iter()
         .map(|l| l.machine_id)
-        .collect::<std::collections::HashSet<_>>()
+        .collect::<HashSet<_>>()
         .into_iter()
         .collect();
 
@@ -1016,7 +1062,7 @@ mod tests {
 
         let mut buf: Vec<u8> = Vec::new();
         let mut ctx = make_ctx(&mut buf, &db);
-        let mut roots = std::collections::HashMap::new();
+        let mut roots = HashMap::new();
         roots.insert(mid, vec![root]);
         let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false };
         scan_cluster(&mut ctx, &[mid], roots, "ini_project", &cred).unwrap();
@@ -1028,6 +1074,61 @@ mod tests {
         assert!(snaps.iter().any(|s| s.domain == "ddc" && s.key_name == "Root"),
             "expected ddc/Root snapshot, got: {:?}",
             snaps.iter().map(|s| (s.domain.as_str(), s.key_name.as_str())).collect::<Vec<_>>());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn scan_dispatch_project_resolves_locations() {
+        use crate::data::{machines, projects::{self, Project}, project_locations::{self, ProjectLocation, DiscoveryStatus}};
+        let db = fresh_db();
+        let mid = machines::insert(&db, &machines::Machine::new("R1", "localhost")).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        // enumerate_project_paths builds "<root>\Config\DefaultEngine.ini" with
+        // backslash separators. On non-Windows, backslashes are literal filename
+        // chars, so write the file at the same backslash-named path (mirrors Task 3.3).
+        let root = tmp.path().to_string_lossy().to_string();
+        let default_engine_path = format!("{}\\Config\\DefaultEngine.ini", root);
+        std::fs::write(
+            &default_engine_path,
+            "[DerivedDataBackendGraph]\nRoot=(Type=KeyLength)\n",
+        ).unwrap();
+        let pid = projects::upsert(&db, &Project {
+            id: None, uproject_name: "Demo.uproject".into(),
+            uproject_stem_lower: "demo".into(), uproject_guid: None, display_name: None,
+            first_seen_at: None, last_seen_at: None, ue_version_major: None, ue_version_minor: None,
+            engine_association_raw: None, engine_association_kind: None,
+        }).unwrap();
+        project_locations::upsert(&db, &ProjectLocation {
+            id: None, project_id: pid, machine_id: mid,
+            abs_path: root.clone(),
+            uproject_path: format!("{}\\Demo.uproject", root),
+            discovery_status: DiscoveryStatus::Auto, discovered_at: None,
+        }).unwrap();
+
+        let mut buf: Vec<u8> = Vec::new();
+        let mut ctx = make_ctx(&mut buf, &db);
+        let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false };
+        scan_dispatch(&mut ctx, vec![], Some(pid), None, &cred).unwrap();
+        drop(ctx);
+        let runs = crate::data::scan_runs::list_recent(&db, "ini_project", 1).unwrap();
+        assert_eq!(runs.len(), 1);
+    }
+
+    #[test]
+    fn scan_dispatch_project_without_location_errors() {
+        use crate::data::projects::{self, Project};
+        let db = fresh_db();
+        let pid = projects::upsert(&db, &Project {
+            id: None, uproject_name: "X.uproject".into(),
+            uproject_stem_lower: "x".into(), uproject_guid: None, display_name: None,
+            first_seen_at: None, last_seen_at: None, ue_version_major: None, ue_version_minor: None,
+            engine_association_raw: None, engine_association_kind: None,
+        }).unwrap();
+        let mut buf: Vec<u8> = Vec::new();
+        let mut ctx = make_ctx(&mut buf, &db);
+        let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false };
+        let err = scan_dispatch(&mut ctx, vec![], Some(pid), None, &cred).unwrap_err();
+        assert!(matches!(err, UecmError::InvalidInput(_)));
     }
 
     #[cfg(not(windows))]
@@ -1080,7 +1181,7 @@ mod tests {
         let mut buf: Vec<u8> = Vec::new();
         let mut ctx = make_ctx(&mut buf, &db);
         let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false };
-        scan_cluster(&mut ctx, &[mid], std::collections::HashMap::new(), "ini", &cred).unwrap();
+        scan_cluster(&mut ctx, &[mid], HashMap::new(), "ini", &cred).unwrap();
 
         let run_id = scan_runs::list_recent(&db, "ini", 1).unwrap()[0]
             .id
