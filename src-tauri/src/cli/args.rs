@@ -41,9 +41,11 @@ pub enum InputFormat {
     Ndjson,
 }
 
-/// 是否启用 ANSI color。当前临时 2 参数版本只看 `--no-color` flag + stdout 是否
-/// TTY；`NO_COLOR` env 支持在 Task 2 的 3 参数版本里补上（届时会一并加测试）。
-pub fn use_color(no_color_flag: bool, is_tty: bool) -> bool { !no_color_flag && is_tty }
+/// 是否启用 ANSI color。`--no-color` 或 `NO_COLOR` env 任一存在即禁用；
+/// 否则跟随 stdout 是否 TTY。(spec §3.2 / §3.4)
+pub fn use_color(no_color_flag: bool, is_tty: bool, no_color_env: bool) -> bool {
+    !no_color_flag && !no_color_env && is_tty
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "uecm-cli", version, about = "UECM command-line interface")]
@@ -2083,5 +2085,16 @@ mod tests {
             "--backend", "garbage",
         ]);
         assert!(r.is_err(), "clap must reject unknown --backend values");
+    }
+
+    #[test]
+    fn use_color_truth_table() {
+        // flag 关 + 非 TTY + 无 env -> 由 is_tty 决定
+        assert!(super::use_color(false, true, false));
+        assert!(!super::use_color(false, false, false));
+        // --no-color 一票否决
+        assert!(!super::use_color(true, true, false));
+        // NO_COLOR env 一票否决
+        assert!(!super::use_color(false, true, true));
     }
 }

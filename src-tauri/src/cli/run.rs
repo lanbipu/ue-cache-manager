@@ -124,7 +124,11 @@ pub fn run(cli: Cli) -> i32 {
     let stderr = io::stderr();
     let emitter: Box<dyn Emitter> = match fmt {
         OutputFormat::Text => {
-            let color = crate::cli::args::use_color(cli.no_color, atty::is(atty::Stream::Stdout));
+            let color = crate::cli::args::use_color(
+                cli.no_color,
+                atty::is(atty::Stream::Stdout),
+                std::env::var_os("NO_COLOR").is_some(),
+            );
             Box::new(HumanEmitter::new(stdout.lock(), stderr.lock(), color))
         }
         OutputFormat::Json | OutputFormat::Ndjson => Box::new(NdjsonEmitter::new(stdout.lock())),
