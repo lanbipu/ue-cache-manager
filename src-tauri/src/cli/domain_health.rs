@@ -292,7 +292,7 @@ fn run_with_rt(
                                     status: "offline".into(),
                                     message: e.to_string(),
                                     sample: "".into(),
-                                    remediation: "Bring the host online (verify network + WinRM) before retrying.".into(),
+                                    remediation: "Bring the host online (verify network + SSH) before retrying.".into(),
                                 },
                             );
                         }

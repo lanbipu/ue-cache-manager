@@ -151,7 +151,7 @@ pub fn run_health_check(
                         status: "offline".into(),
                         message: e.to_string(),
                         sample: "".into(),
-                        remediation: "Bring the host online (verify network + WinRM) before retrying.".into(),
+                        remediation: "Bring the host online (verify network + SSH) before retrying.".into(),
                     });
                 }
                 let l1 = rt.block_on(probe_tcp_ports(&machine.ip, 1000));

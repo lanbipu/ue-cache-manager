@@ -87,7 +87,7 @@ pub async fn probe_tcp_ports(host: &str, timeout_ms: u64) -> HashMap<String, Che
         port_outcome(
             "WinRM 5985",
             probed.winrm_open,
-            "Run `uecm-cli winrm bootstrap <host>` (Path B) when 445+135 are open, or use the USB Path A bootstrap when all three ports are closed.",
+            "Onboard the node over SSH: build a USB bundle with `uecm-cli ssh package-bootstrap` and run UECM-Bootstrap.cmd on the node (installs OpenSSH + SMB + node prep). 5985 is a legacy diagnostic port; UECM transport is SSH (22).",
         ),
     );
     out.insert(
@@ -95,7 +95,7 @@ pub async fn probe_tcp_ports(host: &str, timeout_ms: u64) -> HashMap<String, Che
         port_outcome(
             "SMB 445",
             probed.smb_open,
-            "Open inbound TCP 445 (FPS-SMB-In-TCP firewall rule) and start LanmanServer. `winrm bootstrap` does both via -EnableSmbServer.",
+            "Open inbound TCP 445 (FPS-SMB-In-TCP firewall rule) and start LanmanServer. UECM-Bootstrap.cmd does both via -EnableSmbServer.",
         ),
     );
     out.insert(
@@ -103,7 +103,7 @@ pub async fn probe_tcp_ports(host: &str, timeout_ms: u64) -> HashMap<String, Che
         port_outcome(
             "RPC 135 (Endpoint Mapper)",
             probed.rpc_open,
-            "Switch network profile to Private (Public default blocks DCOM-In). `winrm bootstrap` does this when -NetworkCategory Private is passed.",
+            "RPC 135 is no longer required for UECM transport (SSH). This row is informational; switch the network profile to Private only if you still rely on legacy DCOM tooling.",
         ),
     );
     out
