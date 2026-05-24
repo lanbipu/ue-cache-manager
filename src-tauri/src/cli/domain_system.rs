@@ -119,7 +119,7 @@ fn error_code_table() -> serde_json::Value {
     ])
 }
 
-fn completion(ctx: &mut Ctx<'_>, shell: clap_complete::Shell) -> UecmResult<()> {
+fn completion(_ctx: &mut Ctx<'_>, shell: clap_complete::Shell) -> UecmResult<()> {
     use clap::CommandFactory;
     let mut cmd = crate::cli::args::Cli::command();
     let bin = cmd.get_name().to_string();
@@ -128,7 +128,6 @@ fn completion(ctx: &mut Ctx<'_>, shell: clap_complete::Shell) -> UecmResult<()> 
     clap_complete::generate(shell, &mut cmd, bin, &mut out);
     use std::io::Write;
     let _ = std::io::stdout().write_all(&out);
-    let _ = ctx; // completion 不用 emitter（裸 shell 脚本输出）
     Ok(())
 }
 
