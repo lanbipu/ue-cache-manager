@@ -7,6 +7,8 @@ use serde::Serialize;
 use std::io::{self, Write};
 
 /// All events emitted to stdout. Long-running tasks emit one event per stream item.
+// JsonSchema feeds manifest::event_schema(). The `serde_json::Value` fields
+// (metadata/summary/details) become permissive `{}` schemas (any JSON allowed).
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Event {

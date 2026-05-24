@@ -35,7 +35,7 @@ pub fn operations() -> &'static [Operation] {
         Operation { operation_id: "machine.scan",      summary: "Probe a CIDR for live hosts",             cli_command: "uecm-cli machine scan",      side_effects: SideEffects{writes:false,external_calls:true, idempotent:true}, exit_codes: &[0,2] },
         Operation { operation_id: "machine.add",       summary: "Add a machine to inventory",              cli_command: "uecm-cli machine add",       side_effects: SideEffects{writes:true, external_calls:false,idempotent:false}, exit_codes: &[0,2,3] },
         Operation { operation_id: "machine.refresh",   summary: "Refresh a machine (probe + detect)",      cli_command: "uecm-cli machine refresh",   side_effects: SideEffects{writes:true, external_calls:true, idempotent:true}, exit_codes: &[0,2,3,4] },
-        Operation { operation_id: "machine.detail",    summary: "Show machine detail",                     cli_command: "uecm-cli machine detail",    side_effects: SideEffects{writes:false,external_calls:false,idempotent:true}, exit_codes: &[0,2,5] },
+        Operation { operation_id: "machine.detail",    summary: "Show machine detail",                     cli_command: "uecm-cli machine detail",    side_effects: SideEffects{writes:false,external_calls:false,idempotent:true}, exit_codes: &[0,2] },
         Operation { operation_id: "machine.delete",    summary: "Delete machine(s)",                       cli_command: "uecm-cli machine delete",    side_effects: SideEffects{writes:true, external_calls:false,idempotent:true}, exit_codes: &[0,2] },
         Operation { operation_id: "machine.rename",    summary: "Rename a machine",                        cli_command: "uecm-cli machine rename",    side_effects: SideEffects{writes:true, external_calls:false,idempotent:true}, exit_codes: &[0,2] },
         Operation { operation_id: "machine.deep_scan", summary: "Refresh + INI scan + health per machine", cli_command: "uecm-cli machine deep-scan", side_effects: SideEffects{writes:true, external_calls:true, idempotent:true}, exit_codes: &[0,2,3,4] },
@@ -110,8 +110,12 @@ pub fn output_schema_for(operation_id: &str) -> serde_json::Value {
         "system.version" => serde_json::to_value(schema_for!(crate::cli::domain_system::VersionInfo)).unwrap(),
         "system.db_path" | "system.ps_dir" => serde_json::to_value(schema_for!(crate::cli::domain_system::PathInfo)).unwrap(),
         "system.migrate_db" | "system.echo" | "system.schema" | "system.exit_codes" => dynamic_object_schema(),
-        "machine.scan" | "machine.deep_scan" | "machine.refresh" | "machine.authorize" => event_schema(),
-        // machine.list/add/detail/delete/rename 等返回 ad-hoc json（Task 6 可换成命名类型）：
+        // emit_event(...) handlers -> event-shaped output. add/delete/rename emit
+        // Event::Completed{..} just like scan/refresh/deep_scan/authorize.
+        "machine.scan" | "machine.deep_scan" | "machine.refresh" | "machine.authorize"
+        | "machine.add" | "machine.delete" | "machine.rename" => event_schema(),
+        // emit_result(&T) handlers (machine.list / machine.detail) return ad-hoc json
+        // (Task 6 可换成命名类型）：
         s if s.starts_with("machine.") => dynamic_object_schema(),
         // Task 6 之前其余域走兜底（schema 完整性测试会盯着 unmapped 不放）：
         _ => dynamic_object_schema(),
@@ -198,5 +202,16 @@ mod tests {
             assert!(op["output_schema"].is_object(), "{id} missing output_schema");
             assert!(op["error_schema"].is_object(), "{id} missing error_schema");
         }
+    }
+
+    #[test]
+    fn output_schema_modes_match_emission() {
+        // emit_event(...) handlers carry event-shaped output.
+        assert_eq!(output_schema_for("machine.scan"), event_schema());
+        // machine.add was reclassified from dynamic to event (it emits
+        // Event::Completed{..} from its handler).
+        assert_eq!(output_schema_for("machine.add"), event_schema());
+        // emit_result(&T) handlers return dynamic object schemas.
+        assert_eq!(output_schema_for("machine.list"), super::dynamic_object_schema());
     }
 }
