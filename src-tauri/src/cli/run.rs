@@ -1,7 +1,7 @@
 //! Top-level dispatch. Bin entry parses args, builds emitter, opens DB only
 //! when the requested command needs it, hands off to domain.
 
-use crate::cli::args::{Cli, Domain};
+use crate::cli::args::{Cli, Domain, OutputFormat};
 use crate::cli::output::{Emitter, HumanEmitter, NdjsonEmitter, exit_code_for};
 use crate::cli::{domain_cred, domain_ddc, domain_deploy, domain_env, domain_gpu, domain_health, domain_ini, domain_local_cache, domain_machine, domain_project, domain_pso, domain_secret, domain_share, domain_ssh, domain_system, domain_winrm, domain_zen};
 use crate::data::Db;
@@ -115,15 +115,19 @@ pub fn run(cli: Cli) -> i32 {
         None
     };
 
-    // Emitter
-    let json_mode = cli.json;
+    // Emitter selection (spec §3.5). text -> human; json/ndjson -> NDJSON emitter.
+    // True single-object buffering for `json` (vs streamed `ndjson`) is refined in
+    // the P1 envelope plan; here both structured modes share the NDJSON emitter.
+    let fmt = cli.resolved_output();
+    let json_mode = !matches!(fmt, OutputFormat::Text);
     let stdout = io::stdout();
     let stderr = io::stderr();
-    let emitter: Box<dyn Emitter> = if json_mode {
-        Box::new(NdjsonEmitter::new(stdout.lock()))
-    } else {
-        let color = atty::is(atty::Stream::Stdout);
-        Box::new(HumanEmitter::new(stdout.lock(), stderr.lock(), color))
+    let emitter: Box<dyn Emitter> = match fmt {
+        OutputFormat::Text => {
+            let color = crate::cli::args::use_color(cli.no_color, atty::is(atty::Stream::Stdout));
+            Box::new(HumanEmitter::new(stdout.lock(), stderr.lock(), color))
+        }
+        OutputFormat::Json | OutputFormat::Ndjson => Box::new(NdjsonEmitter::new(stdout.lock())),
     };
 
     let mut ctx = Ctx { db, db_path, emitter, json_mode };

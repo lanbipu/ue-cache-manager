@@ -21,12 +21,60 @@ pub enum BackendChoice {
     Zen,
 }
 
+/// 输出格式（spec §3.5）。`text` 给人类，`json` 单次完整对象，`ndjson` 每行一对象。
+/// `stream-json` 是 `ndjson` 的别名（spec §3.5）。
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+#[clap(rename_all = "snake_case")]
+pub enum OutputFormat {
+    Text,
+    Json,
+    #[value(alias = "stream-json")]
+    Ndjson,
+}
+
+/// stdin 结构化输入格式（spec §3.3）。helper 见 Task 7。
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+#[clap(rename_all = "snake_case")]
+pub enum InputFormat { Json, Yaml, Ndjson }
+
+/// 是否启用 ANSI color。`--no-color` 或 `NO_COLOR` env 任一存在即禁用；
+/// 否则跟随 stdout 是否 TTY。临时 2 参数版本（Task 2 替换为 3 参数版本 + 测试）。
+pub fn use_color(no_color_flag: bool, is_tty: bool) -> bool { !no_color_flag && is_tty }
+
 #[derive(Parser, Debug)]
 #[command(name = "uecm-cli", version, about = "UECM command-line interface")]
 pub struct Cli {
-    /// Emit machine-readable JSON / NDJSON instead of human-friendly output.
+    /// DEPRECATED 别名：等价 `--output json`。保留以兼容现有 docs/scripts。
     #[arg(long, global = true)]
     pub json: bool,
+
+    /// Output format: text (human) / json (single object) / ndjson (one object per line).
+    #[arg(long, short = 'o', global = true, value_enum)]
+    pub output: Option<OutputFormat>,
+
+    /// Disable ANSI color (also honors the NO_COLOR env var).
+    #[arg(long, global = true)]
+    pub no_color: bool,
+
+    /// Refuse any interactive prompt (recommended for AI / CI callers).
+    #[arg(long, global = true)]
+    pub no_input: bool,
+
+    /// Equivalent to `--log-level error`.
+    #[arg(long, short = 'q', global = true)]
+    pub quiet: bool,
+
+    /// Increase log verbosity (-v = info, -vv = debug). Overrides --log-level upward.
+    #[arg(long, short = 'v', global = true, action = clap::ArgAction::Count)]
+    pub verbose: u8,
+
+    /// Load defaults from a YAML / JSON config file (mode must be <= 0600).
+    #[arg(long, global = true)]
+    pub config: Option<std::path::PathBuf>,
+
+    /// Format of structured data read from stdin (json / yaml / ndjson).
+    #[arg(long, global = true, value_enum)]
+    pub input_format: Option<InputFormat>,
 
     /// Override DB path (otherwise resolved via startup module).
     #[arg(long, global = true, env = "UECM_DB_PATH")]
@@ -38,6 +86,20 @@ pub struct Cli {
 
     #[command(subcommand)]
     pub command: Domain,
+}
+
+impl Cli {
+    /// 解析有效输出格式。优先级：显式 `--output` > `--json` 别名 > 默认 text。
+    /// (P2 会在此处叠加 `AI_AGENT=1 → Json` 的 env 信号。)
+    pub fn resolved_output(&self) -> OutputFormat {
+        if let Some(fmt) = self.output {
+            return fmt;
+        }
+        if self.json {
+            return OutputFormat::Json;
+        }
+        OutputFormat::Text
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -1332,6 +1394,40 @@ pub enum ZenUrlaclAction {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    fn cli_with(json: bool, output: Option<OutputFormat>) -> Cli {
+        Cli {
+            json,
+            output,
+            no_color: false,
+            no_input: false,
+            quiet: false,
+            verbose: 0,
+            config: None,
+            input_format: None,
+            db_path: None,
+            log_level: "warn".into(),
+            command: Domain::System { action: SystemAction::Version },
+        }
+    }
+
+    #[test]
+    fn output_explicit_wins_over_json() {
+        let cli = cli_with(true, Some(OutputFormat::Text));
+        assert_eq!(cli.resolved_output(), OutputFormat::Text);
+    }
+
+    #[test]
+    fn json_alias_maps_to_json() {
+        let cli = cli_with(true, None);
+        assert_eq!(cli.resolved_output(), OutputFormat::Json);
+    }
+
+    #[test]
+    fn default_is_text() {
+        let cli = cli_with(false, None);
+        assert_eq!(cli.resolved_output(), OutputFormat::Text);
+    }
 
     #[test]
     fn parses_machine_scan() {

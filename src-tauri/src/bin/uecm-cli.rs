@@ -18,7 +18,18 @@ fn main() {
     // Use args_os to tolerate non-UTF-8 paths (e.g. someone passes a binary
     // --db-path on Unix). `args()` would panic before clap can parse.
     let argv: Vec<OsString> = std::env::args_os().collect();
-    let json_mode = argv.iter().any(|a| a.as_os_str() == "--json");
+    // Sniff structured-output intent from raw argv so clap parse errors are
+    // formatted as a JSON envelope when the caller asked for json/ndjson.
+    let json_mode = argv.iter().enumerate().any(|(i, a)| {
+        let s = a.as_os_str();
+        s == "--json"
+            || s == "--output=json" || s == "--output=ndjson" || s == "--output=stream-json"
+            || s == "-o=json" || s == "-o=ndjson" || s == "-o=stream-json"
+            || ((s == "--output" || s == "-o")
+                && argv.get(i + 1).map(|n| {
+                    n == "json" || n == "ndjson" || n == "stream-json"
+                }).unwrap_or(false))
+    });
 
     match Cli::try_parse_from(&argv) {
         Ok(cli) => {
