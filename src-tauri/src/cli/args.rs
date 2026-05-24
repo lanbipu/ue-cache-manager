@@ -109,17 +109,25 @@ pub struct Cli {
 }
 
 impl Cli {
-    /// 解析有效输出格式。优先级：显式 `--output` > `--json` 别名 > 默认 text。
-    /// (P2 会在此处叠加 `AI_AGENT=1 → Json` 的 env 信号。)
+    /// 解析有效输出格式。优先级：显式 --output > --json 别名 > AI_AGENT=1 env > 默认 text。
     pub fn resolved_output(&self) -> OutputFormat {
-        if let Some(fmt) = self.output {
-            return fmt;
-        }
-        if self.json {
-            return OutputFormat::Json;
-        }
-        OutputFormat::Text
+        let ai_agent = std::env::var("AI_AGENT").map(|v| v == "1").unwrap_or(false);
+        resolve_output(self.output, self.json, ai_agent)
     }
+}
+
+/// 纯函数核心（可单测，不读 env）。spec §3.4：AI_AGENT=1 是 AI 调用的显式信号。
+pub fn resolve_output(output: Option<OutputFormat>, json: bool, ai_agent: bool) -> OutputFormat {
+    if let Some(fmt) = output {
+        return fmt;
+    }
+    if json {
+        return OutputFormat::Json;
+    }
+    if ai_agent {
+        return OutputFormat::Json;
+    }
+    OutputFormat::Text
 }
 
 #[derive(Subcommand, Debug)]
@@ -1449,6 +1457,19 @@ mod tests {
     fn default_is_text() {
         let cli = cli_with(false, None);
         assert_eq!(cli.resolved_output(), OutputFormat::Text);
+    }
+
+    #[test]
+    fn ai_agent_env_defaults_to_json() {
+        use super::OutputFormat;
+        // 无显式 output、无 --json，但 AI_AGENT=1 -> Json
+        assert_eq!(super::resolve_output(None, false, true), OutputFormat::Json);
+        // 显式 --output text 压过 AI_AGENT
+        assert_eq!(super::resolve_output(Some(OutputFormat::Text), false, true), OutputFormat::Text);
+        // 无任何信号 -> Text
+        assert_eq!(super::resolve_output(None, false, false), OutputFormat::Text);
+        // --json 别名仍 -> Json
+        assert_eq!(super::resolve_output(None, true, false), OutputFormat::Json);
     }
 
     #[test]
