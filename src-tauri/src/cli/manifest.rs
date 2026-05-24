@@ -486,4 +486,64 @@ mod tests {
         let cli = Cli::try_parse_from(["uecm-cli", "manifest"]).unwrap();
         assert!(matches!(cli.command, Domain::Manifest));
     }
+
+    #[test]
+    fn every_operation_id_well_formed_and_known_domain() {
+        let known = ["system","machine","winrm","ssh","cred","secret","env","ini","share","project","health","gpu","ddc","pso","log","localcache","deploy","zen"];
+        for op in operations() {
+            let domain = op.operation_id.split('.').next().unwrap();
+            assert!(known.contains(&domain), "unknown domain in {}", op.operation_id);
+            assert!(op.operation_id.contains('.'), "id must be <domain>.<action>: {}", op.operation_id);
+        }
+    }
+
+    #[test]
+    fn no_operation_has_empty_or_unmapped_schema() {
+        let m = manifest_json();
+        for op in m["operations"].as_array().unwrap() {
+            let id = op["operation_id"].as_str().unwrap();
+            assert!(!id.contains("unmapped"), "{id} still unmapped");
+            for key in ["input_schema","output_schema","error_schema"] {
+                let s = &op[key];
+                assert!(s.is_object(), "{id}.{key} missing");
+                // schema 必须至少有一个有效关键字，避免空对象冒充。
+                // oneOf/anyOf/allOf 是 schemars 对 enum 的合法输出（如 Event）；
+                // type/properties/$ref 覆盖 struct / dynamic_object_schema。
+                let valid = s.get("type").is_some()
+                    || s.get("$ref").is_some()
+                    || s.get("properties").is_some()
+                    || s.get("oneOf").is_some()
+                    || s.get("anyOf").is_some()
+                    || s.get("allOf").is_some();
+                assert!(valid, "{id}.{key} is an empty/invalid schema");
+            }
+        }
+    }
+
+    #[test]
+    fn operation_count_covers_command_leaves() {
+        use clap::CommandFactory;
+        let cmd = crate::cli::args::Cli::command();
+        let mut leaves = 0usize;
+        for sub in cmd.get_subcommands() {
+            if sub.get_name() == "help" { continue; }
+            let inner = sub.get_subcommands().filter(|s| s.get_name() != "help").count();
+            leaves += if inner == 0 { 1 } else { inner };
+        }
+        // Locked numbers (2026-05-24): operations().len()=88, leaves=89.
+        // `manifest` is a leaf subcommand (no sub-subcommands → counts as 1 leaf)
+        // but is NOT in the OPERATIONS table (it's the meta-command that *prints*
+        // the manifest). That accounts for the deliberate gap of exactly 1.
+        // If you add a new CLI subcommand without a matching OPERATIONS row,
+        // leaves will grow past 89 while operations().len() stays at 88,
+        // breaking the assertion below — add the OPERATIONS row to fix it.
+        assert_eq!(
+            operations().len() + 1,
+            leaves,
+            "manifest ops ({}) + 1 must equal CLI leaves ({}); \
+             add a matching OPERATIONS row for any new subcommand",
+            operations().len(),
+            leaves,
+        );
+    }
 }
