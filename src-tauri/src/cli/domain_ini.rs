@@ -825,7 +825,7 @@ fn scan_cluster(
 
 fn list_runs(ctx: &mut Ctx<'_>, limit: i64) -> UecmResult<()> {
     let db = ctx.require_db()?;
-    let runs = scan_runs::list_recent(db, "ini", limit)?;
+    let runs = scan_runs::list_recent_types(db, &["ini", "ini_project"], limit)?;
     ctx.emitter.emit_result(&runs).ok();
     Ok(())
 }
@@ -1129,6 +1129,21 @@ mod tests {
         let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false };
         let err = scan_dispatch(&mut ctx, vec![], Some(pid), None, &cred).unwrap_err();
         assert!(matches!(err, UecmError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn list_runs_includes_project_scans() {
+        use crate::data::scan_runs;
+        let db = fresh_db();
+        scan_runs::insert(&db, "ini", &[1]).unwrap();
+        scan_runs::insert(&db, "ini_project", &[1]).unwrap();
+        let mut buf: Vec<u8> = Vec::new();
+        let mut ctx = make_ctx(&mut buf, &db);
+        list_runs(&mut ctx, 10).unwrap();
+        drop(ctx);
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.contains("ini_project"));
+        assert!(s.contains("ini"));
     }
 
     #[cfg(not(windows))]
