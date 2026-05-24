@@ -871,7 +871,7 @@
     <h1>把 UE 工程在多机集群上的<br/><span class="accent">零编译启动、零卡顿运行</span>集中化、自动化、可视化。</h1>
     <p class="lead">
       面向 VP / XR 渲染集群的 TD 和 IT 运维：5–20 台 Windows render node，操作直接对接拍摄现场。
-      下面 3 个核心功能按操作顺序覆盖 UECM 的主路径：① 状态刷新与集群诊断（先看清现状）→ ② 开通与授权（让机器可被远程管）→ ③ DDC 缓存工作流（含 PSO，缓存落地）。其余 system / winrm / cred / env / gpu / project / 单条 INI 编辑等域是底层支撑，不单独成核心。
+      下面 3 个核心功能按操作顺序覆盖 UECM 的主路径：① 状态刷新与集群诊断（先看清现状）→ ② 开通与授权（让机器可被远程管，<strong>统一走 SSH key 认证</strong>）→ ③ DDC 缓存工作流（含 PSO，缓存落地）。其余 system / ssh / secret / env / gpu / project / 单条 INI 编辑等域是底层支撑，不单独成核心（<span class="k">winrm</span> 命令域 + DPAPI 在迁移后退役中）。
     </p>
 
     <div class="tiers" role="list" aria-label="三层缓存">
@@ -991,17 +991,17 @@
         <g>
           <rect class="mm-branch-box" x="400" y="264" width="300" height="60" rx="8" />
           <text x="420" y="290"><tspan class="mm-branch-num">02</tspan><tspan class="mm-branch-name" dx="10">开通与授权</tspan></text>
-          <text class="mm-branch-meta" x="420" y="310">winrm · cred · bootstrap · 让机器可远程管</text>
+          <text class="mm-branch-meta" x="420" y="310">ssh · secret · onboarding · 让机器可远程管</text>
         </g>
         <g>
           <circle class="mm-leaf-dot" cx="740" cy="252" r="3" />
-          <text x="752" y="256"><tspan class="mm-leaf-cmd">winrm preflight</tspan><tspan class="mm-leaf-note" dx="6">· Shallow / Deep，verdict 决定走 Path B</tspan></text>
+          <text x="752" y="256"><tspan class="mm-leaf-cmd">UECM-Bootstrap.cmd</tspan><tspan class="mm-leaf-note" dx="6">· 双击纳管：OpenSSH + uecm-svc + 授权公钥</tspan></text>
           <circle class="mm-leaf-dot" cx="740" cy="280" r="3" />
-          <text x="752" y="284"><tspan class="mm-leaf-cmd">winrm bootstrap</tspan><tspan class="mm-leaf-note" dx="6">· Path A · USB 一键  |  Path B · 远程 PsExec</tspan></text>
+          <text x="752" y="284"><tspan class="mm-leaf-cmd">ssh probe</tspan><tspan class="mm-leaf-note" dx="6">· uecm-svc key 探可达性，确认 SSH 通</tspan></text>
           <circle class="mm-leaf-dot" cx="740" cy="308" r="3" />
-          <text x="752" y="312"><tspan class="mm-leaf-cmd">enable-winrm.ps1</tspan><tspan class="mm-leaf-note" dx="6">· 一次开通 WinRM + SMB 服务 + 445 + 注册表</tspan></text>
+          <text x="752" y="312"><tspan class="mm-leaf-cmd">enable-ssh.ps1</tspan><tspan class="mm-leaf-note" dx="6">· 装 OpenSSH + 建 uecm-svc + SMB/WMI/…</tspan></text>
           <circle class="mm-leaf-dot" cx="740" cy="336" r="3" />
-          <text x="752" y="340"><tspan class="mm-leaf-cmd">cred · DPAPI</tspan><tspan class="mm-leaf-note" dx="6">· 凭据存本机，TD 不记明文密码</tspan></text>
+          <text x="752" y="340"><tspan class="mm-leaf-cmd">secret · SecretStore</tspan><tspan class="mm-leaf-note" dx="6">· 密钥 AES-GCM 跨平台，TD 不记明文</tspan></text>
         </g>
 
         <!-- Branch 03 -->
@@ -1047,7 +1047,7 @@
       <div class="qs-body">
         <p class="qs-st">把"要管的"机器加进库(scan 看全部,add 才选)</p>
         <p>scan 会列出网段里<strong>所有</strong>在线机器(路由器 / NAS / 办公机都在内),但它<strong>不写库</strong>;你<strong>只 add 真正要部署的 Windows 渲染节点</strong>——NAS、路由器、Linux、普通办公 PC 不用加。add 给机器一个<strong>数字 id</strong>,list 看 id(后面 refresh / ini / health 全用这个 id,<strong>不是 IP</strong>)。</p>
-        <p style="margin-top:8px;">判断:scan 里 <span class="mono">winrm=✓</span> 的 Windows 机器直接 add;确实是渲染节点但 <span class="mono">winrm=✗</span> 的,先开通 WinRM(见下方功能 02)再 add;不需要加错了用 <span class="mono">machine delete &lt;id&gt; --yes</span> 删掉。</p>
+        <p style="margin-top:8px;">判断:scan 探的是 5985 / 445 端口(发现层暂沿用,见说明),先 add 进库;真正能被 UECM 远程操作要 <strong>onboard SSH</strong>(双击 .cmd,见功能 02)——onboard 后用 <span class="mono">ssh probe</span> 确认。加错了用 <span class="mono">machine delete &lt;id&gt; --yes</span> 删掉。</p>
         <div class="commands">
           <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine scan <span class="arg">192.168.10.0/24</span></span></div>
           <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine add <span class="arg">--ip 192.168.10.20</span></span></div>
@@ -1058,33 +1058,26 @@
     <div class="qs-step">
       <span class="qs-n">2</span>
       <div class="qs-body">
-        <p class="qs-st">存凭据别名(<span class="mono">--cred-alias</span> 的来源)</p>
-        <p>本页所有 <span class="mono">--cred-alias prod</span> 里的 <span class="mono">prod</span> 都是<strong>占位名</strong>——得先 cred save 把别名存出来才存在。密码走 stdin 不留命令历史;账号填目标机上有效的本地管理员(如 bootstrap 建的 <span class="mono">uecm-svc</span>)。</p>
+        <p class="qs-st">onboard SSH(装好就不用再管凭据)</p>
+        <p>UECM 走 <strong>SSH key 认证</strong>:目标机双击纳管包里的 <span class="mono">UECM-Bootstrap.cmd</span>(装 OpenSSH + 建 <span class="mono">uecm-svc</span> + 授权公钥,见功能 02),之后 refresh / ini / health / zen / share / deploy <strong>都不用传任何凭据</strong>——key 认证统一用 uecm-svc。用 <span class="mono">ssh probe</span> 确认连通。</p>
         <div class="commands">
-          <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli cred list</span></div>
-          <div class="line"><span class="prompt">$</span><span class="cmd">"UecmRender@2026" | uecm-cli cred save <span class="arg">--alias render --user uecm-svc --pass-stdin</span></span></div>
+          <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli ssh probe <span class="arg">192.168.10.20</span></span></div>
+        </div>
+        <p style="margin-top:8px;">只有仍走 WinRM/PsExec 的 <span class="mono">machine authorize</span>(legacy,退役中)才真用凭据;那时用 <span class="mono">cred save</span> 存一个别名(密钥进跨平台 SecretStore,不再 cmdkey/DPAPI):</p>
+        <div class="commands">
+          <div class="line"><span class="prompt">$</span><span class="cmd">"UecmRender@2026" | uecm-cli cred save <span class="arg">--alias render --user uecm-svc --pass-stdin --kind winrm</span></span></div>
         </div>
       </div>
     </div>
-    <div class="qs-step">
-      <span class="qs-n">3</span>
-      <div class="qs-body">
-        <p class="qs-st">Microsoft 账户机器额外一步</p>
-        <p>像 razer <span class="mono">.173</span> 这种 MSA 登录的机器,连接命令要加 <span class="mono">--auth-method basic</span>(否则你给的凭据被 Negotiate SSO 顶掉),且目标机 + 主控机两端 WinRM 都要开 <span class="mono">AllowUnencrypted</span>。详见下方阅读说明。</p>
-        <div class="commands">
-          <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine refresh <span class="arg">9 --cred-alias render --auth-method basic</span></span></div>
-        </div>
-      </div>
-    </div>
-    <div class="qs-foot">备齐这 4 步,下面 3 个核心功能的命令就能照着跑了——<strong>id 用 machine list 里的数字,别名用你 cred save 存的名字</strong>。</div>
+    <div class="qs-foot">备齐这 3 步,下面 3 个核心功能的命令就能照着跑了——<strong>id 用 machine list 里的数字;SSH 命令不用带凭据</strong>。</div>
   </section>
 
   <!-- CLI 阅读说明 + auth-method 通用 flag -->
   <section class="cli-legend" aria-label="CLI 命令阅读说明">
     <p class="lg-title">怎么读下面的命令注解</p>
     <p>每条 <span class="k">uecm-cli</span> 命令下方给三行:<strong>功能</strong>(它做什么)、<strong>作用</strong>(在流程里干嘛)、<strong>UI</strong>(这操作在前端对应哪个 <span class="k">invoke</span> 命令函数)。UI 行只标 <span class="k">commands::模块::函数</span>——这是前后端对应的<strong>硬锚点</strong>(将来哪个按钮点了就 invoke 它);按钮的中文文案以最终 UI 设计为准,这里不写死。</p>
-    <p>标 <span class="none-tag">✗ 仅 CLI</span> 的命令:UI 还没暴露(没注册到 <span class="k">invoke_handler</span>),只能命令行跑。目前是这几条:<span class="k">health run --cidr</span> 直扫网段、<span class="k">winrm probe</span> / <span class="k">winrm preflight</span>、<span class="k">zen enable</span> / <span class="k">zen disable</span>。</p>
-    <p><strong>通用认证 flag · <span class="k">--auth-method &lt;negotiate|basic&gt;</span></strong>(默认 <span class="k">negotiate</span>):凡是连远程的命令(带 <span class="k">--cred-alias</span> / <span class="k">--user</span> 的)都支持。Microsoft 账户登录的机器(如 razer <span class="k">.173</span>)上 <span class="k">negotiate</span> 会无视你传的凭据、回退成当前 Windows 登录身份(SSO),这时加 <span class="k">--auth-method basic</span> 强制用你给的账号——前提是目标机和主控机两端 WinRM 都开了 <span class="k">AllowUnencrypted</span>。UI 侧固定走 Negotiate,不暴露这个选项。</p>
+    <p>标 <span class="none-tag">✗ 仅 CLI</span> 的命令:UI 还没暴露(没注册到 <span class="k">invoke_handler</span>),只能命令行跑。目前是这几条:<span class="k">health run --cidr</span> 直扫网段、<span class="k">ssh probe</span>、<span class="k">secret set/get/list/delete</span>、<span class="k">zen enable</span> / <span class="k">zen disable</span>。</p>
+    <p><strong>认证模型 · SSH key(uecm-svc)</strong>:节点传输统一用 <span class="k">uecm-svc</span> 的 SSH key,refresh / ini / health / zen / share / deploy 等命令<strong>不需要 operator 凭据</strong>。<span class="k">--cred-alias</span> / <span class="k">--user --pass</span> 仍接受但被忽略(向后兼容 shim);只有仍走 WinRM/PsExec 的 <span class="k">machine authorize</span>(legacy)真用它们。旧的 <span class="k">--auth-method</span> flag 已随 WinRM 迁移移除。</p>
   </section>
 
   <!-- Feature 01 -->
@@ -1134,8 +1127,11 @@
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine add <span class="arg">--ip 192.168.10.20</span></span></div>
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine list</span></div>
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine delete <span class="arg">7 --yes</span></span></div>
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine refresh <span class="arg">3 --cred-alias prod</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine refresh <span class="arg">3</span></span></div>
     </div>
+    <p class="mode-note" style="margin-top:14px">
+      <strong>SSH key 认证:refresh / ini / health / zen 等命令不再需要 operator 凭据。</strong><code>--cred-alias</code> / <code>--user --pass</code> 仍接受(向后兼容 shim)但被忽略——节点传输统一用 <code>uecm-svc</code> key。只有仍走 WinRM/PsExec 的 <code>machine authorize</code> 真用凭据。
+    </p>
 
     <div class="cmd-notes" aria-label="machine 命令详解">
       <div class="cmd-note">
@@ -1163,7 +1159,7 @@
         <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::machines::delete_machine</span> · 列表行删除入口(单台;UI 后续可做批量清空)</span></div>
       </div>
       <div class="cmd-note">
-        <span class="cn-cmd">uecm-cli machine refresh <span class="arg">&lt;id&gt; --cred-alias prod</span></span>
+        <span class="cn-cmd">uecm-cli machine refresh <span class="arg">&lt;id&gt;</span></span>
         <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">远程读目标机 UE 版本(注册表)+ GPU(WMI)</span></div>
         <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">刷新单台机器的现状快照;不写诊断库</span></div>
         <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::discovery::refresh_machine</span> · 机器刷新入口</span></div>
@@ -1179,7 +1175,7 @@
         </p>
         <div class="pstat"><span class="n">R001–R025</span> base + <span class="n">R012–R018</span> zen · <span class="n">3</span> 级 INI · 一键 apply（含 .bak）</div>
         <div class="pcmd">
-          <div><span class="prompt">$</span> uecm-cli ini scan <span class="arg">--machine-ids 3,4,5 --cred-alias prod</span></div>
+          <div><span class="prompt">$</span> uecm-cli ini scan <span class="arg">--machine-ids 3,4,5</span></div>
           <div><span class="prompt">$</span> uecm-cli ini apply <span class="arg">42 --yes</span></div>
         </div>
       </div>
@@ -1193,7 +1189,7 @@
         <div class="pstat"><span class="n">3</span> L1 + <span class="n">4</span> L2 + <span class="n">10</span> L3 + <span class="n">3</span> derived + <span class="n">4</span> zen · N×<span class="n">24</span> 矩阵 · 每行带 remediation</div>
         <div class="pcmd">
           <div><span class="prompt">$</span> uecm-cli health run <span class="arg">--cidr 192.168.10.0/24</span></div>
-          <div><span class="prompt">$</span> uecm-cli health run <span class="arg">--all --cred-alias prod</span></div>
+          <div><span class="prompt">$</span> uecm-cli health run <span class="arg">--all</span></div>
           <div><span class="prompt">$</span> uecm-cli health results <span class="arg">7</span></div>
         </div>
       </div>
@@ -1201,7 +1197,7 @@
 
     <div class="cmd-notes" aria-label="ini / health 命令详解">
       <div class="cmd-note">
-        <span class="cn-cmd">uecm-cli ini scan <span class="arg">--machine-ids 3,4,5 --cred-alias prod</span></span>
+        <span class="cn-cmd">uecm-cli ini scan <span class="arg">--machine-ids 3,4,5</span></span>
         <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">扫 project / user / engine 三级 INI,跑 base <span class="k">R001–R025</span> +(机器注册了 zen 则自动追加)<span class="k">R012–R018</span> 规则</span></div>
         <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">找出硬编码 DDC 路径、deprecated CVar、PSO / BackendGraph 配置问题,产出可一键修的 findings</span></div>
         <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::ini_scanner::scan_inis</span> · 配置扫描入口</span></div>
@@ -1213,7 +1209,7 @@
         <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::ini_scanner::apply_finding</span> · 修复应用入口</span></div>
       </div>
       <div class="cmd-note">
-        <span class="cn-cmd">uecm-cli health run <span class="arg">--all --cred-alias prod</span></span>
+        <span class="cn-cmd">uecm-cli health run <span class="arg">--all</span></span>
         <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">跑 24 项体检矩阵(L1 端口 / L2 bootstrap / L3 业务 / derived / zen),每行带 remediation 文案</span></div>
         <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">看清集群健康度;开通后复验、部署后回跑都靠它(横切工具)</span></div>
         <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::health_check::run_health_check</span>(<span class="k">--all</span> / 按已选机器);<span class="cn-ui none">✗ 仅 CLI</span> 的 <span class="k">--cidr</span> 直扫(UI 强制要 machine_ids)</span></div>
@@ -1234,66 +1230,72 @@
       <div class="feature-title">
         <h2>开通与授权</h2>
         <div class="domains">
-          <span class="domain accent">winrm</span>
+          <span class="domain accent">ssh</span>
+          <span class="domain">secret</span>
           <span class="domain">cred</span>
-          <span class="domain">bootstrap</span>
         </div>
       </div>
     </header>
 
     <p class="gist">
-      诊断发现机器还没开通后，把一台从未纳管过的 Windows render node 从「发现」一路带到「可远程操作」。<strong>两条路径按机器可达性选</strong>，凭据存本机 DPAPI，TD 不用记任何明文密码。开通这一步会一次性把 WinRM、SMB 服务、防火墙、注册表全配好。
+      诊断发现机器还没开通后，把一台从未纳管过的 Windows render node 从「发现」一路带到「可远程操作」。<strong>UECM 所有远程操作走 SSH key 认证</strong>：开通就是在目标机装好 OpenSSH、建统一运维账号 <span class="k">uecm-svc</span>、把 UECM 的公钥授权进去，顺手把 SMB 服务、WMI、注册表全配好。<strong>主路径是双击一个 <span class="k">.cmd</span></strong>，TD 不用记任何明文密码；密钥只在主控机本地的 SecretStore（AES-GCM，跨平台）里。
     </p>
 
     <div class="workflow" aria-label="开通流程">
-      <span class="step">preflight 判 Path B 可行性</span>
+      <span class="step">双击 <span class="k">UECM-Bootstrap.cmd</span></span>
       <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
-      <span class="step">推 bootstrap<span class="k">（A · USB 或 B · 远程）</span></span>
+      <span class="step">enable-ssh.ps1 一次开通<span class="k">（OpenSSH + uecm-svc + 授权公钥 + SMB/WMI/...）</span></span>
       <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg></span>
-      <span class="step">一次开通 7 项系统配置<span class="k">（含 SMB 服务）</span></span>
+      <span class="step"><strong>ssh probe</strong> 确认 uecm-svc key 连得上</span>
     </div>
 
-    <div class="modes" role="list" aria-label="两条 bootstrap 路径">
+    <div class="modes" role="list" aria-label="纳管路径">
       <div class="mode" role="listitem">
-        <div class="mkind">Path A · USB 一键</div>
+        <div class="mkind">主路径 · USB / 共享盘一键</div>
         <h3 class="mtitle">零远程依赖</h3>
-        <p class="msub">机器从未纳管 / 远程不可达 / 工作组孤岛。</p>
-        <p class="mech">U 盘塞 <span class="k">UECM-Bootstrap.cmd</span>，跑到机器跟前双击。脚本用 <span class="k">fltmc</span> 检测 admin token 后自提升 UAC，不依赖 LanmanServer，避免在 SMB 没启动的机器上陷入 UAC 重启循环。中文 README 带 UTF-8 BOM，防 PowerShell 5.1 mojibake。</p>
+        <p class="msub">机器从未纳管 / 远程不可达 / 工作组孤岛 —— 也是当前推荐的统一纳管姿势。</p>
+        <p class="mech">把 <span class="k">package-winrm-bootstrap.ps1</span> 生成的包（含 <span class="k">UECM-Bootstrap.cmd</span> + <span class="k">enable-ssh.ps1</span> + <span class="k">uecm.pub</span> + <span class="k">PsExec64.exe</span>）拷到机器跟前双击。脚本用 <span class="k">fltmc</span> 检测 admin token 后自提升 UAC（不依赖 LanmanServer，避开 SMB 没启动时的 UAC 重启死循环）。<strong>SSH onboarding 成败计入退出码</strong>——缺 <span class="k">uecm.pub</span> 或 enable-ssh 失败时 <span class="k">.cmd</span> 直接报 FAILED，不会假成功。<span class="k">.cmd</span> 必须 CRLF + 纯 ASCII，中文只放 README。</p>
       </div>
       <div class="mode" role="listitem">
-        <div class="mkind">Path B · 远程 PsExec</div>
-        <h3 class="mtitle">先 preflight 再动手</h3>
-        <p class="msub">机器已在线、SMB 445 + RPC 135 通、有本地管理员凭据。</p>
-        <p class="mech">默认 <strong>Shallow 零痕迹</strong>：tcp_135 / tcp_445 / 挂 <span class="k">ADMIN$</span> 测 NTLM / 写删探针文件。<span class="k">--probe</span> 切 <strong>Deep</strong>：真跑一次 PsExec64（写 Event 7045 / 7036），唯一能检出 UAC remote token filter 拦截的方式。verdict=<span class="k">viable</span> 才推 bootstrap。</p>
+        <div class="mkind">旧 WinRM 远程推送 · 退役中</div>
+        <h3 class="mtitle">machine authorize（legacy）</h3>
+        <p class="msub">P0–P4 期间仍在，但只开 WinRM、<strong>不装 SSH key</strong>。</p>
+        <p class="mech"><span class="k">machine authorize</span> / <span class="k">winrm bootstrap</span> 走 PsExec 远程推 <span class="k">enable-winrm.ps1</span>，是迁移前的旧路径。<strong>注意：用它纳管的机器没有 SSH，会在 refresh / 各 SSH 化命令里立刻显示不可达</strong>——SSH 纳管请走上面的 <span class="k">.cmd</span>。这条路径连同 <span class="k">winrm</span> 命令域在 P5a 退役。</p>
       </div>
     </div>
 
     <p class="mode-note">
-      <strong>bootstrap 默认只开 WinRM core，其余 provisioning 按需开。</strong><code>winrm bootstrap</code> 默认启用 <code>WinRM core</code>（PSRemoting + WinRM 服务 + WRM 防火墙 + Network=Private + TrustedHosts）。<code>enable-winrm.ps1</code> 还能配
-      <code>SMB Server + 445</code>、<code>WMI</code>、<code>LongPaths</code>、<code>ExecutionPolicy=RemoteSigned</code>、<code>HighPerformance</code>、<code>LocalAccountTokenFilterPolicy=1</code>，但这些都是 opt-in 开关，需显式传（render node 全量 provisioning 时一次开齐）。
+      <strong>统一运维账号 = <span class="k">uecm-svc</span>（密码 <code>UecmRender@2026</code>，明文预填进 .cmd，home lab 内网已接受）。</strong>SshExecutor 永远以 <code>uecm-svc</code> 登录（本地管理员，admin 脚本因此能跑），所以 onboarding 强制建这个账号；<code>enable-ssh.ps1</code> 现在会无条件校验 <code>uecm-svc</code> 存在 + 启用 + 在 Administrators 组,不满足就判 not ready。
     </p>
 
     <p class="mode-note">
-      <strong>这一步开的是 SMB「服务」，不是具体共享。</strong>bootstrap 把 <code>SMB Server + 445 + LanmanServer</code> 打开，让缓存分发的网络通道就绪；而把某个 DDC 目录开成具体共享（<code>share create</code>），是 <a href="#f3">③ DDC 缓存工作流</a> legacy 路径里的一步。两者别混。
+      <strong>这一步开的是 SMB「服务」，不是具体共享。</strong>onboarding 把 <code>SMB Server + 445 + LanmanServer</code> 打开，让缓存分发的网络通道就绪；而把某个 DDC 目录开成具体共享（<code>share create</code>），是 <a href="#f3">③ DDC 缓存工作流</a> 里的一步。两者别混。
     </p>
 
     <div class="commands" aria-label="典型命令" style="margin-top:24px">
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli winrm preflight <span class="arg">lanpc --user Administrator --pass-stdin [--probe]</span></span></div>
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli winrm bootstrap <span class="arg">lanpc --user Administrator --pass-stdin</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli ssh probe <span class="arg">192.168.10.20</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli secret list</span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli cred save <span class="arg">--alias prod --user uecm-svc --pass-stdin --kind winrm</span></span></div>
     </div>
 
-    <div class="cmd-notes" aria-label="winrm 命令详解">
+    <div class="cmd-notes" aria-label="ssh / 凭据命令详解">
       <div class="cmd-note cli-only">
-        <span class="cn-cmd">uecm-cli winrm preflight <span class="arg">&lt;host&gt; --user &lt;u&gt; --pass-stdin [--probe]</span></span>
-        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">5 步可达性体检(tcp_135 / 445 → 挂 <span class="k">ADMIN$</span> → 写删探针 → 加 <span class="k">--probe</span> 才真跑一次 PsExec),输出 viable / likely_viable / blocked / uncertain</span></div>
-        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">远程推 bootstrap 前先判 Path B 可不可行,避免盲跑下一步</span></div>
-        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui none">✗ 仅 CLI</span> · preflight 未注册到 invoke_handler,UI 没有这个按钮</span></div>
+        <span class="cn-cmd">uecm-cli ssh probe <span class="arg">&lt;host&gt;</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">以 <span class="k">uecm-svc</span> key 认证探目标机 SSH 可达性,返回 <span class="k">ok</span> / <span class="k">message</span> / <span class="k">latency_ms</span>(字段与旧 winrm probe 兼容)。失败时 CLI 非零退出</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">onboarding 后第一步:确认 SSH 通,再跑 refresh / 各域命令。<strong>替代退役中的 winrm probe</strong></span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::discovery::refresh_machine</span> 内部已改用 <span class="cn-ui">SshExecutor::probe</span>(响应字段 <span class="k">winrm_ok</span> 冻结,Vue 兼容)</span></div>
       </div>
       <div class="cmd-note">
-        <span class="cn-cmd">uecm-cli winrm bootstrap <span class="arg">&lt;host&gt; --user &lt;u&gt; --pass-stdin [--enable-local-admin]</span></span>
-        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">Path B:用 bundled PsExec64 远程推 enable-winrm.ps1 一次开通 WinRM,顺手写 operator 端 TrustedHosts</span></div>
-        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">把一台可达机器从「发现」带到「可远程管」</span></div>
-        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::bootstrap::bootstrap_winrm</span> · 远程开通入口</span></div>
+        <span class="cn-cmd">uecm-cli cred save <span class="arg">--alias &lt;a&gt; --user &lt;u&gt; --pass-stdin --kind winrm|share</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">把 (user, password) 存成命名 alias:密钥进 <strong>SecretStore</strong>(AES-GCM,跨平台),元数据进 SQLite。<strong>不再走 cmdkey / DPAPI</strong>,mac 也能建</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">建一个可被 <span class="k">--cred-alias</span> 引用的 alias(目前 SSH key auth 下 operator 凭据基本是 shim,主要给仍走 WinRM/PsExec 的 <span class="k">machine authorize</span> 用)</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::credentials::save_credential</span>(同样 repoint 到 SecretStore;<span class="cn-ui">list_credentials</span> 读 SQLite 元数据)</span></div>
+      </div>
+      <div class="cmd-note">
+        <span class="cn-cmd">uecm-cli secret <span class="arg">set|get|list|delete &lt;alias&gt;</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">直管 SecretStore 原始 key-value:<span class="k">set</span>(--value 或 stdin)/ <span class="k">get</span>(打印明文)/ <span class="k">list</span>(只列别名)/ <span class="k">delete</span>(--yes/--dry-run)</span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">terminal / agent 直接管传输密钥(Mode B share svc 密码、saved alias),跨平台。CLAUDE.md「所有功能 CLI 暴露」</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui none">✗ 仅 CLI</span> · 原始 SecretStore 管理,UI 走 credentials 域</span></div>
       </div>
     </div>
 
@@ -1308,7 +1310,7 @@
 
     <a href="#winrm-deep" class="jump-deepdive">
       <span class="arrow" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"></path><path d="M6 13l6 6 6-6"></path></svg></span>
-      <span><strong>Deep dive · WinRM Bootstrap</strong> · 5 个脚本 / 10 个动作 / 5 步 preflight / 6 种部署通道</span>
+      <span><strong>Deep dive · SSH Onboarding</strong> · enable-ssh.ps1 / uecm-svc key 模型 / ssh + secret 命令域 / 部署通道</span>
     </a>
   </article>
 
@@ -1318,13 +1320,13 @@
       <div class="ref">02<span style="font-size:0.55em;letter-spacing:-0.04em;">a</span></div>
       <div class="heading">
         <span class="label">Deep dive · F02 子系统</span>
-        <h2 id="winrm-deep-title">WinRM Bootstrap 内部分解</h2>
+        <h2 id="winrm-deep-title">SSH Onboarding 内部分解</h2>
       </div>
     </header>
 
     <p class="lede">
-      从「这台机器是空盒子」走到「UECM 能远程跑 PowerShell」的全过程拆开看：
-      <strong>5 个脚本协同 2 条路径，10 个系统修改全部幂等，preflight 输出 4 种判定</strong>。
+      从「这台机器是空盒子」走到「UECM 能以 <span class="mono">uecm-svc</span> 跑远程 PowerShell」的全过程拆开看：
+      <strong>双击一个 <span class="mono">.cmd</span> → enable-ssh.ps1 把节点准备到「SSH 连得上 + 渲染可用」</strong>，所有系统修改幂等。
       下面每一块都对应 <span class="mono">ps-scripts/</span> 里的真实源码。
     </p>
 
@@ -1334,69 +1336,64 @@
       <div class="script-roster">
         <div class="row">
           <div class="role">target · 本体</div>
-          <div class="name">enable-winrm.ps1</div>
-          <p class="desc">目标机本地以管理员身份运行。10 个动作 + 10 个开关，全部幂等，重跑无副作用。</p>
+          <div class="name">enable-ssh.ps1</div>
+          <p class="desc">目标机本地以管理员身份运行。装 OpenSSH、建 uecm-svc 本地管理员、把 uecm.pub 授权进 administrators_authorized_keys，再开 SMB/WMI/LongPaths/ExecutionPolicy/HighPerformance，全部幂等。</p>
         </div>
         <div class="row bordered-l">
           <div class="role">target · 启动器</div>
           <div class="name">UECM-Bootstrap.cmd</div>
-          <p class="desc">双击入口，用 <code>fltmc</code>（不依赖 LanmanServer）检测 admin token 后自提升 UAC。</p>
+          <p class="desc">双击入口，用 <code>fltmc</code>（不依赖 LanmanServer）检测 admin token 后自提升 UAC。跑完把 SSH onboarding 退出码计入成败（缺 uecm.pub / 失败即报 FAILED）。</p>
         </div>
         <div class="row bordered-l">
-          <div class="role">operator · 远程推送</div>
-          <div class="name">bootstrap-winrm-remote.ps1</div>
-          <p class="desc">主控机用 PsExec64 把 enable-winrm.ps1 拷到目标 ADMIN$ 跑掉，顺手写 operator 端 TrustedHosts。</p>
+          <div class="role">build · 纳管包</div>
+          <div class="name">package-winrm-bootstrap.ps1</div>
+          <p class="desc">把 .cmd + enable-ssh.ps1 + uecm.pub + PsExec64.exe 打成可拷目录。<code>-UecmPublicKeyPath</code> 现在必填，不再产出无 SSH 的包。中文 README 用 UTF-8 BOM 单独拷，绕开 PS 5.1 乱码。</p>
         </div>
         <div class="row bordered-t">
-          <div class="role">operator · 体检</div>
-          <div class="name">preflight-path-b.ps1</div>
-          <p class="desc">主控机侧 5 步可达性检查，输出 viable / likely_viable / blocked / uncertain 四种判定。</p>
-        </div>
-        <div class="row bordered-l bordered-t">
-          <div class="role">build · U 盘包</div>
-          <div class="name">package-winrm-bootstrap.ps1</div>
-          <p class="desc">把 3 个文件打成可拷 USB 目录。中文 README 用 UTF-8 BOM 单独拷，绕开 PS 5.1 ANSI 重编码乱码。</p>
-        </div>
-        <div class="row bordered-l bordered-t">
           <div class="role">cli · 入口</div>
-          <div class="name">uecm-cli winrm &lt;action&gt;</div>
-          <p class="desc">Rust 端 domain_winrm.rs 包了 4 个 action：probe / preflight / bootstrap-script / bootstrap。</p>
+          <div class="name">uecm-cli ssh &lt;action&gt;</div>
+          <p class="desc">Rust 端 domain_ssh.rs：<code>probe</code>（uecm-svc key 探测）。<code>package-bootstrap</code> / <code>authorize</code> 在 P5a 补齐（一并退役 winrm 域）。</p>
+        </div>
+        <div class="row bordered-l bordered-t">
+          <div class="role">cli · 密钥</div>
+          <div class="name">uecm-cli secret &lt;action&gt;</div>
+          <p class="desc">domain_secret.rs：set / get / list / delete，直管跨平台 SecretStore（AES-GCM）。</p>
+        </div>
+        <div class="row bordered-l bordered-t">
+          <div class="role">legacy · 退役中</div>
+          <div class="name">enable-winrm.ps1 · winrm 域</div>
+          <p class="desc">enable-winrm.ps1 / bootstrap-winrm-remote.ps1 / preflight-path-b.ps1 + <code>uecm-cli winrm</code> 是迁移前的 WinRM 路径，P0–P4 仍在但已非主路径，P5a 删。</p>
         </div>
       </div>
     </div>
 
-    <!-- 2. enable-winrm ledger -->
+    <!-- 2. enable-ssh ledger -->
     <div class="section-block">
-      <span class="section-label">2 · enable-winrm.ps1 实际改了什么 · 10 个动作</span>
+      <span class="section-label">2 · enable-ssh.ps1 实际改了什么 · 默认 + opt-in</span>
       <div class="ledger" role="list">
         <div class="ledger-row" role="listitem">
           <span class="switch default">(默认)</span>
-          <span class="effect">WinRM 服务设 <span class="k">Automatic</span> + 启动，跑 <span class="k">Enable-PSRemoting -Force -SkipNetworkProfileCheck</span> 和 <span class="k">winrm quickconfig -q</span>，启用 Windows Remote Management 防火墙规则组（HTTP <span class="k">5985</span>）。</span>
+          <span class="effect">装 <span class="k">OpenSSH.Server</span> capability，把 <span class="k">sshd</span> + <span class="k">ssh-agent</span> 设 Automatic 并启动，加 <span class="k">OpenSSH-Server-In-TCP</span> 防火墙规则（TCP <span class="k">22</span>）。</span>
           <span class="tag on">always</span>
         </div>
         <div class="ledger-row" role="listitem">
-          <span class="switch">-NetworkCategory Private</span>
-          <span class="effect">把所有 active 网络从 <span class="k">Public</span> 改成 <span class="k">Private</span>，让 WinRM 防火墙规则在公网档不被默拒；传 <span class="k">Skip</span> 跳过。</span>
-          <span class="tag on">default on</span>
+          <span class="switch default">(默认)</span>
+          <span class="effect">把 UECM 公钥（<span class="k">uecm.pub</span>，默认从 <span class="k">-StagingSourceDir</span> 取）授权进 <span class="k">C:\ProgramData\ssh\administrators_authorized_keys</span>——这是 Windows OpenSSH 对<strong>本地管理员</strong>统一用的授权文件,所以 uecm-svc 必须是 admin。</span>
+          <span class="tag on">always</span>
         </div>
         <div class="ledger-row" role="listitem">
-          <span class="switch">-AllowedRemoteAddress 1.2.3.4,...</span>
-          <span class="effect">把 Windows Remote Management 防火墙规则的 RemoteAddress 限制成指定 IP / CIDR，只放行 UECM 主控机网段。</span>
-          <span class="tag">opt-in</span>
+          <span class="switch default">(默认)</span>
+          <span class="effect">把同目录的 <span class="k">*.ps1</span> 节点脚本 + <span class="k">PsExec64.exe</span> stage 到 <span class="k">C:\ProgramData\UECM</span>，供 UECM 经 SSH <span class="k">-File</span> 调用（消除命令行长度风险）。</span>
+          <span class="tag on">always</span>
         </div>
         <div class="ledger-row" role="listitem">
-          <span class="switch">-TrustedHosts host1,host2</span>
-          <span class="effect">写入本机 <span class="k">WSMan:\localhost\Client\TrustedHosts</span>，让这台机器自己也能反向连别的工作组节点。</span>
-          <span class="tag">opt-in</span>
-        </div>
-        <div class="ledger-row" role="listitem">
-          <span class="switch">-EnableLocalAccountRemoteAdmin</span>
-          <span class="effect">设 <span class="k">HKLM:\...\Policies\System\LocalAccountTokenFilterPolicy = 1</span>，让 workgroup 本地 Administrators 组成员远程拿到完整 admin token。域账号场景一般不需要。</span>
-          <span class="tag">opt-in</span>
+          <span class="switch">-CreateLocalAdmin -LocalAdminName uecm-svc -LocalAdminPassword …</span>
+          <span class="effect">建本地管理员账号 <span class="k">uecm-svc</span>（SshExecutor 永远以它登录）+ 加入 Administrators。<strong>强制只接受 uecm-svc</strong>——传别的名直接 throw（避免报 ready 但 UECM 连不上的错配）。</span>
+          <span class="tag on">.cmd 默认开</span>
         </div>
         <div class="ledger-row" role="listitem">
           <span class="switch">-EnableSmbServer</span>
-          <span class="effect">把 <span class="k">LanmanServer</span> 设 Automatic 并启动，启用 <span class="k">FPS-SMB-In-TCP</span> 规则（只放 TCP 445，不开整组 File &amp; Printer Sharing 避免多余攻击面）。zh-CN 系统用 rule Name 而非本地化 DisplayName 查找。</span>
+          <span class="effect">把 <span class="k">LanmanServer</span> 设 Automatic 并启动，启用 <span class="k">FPS-SMB-In-TCP</span> 规则（只放 TCP 445）。缓存分发走 SMB,依赖这个。</span>
           <span class="tag">opt-in</span>
         </div>
         <div class="ledger-row" role="listitem">
@@ -1416,8 +1413,13 @@
         </div>
         <div class="ledger-row" role="listitem">
           <span class="switch">-PowerProfile HighPerformance</span>
-          <span class="effect">激活高性能电源计划。Win11 部分版本会隐藏 HighPerformance GUID，脚本会 <span class="k">powercfg /duplicatescheme</span> 还原并打 <span class="k">UECM-*</span> 标签，重复跑不会每次新建。</span>
+          <span class="effect">激活高性能电源计划。Win11 隐藏 HighPerformance GUID 时 <span class="k">powercfg /duplicatescheme</span> 还原并打 <span class="k">UECM-*</span> 标签，重复跑不新建。</span>
           <span class="tag">opt-in</span>
+        </div>
+        <div class="ledger-row" role="listitem">
+          <span class="switch">readiness gate（结束时硬判）</span>
+          <span class="effect"><span class="k">ok</span> = OpenSSH capability 装好 + sshd 在跑 + 公钥已授权 + <strong>uecm-svc 存在 + 启用 + 在 Administrators（无条件校验,连 -CheckOnly 也查）</strong>。任一不满足判 not ready,.cmd 据此报成败。</span>
+          <span class="tag on">always</span>
         </div>
       </div>
     </div>
@@ -1426,156 +1428,127 @@
     <div class="section-block">
       <span class="section-label">3 · UECM-Bootstrap.cmd 默认参数</span>
       <p style="font-size:13.5px;line-height:1.7;color:var(--muted-fg);margin:0 0 14px;max-width:70ch;">
-        双击入口把所有 opt-in 全开。等价于在管理员 PowerShell 跑：
+        双击入口跑两段（迁移期并存）：先 <span class="mono">enable-winrm.ps1</span>（legacy，退役中），再 <span class="mono">enable-ssh.ps1</span>（主路径）。SSH 段等价于在管理员 PowerShell 跑：
       </p>
-      <div class="commands" aria-label="UECM-Bootstrap.cmd 等价命令">
-        <div class="line"><span class="prompt">PS&gt;</span><span class="cmd">.\UECM-Bootstrap-WinRM.ps1 <span class="arg">^</span></span></div>
-        <div class="line"><span class="prompt">&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="cmd"><span class="arg">-NetworkCategory Private -EnableLocalAccountRemoteAdmin ^</span></span></div>
+      <div class="commands" aria-label="enable-ssh.ps1 等价命令">
+        <div class="line"><span class="prompt">PS&gt;</span><span class="cmd">.\enable-ssh.ps1 <span class="arg">^</span></span></div>
+        <div class="line"><span class="prompt">&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="cmd"><span class="arg">-PublicKeyPath .\uecm.pub -StagingSourceDir . ^</span></span></div>
+        <div class="line"><span class="prompt">&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="cmd"><span class="arg">-CreateLocalAdmin -LocalAdminName uecm-svc -LocalAdminPassword … ^</span></span></div>
         <div class="line"><span class="prompt">&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="cmd"><span class="arg">-EnableSmbServer -EnableWmi ^</span></span></div>
-        <div class="line"><span class="prompt">&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="cmd"><span class="arg">-SetExecutionPolicy RemoteSigned ^</span></span></div>
-        <div class="line"><span class="prompt">&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="cmd"><span class="arg">-EnableLongPaths -PowerProfile HighPerformance</span></span></div>
+        <div class="line"><span class="prompt">&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="cmd"><span class="arg">-SetExecutionPolicy RemoteSigned -EnableLongPaths -PowerProfile HighPerformance</span></span></div>
       </div>
       <p style="font-size:12.5px;line-height:1.7;color:var(--muted-fg);margin:14px 0 0;max-width:70ch;">
-        <strong style="color:var(--fg);">UAC 自提权细节：</strong>用 <span class="mono">fltmc &gt;nul</span> 检测 admin token，不是 <span class="mono">NET SESSION</span>。后者依赖 LanmanServer，但 LanmanServer 没启动恰恰是 <span class="mono">-EnableSmbServer</span> 要修的状态，用 NET SESSION 会陷入 UAC 重启死循环。chcp 65001 强制 UTF-8 控制台保证 JSON 不乱码。
+        <strong style="color:var(--fg);">成败计入 SSH：</strong><span class="mono">OVERALL = PS_EXIT==0 AND SSH_EXIT==0</span>。enable-ssh 退出码在顶层捕获（避开 cmd 延迟展开陷阱）；缺 <span class="mono">enable-ssh.ps1</span> 或 <span class="mono">uecm.pub</span> 时 <span class="mono">SSH_EXIT=9</span> → 直接 FAILED，不再像迁移前那样只看 WinRM 退出码假成功。<span class="mono">SSH_ADMIN_ARGS</span> 里 <span class="mono">-LocalAdminName</span> 硬编码 <span class="mono">uecm-svc</span>（与 WinRM local-admin 名独立）。
+        <strong style="color:var(--fg);">UAC 自提权：</strong>用 <span class="mono">fltmc &gt;nul</span> 检测 admin token（不依赖 LanmanServer，避开 UAC 重启死循环）。
+        <strong style="color:var(--fg);">.cmd 必须 CRLF + 纯 ASCII</strong>，中文只放 README，否则双击报 <span class="mono">'xxx' is not recognized</span> 乱码且账号不建。
       </p>
     </div>
 
-    <!-- 4. Preflight ladder -->
+    <!-- 4. SSH key model -->
     <div class="section-block">
-      <span class="section-label">4 · preflight-path-b.ps1 · 5 步可达性检查</span>
+      <span class="section-label">4 · SSH key 认证模型 · uecm-svc</span>
       <div class="preflight" role="list">
         <div class="step-row" role="listitem">
           <span class="n">1</span>
-          <span class="probe">tcp_135</span>
-          <span class="what">DCE/RPC Endpoint Mapper 端口。<strong>PsExec 走 SCM 必经</strong>。不通直接判 blocked。</span>
+          <span class="probe">keypair</span>
+          <span class="what">主控机首次用时自动生成 <span class="k">uecm_ed25519</span> 密钥对（私钥留本机）；公钥 <span class="k">uecm.pub</span> 随纳管包明文下发。</span>
         </div>
         <div class="step-row" role="listitem">
           <span class="n">2</span>
-          <span class="probe">tcp_445</span>
-          <span class="what">SMB 端口。PsExec 推 service binary 走这里，UECM SMB 共享分发也走这里。</span>
+          <span class="probe">authorized_keys</span>
+          <span class="what">enable-ssh 把 uecm.pub 写进目标机 <span class="k">C:\ProgramData\ssh\administrators_authorized_keys</span>——Windows OpenSSH 对本地管理员统一用这个文件，所以 <span class="k">uecm-svc</span> 必须是 admin。</span>
         </div>
         <div class="step-row" role="listitem">
           <span class="n">3</span>
-          <span class="probe">admin_share_mount</span>
-          <span class="what">用传入凭据真挂 <span class="k">\\&lt;host&gt;\ADMIN$</span>。bare 用户名会自动改成 <span class="k">&lt;host&gt;\&lt;user&gt;</span>，强制按目标本地账号认证，不走主控机域。</span>
+          <span class="probe">login = uecm-svc</span>
+          <span class="what"><span class="k">SshExecutor</span> 永远 <span class="k">ssh uecm-svc@&lt;host&gt;</span>（key auth,无密码）。uecm-svc 是本地管理员,所以 admin-required 节点脚本（service install / urlacl / setx）能跑。</span>
         </div>
         <div class="step-row" role="listitem">
           <span class="n">4</span>
-          <span class="probe">admin_share_write</span>
-          <span class="what">在 ADMIN$\Temp 写 + 删 probe 文件。删失败仍判 ok，但消息里贴残留路径让人工清理。</span>
+          <span class="probe">-File staging</span>
+          <span class="what">节点脚本不走命令行,先 stage 到 <span class="k">C:\ProgramData\UECM</span>,再 <span class="k">ssh … powershell -File</span> + stdin JSON 喂参（secret 不进进程列表 / 不受命令行长度限制）。</span>
         </div>
         <div class="step-row" role="listitem">
           <span class="n">5</span>
-          <span class="probe">psexec_probe<span style="color:var(--muted-fg);font-weight:500;"> (opt-in)</span></span>
-          <span class="what">需 <span class="k">--probe</span>。真跑 <span class="k">PsExec64 cmd /c exit 0</span>，会在目标写 Event 7045 (service install) + 7036 (service remove)。<strong>唯一能检出 UAC remote token filter 拦截的方式</strong>。</span>
+          <span class="probe">loopback</span>
+          <span class="what">operator 自指（localhost）也走真 SSH-to-self uecm-svc（admin 上下文）;distribute 的 robocopy 有本地快路径。<strong>所以 operator 本机也要被 onboard</strong>（<span class="k">ssh uecm-svc@localhost</span> 通）。</span>
         </div>
       </div>
-
-      <div class="verdicts" role="list" aria-label="preflight 四种判定">
-        <div class="v viable" role="listitem">
-          <div class="vname">viable</div>
-          <p>1–5 步全过，<strong style="color:var(--fg);">PsExec SCM 探针确认</strong>。Path B 可直接推。</p>
-        </div>
-        <div class="v likely" role="listitem">
-          <div class="vname">likely_viable</div>
-          <p>1–4 步过，5 跳过。网络 / SMB / ADMIN$ 都通，但没确认 SCM。建议加 <span style="font-family:ui-monospace,monospace;background:var(--muted);padding:1px 5px;border-radius:3px;color:var(--fg);font-size:12px;">--probe</span> 再跑一次。</p>
-        </div>
-        <div class="v blocked" role="listitem">
-          <div class="vname">blocked</div>
-          <p>1–4 任一失败，或 5 失败（UAC remote token filter 最可能）。改走 Path A USB。</p>
-        </div>
-        <div class="v uncertain" role="listitem">
-          <div class="vname">uncertain</div>
-          <p>主控机本身没有 PsExec64。目标侧无法判断，CLI 也算非零退出，自动化不能继续。</p>
-        </div>
-      </div>
+      <p style="margin-top:16px;color:var(--muted-fg);font-size:12.5px;line-height:1.65;">
+        密钥 / known_hosts 由 <span class="k">core/ssh.rs</span> 的 <span class="k">SshExecutor::from_config</span> 管;keepalive（ServerAliveInterval）已加,撑 verify-rules / service-install 这类长任务的单会话。
+      </p>
     </div>
 
-    <!-- 5. Path B mechanics -->
+    <!-- 5. Legacy WinRM path (retiring) -->
     <div class="section-block">
-      <span class="section-label">5 · Path B · bootstrap-winrm-remote.ps1 运行机理</span>
+      <span class="section-label">5 · legacy · WinRM 远程推送（P5a 退役）</span>
       <div class="pathb">
-        <h4>从主控机推 enable-winrm.ps1 到目标机的 4 个动作</h4>
-        <div class="pathb-steps">
-          <div class="pathb-step">
-            <div class="nm">1 · mount admin$</div>
-            <p class="tx"><strong>New-PSDrive</strong> 以传入凭据挂 <span class="k">\\&lt;host&gt;\ADMIN$</span>，drive 名用随机 GUID 后缀防冲突。</p>
-          </div>
-          <div class="pathb-step">
-            <div class="nm">2 · copy script</div>
-            <p class="tx"><strong>Copy-Item</strong> 把本地 enable-winrm.ps1 拷到 <span class="k">ADMIN$\Temp\UECM-Bootstrap-WinRM.ps1</span>。</p>
-          </div>
-          <div class="pathb-step">
-            <div class="nm">3 · psexec invoke</div>
-            <p class="tx">用 <strong>PsExec64</strong> 以 SYSTEM (<span class="k">-h</span> 提升) 跑 <span class="k">cmd.exe /c powershell.exe -File %SystemRoot%\Temp\UECM-Bootstrap-WinRM.ps1</span>。</p>
-          </div>
-          <div class="pathb-step">
-            <div class="nm">4 · operator trustedhosts</div>
-            <p class="tx">把目标 host / IP 追加进主控机 <span class="k">WSMan:\localhost\Client\TrustedHosts</span>，后续带凭据 WinRM 才能用。</p>
-          </div>
-        </div>
-        <p style="margin-top:16px;color:var(--muted-fg);font-size:12.5px;line-height:1.65;">
-          失败模式：finally 块清掉 drive 和 remote 脚本；操作员可以选 <span class="k">--enable-local-admin</span> 把 LocalAccountTokenFilterPolicy 一起改了，给 workgroup 场景免去额外一步。
+        <h4>迁移前的 Path B —— 现在不是主路径，仅作过渡</h4>
+        <p class="tx" style="color:var(--muted-fg);font-size:13px;line-height:1.7;max-width:74ch;">
+          <span class="k">machine authorize</span> / <span class="k">winrm bootstrap</span> 用 bundled PsExec64 把 <span class="k">enable-winrm.ps1</span> 远程推到目标 ADMIN$ 跑掉（preflight-path-b.ps1 先做 5 步可达性判定）。<strong style="color:var(--fg);">这条路径只开 WinRM、不装 SSH key</strong>——用它纳管的机器在 refresh / 各 SSH 化命令里会立刻不可达。
+        </p>
+        <p style="margin-top:14px;color:var(--muted-fg);font-size:12.5px;line-height:1.65;">
+          <strong style="color:var(--fg);">处置：</strong>P5a 删 <span class="k">core/winrm.rs</span> / <span class="k">domain_winrm</span> / <span class="k">core/bootstrap.rs</span> / <span class="k">preflight</span> / <span class="k">enable-winrm.ps1</span> 等,并把 <span class="k">bootstrap_winrm</span> / <span class="k">get_winrm_bootstrap_script</span> Tauri 命令 repoint 成「用 .cmd 走 SSH」的提示（保持 Vue 兼容形状）。SSH 纳管请走 §3 的 .cmd。
         </p>
       </div>
     </div>
 
     <!-- 6. Deployment channels -->
     <div class="section-block">
-      <span class="section-label">6 · 部署通道 · 6 种把脚本送到目标机的方式</span>
+      <span class="section-label">6 · 部署通道 · 把纳管包送到目标机的方式</span>
       <div class="deploy-grid">
         <div class="deploy-card">
           <div class="order">通道 01 · 推荐</div>
-          <h4 class="channel">UECM 自动 bootstrap</h4>
-          <p class="when">ADMIN$ + RPC + SCM 全通时直接走。<strong style="color:var(--fg);font-weight:600;">CLI: uecm-cli winrm bootstrap</strong>。UECM 用 bundled PsExec64.exe 走 Path B，并把 TrustedHosts 一起写好。</p>
+          <h4 class="channel">USB / 共享盘一键</h4>
+          <p class="when"><strong style="color:var(--fg);font-weight:600;">package-winrm-bootstrap.ps1 -UecmPublicKeyPath …</strong> 生成含 .cmd + enable-ssh.ps1 + uecm.pub + PsExec64 的目录，拷 U 盘或丢 NAS，目标机双击 UECM-Bootstrap.cmd。现在统一纳管的主姿势。</p>
         </div>
         <div class="deploy-card">
-          <div class="order">通道 02 · 兜底</div>
-          <h4 class="channel">USB 一键</h4>
-          <p class="when">远程不可达 / 机器在工作组孤岛。<strong style="color:var(--fg);font-weight:600;">package-winrm-bootstrap.ps1</strong> 生成目录，拷 U 盘，目标机双击 UECM-Bootstrap.cmd。</p>
+          <div class="order">通道 02 · legacy</div>
+          <h4 class="channel">WinRM 远程自动推</h4>
+          <p class="when"><strong style="color:var(--fg);font-weight:600;">uecm-cli machine authorize / winrm bootstrap</strong>。PsExec64 走 Path B,但<strong>只开 WinRM、不装 SSH</strong>——P5a 退役,纳管别靠它。</p>
         </div>
         <div class="deploy-card">
           <div class="order">通道 03</div>
           <h4 class="channel">共享盘</h4>
-          <p class="when">目标机能访问 NAS / 网盘但主控机管不到。把 USB 包丢上去，让现场人员到目标机本地跑一次。</p>
+          <p class="when">目标机能访问 NAS / 网盘但主控机管不到。把纳管包丢上去，让现场人员到目标机本地双击一次。</p>
         </div>
         <div class="deploy-card">
           <div class="order">通道 04</div>
           <h4 class="channel">Golden image</h4>
-          <p class="when">机器走统一镜像部署时，把 enable-winrm.ps1 合进 sysprep 后的初始化流程。新机开机即可被 UECM scan。</p>
+          <p class="when">机器走统一镜像部署时，把 enable-ssh.ps1（带 uecm.pub）合进 sysprep 后的初始化流程。新机开机即可被 UECM scan + ssh probe。</p>
         </div>
         <div class="deploy-card">
           <div class="order">通道 05</div>
           <h4 class="channel">GPO startup script</h4>
-          <p class="when">域环境推荐。GPO 计算机启动脚本下发 enable-winrm.ps1，批量 render node 一次到位。</p>
+          <p class="when">域环境推荐。GPO 计算机启动脚本下发 enable-ssh.ps1 + uecm.pub，批量 render node 一次到位。</p>
         </div>
         <div class="deploy-card">
           <div class="order">通道 06</div>
           <h4 class="channel">Intune / SCCM / RMM</h4>
-          <p class="when">已有企业设备管理时，把 enable-winrm.ps1 当 remediation script 或 one-shot package 下发。</p>
+          <p class="when">已有企业设备管理时，把 enable-ssh.ps1 当 remediation script 或 one-shot package 下发（公钥随包）。</p>
         </div>
       </div>
     </div>
 
     <!-- 7. CLI reference -->
     <div class="section-block">
-      <span class="section-label">7 · CLI 命令参考 · uecm-cli winrm</span>
+      <span class="section-label">7 · CLI 命令参考 · uecm-cli ssh / secret</span>
       <div class="cli-ref" role="list">
         <div class="cli-row" role="listitem">
-          <div class="cli-cmd">uecm-cli winrm probe <span class="arg">&lt;host&gt;</span></div>
-          <div class="cli-desc">单机 WinRM 端点探测，返回 <span class="k">ok</span> / <span class="k">message</span> / <span class="k">latency_ms</span>。失败时 CLI 非零退出。 <span class="cn-ui none">→ UI 无(仅 CLI)</span></div>
+          <div class="cli-cmd">uecm-cli ssh probe <span class="arg">&lt;host&gt;</span></div>
+          <div class="cli-desc">以 uecm-svc key 探目标机 SSH 可达性，返回 <span class="k">ok</span> / <span class="k">message</span> / <span class="k">latency_ms</span>（字段兼容旧 winrm probe）。失败时 CLI 非零退出。<strong>替代退役中的 winrm probe</strong>。 <span class="cn-ui none">→ UI 无(仅 CLI)</span></div>
         </div>
         <div class="cli-row" role="listitem">
-          <div class="cli-cmd">uecm-cli winrm preflight <span class="arg">&lt;host&gt;</span> <span class="opt">--user</span> <span class="arg">admin</span> <span class="opt">--pass-stdin</span> <span class="opt">[--probe]</span></div>
-          <div class="cli-desc">跑 5 步 preflight。默认 <strong>Shallow 零痕迹</strong>，加 <span class="k">--probe</span> 切 <strong>Deep</strong>（写 2 条 Event）。verdict=blocked 或 uncertain 时 CLI 非零退出，避免自动化盲跑下一步。 <span class="cn-ui none">→ UI 无(仅 CLI)</span></div>
+          <div class="cli-cmd">uecm-cli secret set <span class="arg">&lt;alias&gt;</span> <span class="opt">[--value v | stdin]</span> · get · list · delete</div>
+          <div class="cli-desc">直管跨平台 SecretStore（AES-GCM）。<span class="k">set</span> 从 --value 或 stdin 读；<span class="k">get</span> 打印明文；<span class="k">list</span> 只列别名；<span class="k">delete</span> 带 --yes / --dry-run。 <span class="cn-ui none">→ UI 无(仅 CLI)</span></div>
         </div>
         <div class="cli-row" role="listitem">
-          <div class="cli-cmd">uecm-cli winrm bootstrap-script <span class="opt">[--output setup.ps1]</span></div>
-          <div class="cli-desc">把 enable-winrm.ps1 的源码原样输出到 stdout 或文件，给现场人员当离线参考 / GPO 输入用。 <span class="cn-ui">→ commands::bootstrap::get_winrm_bootstrap_script</span></div>
+          <div class="cli-cmd">uecm-cli cred save <span class="arg">--alias a</span> <span class="opt">--user u --pass-stdin --kind winrm|share</span></div>
+          <div class="cli-desc">把 (user, password) 存成可被 <span class="k">--cred-alias</span> 引用的 alias：密钥进 SecretStore（跨平台，不再 cmdkey/DPAPI），元数据进 SQLite。 <span class="cn-ui">→ commands::credentials::save_credential</span></div>
         </div>
         <div class="cli-row" role="listitem">
-          <div class="cli-cmd">uecm-cli winrm bootstrap <span class="arg">&lt;host&gt;</span> <span class="opt">--user</span> <span class="arg">admin</span> <span class="opt">--pass-stdin</span> <span class="opt">[--enable-local-admin]</span></div>
-          <div class="cli-desc">触发 Path B 远程推送。内部调 bootstrap-winrm-remote.ps1，需要 bundled PsExec64.exe 可达。Workgroup 场景加 <span class="k">--enable-local-admin</span>。 <span class="cn-ui">→ commands::bootstrap::bootstrap_winrm</span></div>
+          <div class="cli-cmd"><span style="opacity:.65;">uecm-cli winrm probe / bootstrap …</span></div>
+          <div class="cli-desc"><span style="opacity:.7;">legacy WinRM 命令域,P0–P4 仍在但已非主路径,<strong>P5a 退役</strong>。<span class="cn-ui">→ commands::bootstrap::*（P5a repoint 成 SSH 提示）</span></span></div>
         </div>
       </div>
     </div>
@@ -1584,18 +1557,18 @@
     <div class="section-block">
       <span class="section-label">8 · 不会动的东西 · 显式声明</span>
       <div class="non-actions">
-        <span class="nl">bootstrap 不做以下任何一件事</span>
+        <span class="nl">SSH onboarding 不做以下任何一件事</span>
         <ul>
-          <li><strong>不开 SSH</strong> · UECM 只走 WinRM</li>
-          <li><strong>不开 Basic auth</strong> · 全部 NTLM / Kerberos</li>
-          <li><strong>不开 CredSSP</strong> · 不引入凭据委派</li>
-          <li><strong>不开 HTTPS 5986</strong> · 只用 HTTP 5985</li>
-          <li><strong>不设 AllowUnencrypted</strong> · WinRM 默认加密</li>
-          <li><strong>不创建 / 修改用户账号</strong> · 不动密码</li>
-          <li><strong>不重启机器</strong> · 30 秒内跑完</li>
-          <li><strong>不装任何软件</strong> · 没有常驻 agent</li>
+          <li><strong>不开 password 登录</strong> · 只 key auth（uecm-svc）</li>
+          <li><strong>不动 sshd 端口</strong> · 标准 TCP 22</li>
+          <li><strong>不放任意公钥</strong> · 只授权 UECM 自己的 uecm.pub</li>
+          <li><strong>不创建非 uecm-svc 账号</strong> · 传别的名直接拒绝</li>
+          <li><strong>不开 HTTPS / CredSSP / Basic</strong> · 这些是 WinRM 的事</li>
+          <li><strong>不重启机器</strong> · 装 OpenSSH capability 即生效</li>
+          <li><strong>不装常驻 agent</strong> · 只 OpenSSH Server（Windows 内置 capability）</li>
           <li><strong>不动 Defender / EDR</strong> · 不放行病毒例外</li>
           <li><strong>不改 RDP / 域账号 / 已有共享</strong> · 边界外不碰</li>
+          <li><strong>不把私钥下发到节点</strong> · 私钥只在主控机</li>
         </ul>
       </div>
     </div>
@@ -1608,12 +1581,11 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
         </span>
         <div class="body">
-          <strong>workgroup / IP 直连场景需在主控机加 TrustedHosts。</strong>
-          目标机 bootstrap 成功不等于主控机能立刻连过去。WinRM 客户端默认拒绝带凭据连 IP 形式的目标，需要在主控机管理员 PowerShell 下跑一次。
-          <strong>Path B（<span class="k">winrm bootstrap</span>）会自动处理这一步</strong>；Path A（USB）跑完后需要手动跑：
-          <code>Set-Item WSMan:\localhost\Client\TrustedHosts `
-    -Value '192.168.10.50,192.168.10.51' -Force</code>
-          替换成所有目标机 IP（逗号分隔），或用 <span class="k">192.168.10.*</span> 覆盖整段。只需做一次。
+          <strong>主控机自身要有 uecm 密钥对,且 operator 若自指要被 onboard。</strong>
+          私钥（<span class="k">uecm_ed25519</span>）由 <span class="k">SshExecutor::from_config</span> 首次用时在主控机本地生成,公钥就是随纳管包下发的 <span class="k">uecm.pub</span>——不用手动配 TrustedHosts/known_hosts。
+          <strong>但 operator 自己也是一台节点时</strong>（在本机跑针对 localhost 的 refresh / zen / deploy）,loopback 现在走真 SSH-to-self,需要本机也被 onboard:
+          <code>ssh uecm-svc@localhost   # 应免密连通</code>
+          不通的话,在本机也双击一次 <span class="k">UECM-Bootstrap.cmd</span> 即可。
         </div>
       </div>
     </div>
@@ -1714,9 +1686,9 @@
 
     <div class="commands" aria-label="zen daemon 命令">
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli zen register <span class="arg">--machine 3 --declared-port 8558 --role shared_upstream --lifecycle installed_service --data-dir D:\ZenData</span></span></div>
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli zen probe <span class="arg">--all --cred-alias prod</span></span></div>
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli zen service install <span class="arg">--endpoint-id 1 --cred-alias prod --yes</span></span></div>
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli zen enable <span class="arg">--project-id 7 --machines 3,4,5 --upstream-endpoint-id 1 --cred-alias prod --yes</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli zen probe <span class="arg">--all</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli zen service install <span class="arg">--endpoint-id 1 --yes</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli zen enable <span class="arg">--project-id 7 --machines 3,4,5 --upstream-endpoint-id 1 --yes</span></span></div>
     </div>
 
     <div class="cmd-notes" aria-label="zen 命令详解">
@@ -1727,19 +1699,19 @@
         <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::zen::zen_register</span> · 端点注册入口</span></div>
       </div>
       <div class="cmd-note">
-        <span class="cn-cmd">uecm-cli zen probe <span class="arg">--all --cred-alias prod</span></span>
+        <span class="cn-cmd">uecm-cli zen probe <span class="arg">--all</span></span>
         <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">批量探活所有 zen 端点的 <span class="k">/health</span></span></div>
         <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">确认 zen 服务在线可达</span></div>
         <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::zen::zen_probe</span> · 探活入口</span></div>
       </div>
       <div class="cmd-note">
-        <span class="cn-cmd">uecm-cli zen service install <span class="arg">--endpoint-id 1 --cred-alias prod --yes</span></span>
+        <span class="cn-cmd">uecm-cli zen service install <span class="arg">--endpoint-id 1 --yes</span></span>
         <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">在 master 节点装 ZenServer Windows 服务</span></div>
         <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">让 zen 缓存以服务形式常驻</span></div>
         <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::zen::zen_service_install</span> · 服务安装入口(start / stop / status / uninstall 同有)</span></div>
       </div>
       <div class="cmd-note cli-only">
-        <span class="cn-cmd">uecm-cli zen enable <span class="arg">--project-id 7 --machines 3,4,5 --upstream-endpoint-id 1 --cred-alias prod --yes</span></span>
+        <span class="cn-cmd">uecm-cli zen enable <span class="arg">--project-id 7 --machines 3,4,5 --upstream-endpoint-id 1 --yes</span></span>
         <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">改工程 DefaultEngine.ini,把指定机器指向 ZenShared upstream</span></div>
         <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">把集群正式切到 zen 缓存(对应的 <span class="k">zen disable</span> 只删 key,不自动恢复 legacy)</span></div>
         <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui none">✗ 仅 CLI</span> · zen enable / disable(改 INI 的危险操作)未注册到 invoke_handler</span></div>
@@ -1849,7 +1821,7 @@
 
     <div class="commands" aria-label="验证生效命令">
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli log verify-startup <span class="arg">--host lanpc --editor-exe "C:\UE\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" --project "D:\Show\My.uproject"</span></span></div>
-      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli health run <span class="arg">--all --cred-alias prod</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli health run <span class="arg">--all</span></span></div>
     </div>
 
     <div class="cmd-notes" aria-label="验证生效命令详解">
@@ -1860,7 +1832,7 @@
         <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::log_verify::run_log_verify</span> · 启动验证入口</span></div>
       </div>
       <div class="cmd-note">
-        <span class="cn-cmd">uecm-cli health run <span class="arg">--all --cred-alias prod</span></span>
+        <span class="cn-cmd">uecm-cli health run <span class="arg">--all</span></span>
         <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">同 ① 的 24 项体检矩阵</span></div>
         <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">部署后回跑,看 <span class="k">zen_*</span> / <span class="k">ini_consistency</span> / <span class="k">pso_precaching</span> 这几行转绿</span></div>
         <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::health_check::run_health_check</span> · 详见 ① 注解</span></div>
