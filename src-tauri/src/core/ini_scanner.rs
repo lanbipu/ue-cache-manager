@@ -240,6 +240,7 @@ pub struct ScanOutcome {
     pub errors: Vec<String>,
     pub not_found: Vec<String>,
     pub read_count: usize,
+    pub config_snapshots: Vec<crate::core::ini_config_extract::ConfigEntry>,
 }
 
 pub fn scan_machine(inputs: &ScanInputs) -> UecmResult<ScanOutcome> {
@@ -253,6 +254,7 @@ pub fn scan_machine(inputs: &ScanInputs) -> UecmResult<ScanOutcome> {
         match read_file(inputs.host, tf, inputs.credential) {
             Ok(Some(pf)) => {
                 outcome.read_count += 1;
+                outcome.config_snapshots.extend(crate::core::ini_config_extract::extract(&pf));
                 outcome.findings.extend(ini_diagnostics::run_rules(&pf, &inputs.env_state));
                 // Zen per-file rules (R012-R015 + R017) run on the same
                 // parsed file. They share the env-var snapshot so R015's
@@ -823,6 +825,44 @@ mod tests {
         assert_eq!(bg.backend_nodes.len(), 2);
         let shared = bg.backend_nodes.iter().find(|n| n.name == "Shared").unwrap();
         assert_eq!(crate::core::ini_backend_graph::get_field(shared, "ReadOnly"), Some("false"));
+    }
+
+    #[test]
+    fn scan_machine_collects_config_snapshots() {
+        // Mirror the harness from `scan_machine_skips_zen_rules_when_zen_ctx_is_none`:
+        // write a file at the literal backslash path that enumerate_project_paths
+        // produces, then assert config_snapshots is populated by extract().
+        let project_dir = tempfile::tempdir().unwrap();
+        let project_root = project_dir.path().to_string_lossy().to_string();
+        let default_engine_path = format!("{}\\Config\\DefaultEngine.ini", project_root);
+        std::fs::write(
+            &default_engine_path,
+            "[DerivedDataBackendGraph]\nRoot=(Type=KeyLength)\n",
+        )
+        .unwrap();
+
+        let inputs = ScanInputs {
+            host: "localhost",
+            credential: None,
+            installs: &[],
+            user_profile: "",
+            project_roots: &[project_root],
+            env_state: EnvVarState::default(),
+            zen_ctx: None,
+        };
+        let outcome = scan_machine(&inputs).unwrap();
+        assert!(
+            outcome
+                .config_snapshots
+                .iter()
+                .any(|c| c.domain == "ddc" && c.key_name == "Root"),
+            "expected ddc/Root in config_snapshots, got: {:?}",
+            outcome
+                .config_snapshots
+                .iter()
+                .map(|c| (c.domain, &c.key_name))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
