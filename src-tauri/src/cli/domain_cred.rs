@@ -207,6 +207,9 @@ mod tests {
             db_path: std::path::PathBuf::from(":memory:"),
             emitter,
             json_mode: true,
+            operation_id: "cred.unmapped",
+            request_id: "test-req".into(),
+            no_input: false,
         }
     }
 

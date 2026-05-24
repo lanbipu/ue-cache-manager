@@ -1,6 +1,8 @@
 //! CLI implementation for `uecm-cli`. Bypasses Tauri runtime; calls core/data directly.
 
 pub mod args;
+pub mod config_file;
+pub mod stdin_input;
 pub mod credential_args;
 pub mod destructive;
 pub mod host_args;
@@ -24,6 +26,8 @@ pub mod domain_log;
 pub mod domain_local_cache;
 pub mod domain_deploy;
 pub mod domain_zen;
+pub mod envelope;
+pub mod manifest;
 
 // Re-export the emitter trait + the generic extension trait so domain handlers
 // can `use crate::cli::{Emitter, EmitSerialize}` in one line.

@@ -976,6 +976,9 @@ mod tests {
             db_path: std::path::PathBuf::from(":memory:"),
             emitter,
             json_mode: true,
+            operation_id: "ini.unmapped",
+            request_id: "test-req".into(),
+            no_input: false,
         }
     }
 
@@ -990,9 +993,9 @@ mod tests {
         let _ = set_batch(&mut ctx, &["192.0.2.1".into()], "C:\\test.ini", "S", "K", secret, &cred);
         drop(ctx);
         let s = String::from_utf8(buf).unwrap();
-        assert!(s.contains("\"kind\":\"started\""));
-        assert!(s.contains("\"kind\":\"item_completed\""));
-        assert!(s.contains("\"kind\":\"completed\""));
+        assert!(s.contains("\"type\":\"started\""));
+        assert!(s.contains("\"type\":\"item_completed\""));
+        assert!(s.contains("\"type\":\"completed\""));
         assert!(!s.contains(secret), "value leaked: {}", s);
     }
 

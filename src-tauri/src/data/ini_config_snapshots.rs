@@ -7,7 +7,7 @@ use crate::error::UecmResult;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct ConfigSnapshot {
     pub id: Option<i64>,
     pub scan_run_id: i64,

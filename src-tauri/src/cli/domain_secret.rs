@@ -26,7 +26,13 @@ fn set(ctx: &mut Ctx<'_>, alias: &str, value: Option<String>) -> UecmResult<()> 
         Some(v) => v,
         None => {
             // No --value: read one line from stdin (mirrors --pass-stdin), so the
-            // secret never lands in shell history.
+            // secret never lands in shell history. `--no-input` forbids the
+            // implicit stdin read — fail fast instead of blocking.
+            if ctx.no_input {
+                return Err(UecmError::InvalidInput(
+                    "--no-input set but `secret set` requires the value via --value (stdin read disabled)".into(),
+                ));
+            }
             let mut line = String::new();
             io::stdin()
                 .lock()
@@ -87,4 +93,38 @@ fn delete(ctx: &mut Ctx<'_>, alias: &str, yes: bool, dry_run: bool) -> UecmResul
         .emit_result(&serde_json::json!({ "alias": alias, "deleted": true }))
         .ok();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::output::{Emitter, NdjsonEmitter};
+    use crate::cli::run::Ctx;
+
+    fn ctx_no_input<'a>(buf: &'a mut Vec<u8>) -> Ctx<'a> {
+        let emitter: Box<dyn Emitter> = Box::new(NdjsonEmitter::new(buf));
+        Ctx {
+            db: None,
+            db_path: std::path::PathBuf::from(":memory:"),
+            emitter,
+            json_mode: true,
+            operation_id: "secret.set",
+            request_id: "test-req".into(),
+            no_input: true,
+        }
+    }
+
+    #[test]
+    fn set_without_value_under_no_input_errors_before_stdin() {
+        // `--no-input` + no `--value` must fail fast with InvalidInput rather
+        // than blocking on the implicit stdin read. The early return also fires
+        // before `SecretStore::from_config()`, keeping the test hermetic.
+        let mut buf = Vec::new();
+        let mut ctx = ctx_no_input(&mut buf);
+        let r = set(&mut ctx, "some-alias", None);
+        match r {
+            Err(UecmError::InvalidInput(msg)) => assert!(msg.contains("--no-input")),
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+    }
 }

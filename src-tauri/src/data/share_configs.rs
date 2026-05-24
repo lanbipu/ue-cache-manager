@@ -7,7 +7,7 @@ use crate::error::UecmResult;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ShareMode {
     Open,
@@ -35,7 +35,7 @@ impl ShareMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct ShareConfig {
     pub id: Option<i64>,
     pub host_machine_id: i64,

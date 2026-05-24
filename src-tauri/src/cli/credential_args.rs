@@ -13,25 +13,20 @@ pub struct CredentialArgs {
     #[arg(long, value_name = "ALIAS", group = "cred")]
     pub cred_alias: Option<String>,
 
-    /// Inline username; use with --pass or --pass-stdin.
+    /// Inline username; use with --pass-stdin.
     #[arg(long, value_name = "USER", group = "cred", requires = "secret")]
     pub user: Option<String>,
 
-    /// Inline password. Leaks into shell history — prefer --pass-stdin
-    /// or --cred-alias.
-    #[arg(
-        long,
-        value_name = "PASS",
-        group = "secret",
-        conflicts_with_all = ["pass_stdin", "cred_alias"]
-    )]
+    /// Internal-only password carrier (set by `inline()`); NOT a CLI flag.
+    /// Passwords arrive via --pass-stdin or --cred-alias (spec §9: no argv secrets).
+    #[arg(skip)]
     pub pass: Option<String>,
 
     /// Read password from stdin (one line, \r\n trimmed).
     #[arg(
         long,
         group = "secret",
-        conflicts_with_all = ["pass", "cred_alias"]
+        conflicts_with_all = ["cred_alias"]
     )]
     pub pass_stdin: bool,
 }
@@ -96,7 +91,12 @@ impl CredentialArgs {
     /// so this no longer fails with "DPAPI is Windows-only" on a non-Windows
     /// operator or for a SecretStore-only alias (SSH-migrated callers resolve
     /// then discard it harmlessly). The DPAPI fallback retires in P5b.
-    pub fn resolve(&self, db: &Db) -> UecmResult<Option<(String, String)>> {
+    ///
+    /// `no_input` mirrors `--no-input`: when true, the `--pass-stdin` branch
+    /// refuses to read stdin (which would block on an interactive terminal)
+    /// and returns `InvalidInput` instead. `--cred-alias` and inline `--user
+    /// --pass` resolve without stdin, so they are unaffected.
+    pub fn resolve(&self, db: &Db, no_input: bool) -> UecmResult<Option<(String, String)>> {
         if let Some(alias) = &self.cred_alias {
             let user = data_creds::find_by_alias(db, alias)?
                 .ok_or_else(|| {
@@ -112,6 +112,11 @@ impl CredentialArgs {
         match (&self.user, &self.pass, self.pass_stdin) {
             (Some(u), Some(p), false) => Ok(Some((u.clone(), p.clone()))),
             (Some(u), None, true) => {
+                if no_input {
+                    return Err(UecmError::InvalidInput(
+                        "--no-input set but --pass-stdin requires reading the password from stdin".into(),
+                    ));
+                }
                 let mut line = String::new();
                 io::stdin().lock().read_line(&mut line).map_err(|e| {
                     UecmError::InvalidInput(format!("read password from stdin: {}", e))
@@ -150,7 +155,7 @@ mod tests {
             pass_stdin: false,
         };
         let db = fresh_db();
-        assert!(args.resolve(&db).unwrap().is_none());
+        assert!(args.resolve(&db, false).unwrap().is_none());
     }
 
     #[test]
@@ -158,10 +163,10 @@ mod tests {
         let reused = CredentialArgs::inline(Some(("alice".into(), "pw".into())));
         let db = fresh_db();
         // resolve must not read stdin — it just returns the inline pair.
-        assert_eq!(reused.resolve(&db).unwrap(), Some(("alice".into(), "pw".into())));
+        assert_eq!(reused.resolve(&db, false).unwrap(), Some(("alice".into(), "pw".into())));
 
         let none = CredentialArgs::inline(None);
-        assert!(none.resolve(&db).unwrap().is_none());
+        assert!(none.resolve(&db, false).unwrap().is_none());
     }
 
     #[test]
@@ -173,7 +178,7 @@ mod tests {
             pass_stdin: false,
         };
         let db = fresh_db();
-        assert_eq!(args.resolve(&db).unwrap(), Some(("alice".into(), "hunter2".into())));
+        assert_eq!(args.resolve(&db, false).unwrap(), Some(("alice".into(), "hunter2".into())));
     }
 
     #[test]
@@ -185,7 +190,35 @@ mod tests {
             pass_stdin: false,
         };
         let db = fresh_db();
-        let r = args.resolve(&db);
+        let r = args.resolve(&db, false);
         assert!(matches!(r, Err(UecmError::InvalidInput(_))));
+    }
+
+    #[test]
+    fn resolve_pass_stdin_with_no_input_errors_without_reading_stdin() {
+        // --no-input must turn the --pass-stdin branch into a fast
+        // InvalidInput instead of blocking on stdin.
+        let args = CredentialArgs {
+            cred_alias: None,
+            user: Some("alice".into()),
+            pass: None,
+            pass_stdin: true,
+        };
+        let db = fresh_db();
+        let r = args.resolve(&db, true);
+        match r {
+            Err(UecmError::InvalidInput(msg)) => assert!(msg.contains("--no-input")),
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn pass_flag_is_not_accepted_on_cli() {
+        use crate::cli::args::Cli;
+        use clap::Parser;
+        let r = Cli::try_parse_from(["uecm-cli","machine","refresh","1","--user","u","--pass","p"]);
+        assert!(r.is_err(), "--pass should no longer be a CLI flag");
+        let ok = Cli::try_parse_from(["uecm-cli","machine","refresh","1","--user","u","--pass-stdin"]);
+        assert!(ok.is_ok());
     }
 }

@@ -269,7 +269,7 @@ pub fn scan_machine(inputs: &ScanInputs) -> UecmResult<ScanOutcome> {
             Ok(None) => outcome.not_found.push(tf.path.clone()),
             Err(e) => {
                 let msg = format!("{}: {}", tf.path, e);
-                eprintln!("[ini_scanner] {}", msg);
+                tracing::warn!(target: "ini_scanner", "{}", msg);
                 outcome.errors.push(msg);
             }
         }

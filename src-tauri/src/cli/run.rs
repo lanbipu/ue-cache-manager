@@ -1,7 +1,7 @@
 //! Top-level dispatch. Bin entry parses args, builds emitter, opens DB only
 //! when the requested command needs it, hands off to domain.
 
-use crate::cli::args::{Cli, Domain};
+use crate::cli::args::{Cli, Domain, OutputFormat};
 use crate::cli::output::{Emitter, HumanEmitter, NdjsonEmitter, exit_code_for};
 use crate::cli::{domain_cred, domain_ddc, domain_deploy, domain_env, domain_gpu, domain_health, domain_ini, domain_local_cache, domain_machine, domain_project, domain_pso, domain_secret, domain_share, domain_ssh, domain_system, domain_winrm, domain_zen};
 use crate::data::Db;
@@ -21,6 +21,14 @@ pub struct Ctx<'a> {
     pub db_path: PathBuf,
     pub emitter: Box<dyn Emitter + 'a>,
     pub json_mode: bool,
+    /// Canonical operation identifier (spec §2.2 / §4.1). Set at dispatch time.
+    pub operation_id: &'static str,
+    /// Per-request UUID v4 correlation id (spec §4.1). Set at dispatch time.
+    pub request_id: String,
+    /// `--no-input`: refuse any implicit stdin / interactive prompt. Handlers
+    /// that would otherwise block reading stdin (e.g. `secret set` without
+    /// `--value`, `--pass-stdin`) must error with `InvalidInput` instead.
+    pub no_input: bool,
 }
 
 impl<'a> Ctx<'a> {
@@ -83,12 +91,49 @@ fn needs_db(cmd: &Domain) -> bool {
             ZenAction::VerifyRules { run_editor, .. } => *run_editor,
             _ => true,
         },
+        Domain::Manifest => false,
     }
 }
 
 pub fn run(cli: Cli) -> i32 {
+    // Load --config defaults (explicit CLI flags still win).
+    let file_cfg = match &cli.config {
+        Some(p) => match crate::cli::config_file::load(p) {
+            Ok(c) => c,
+            Err(e) => return finish_error(&e, startup_error_is_json(&cli)),
+        },
+        None => crate::cli::config_file::FileConfig::default(),
+    };
+    let mut cli = cli; // shadow as mutable to apply config fallbacks
+    if cli.db_path.is_none() {
+        cli.db_path = file_cfg.db_path.clone();
+    }
+    if cli.log_level == "warn" {
+        // "warn" is the clap default; treat as "not explicitly set". Tradeoff:
+        // an explicit `--log-level warn` is indistinguishable from the default,
+        // so a config `log_level` will win in that one edge case (acceptable
+        // per spec — both yield identical behavior anyway).
+        if let Some(lvl) = &file_cfg.log_level {
+            cli.log_level = lvl.clone();
+        }
+    }
+    if cli.output.is_none() && !cli.json {
+        if let Some(out) = file_cfg.output.as_deref() {
+            cli.output = match out {
+                "text" => Some(crate::cli::args::OutputFormat::Text),
+                "json" => Some(crate::cli::args::OutputFormat::Json),
+                "ndjson" | "stream-json" => Some(crate::cli::args::OutputFormat::Ndjson),
+                _ => {
+                    tracing::warn!("config: unknown output value {:?}, ignoring", out);
+                    None
+                }
+            };
+        }
+    }
+
     // tracing init
-    let filter = tracing_subscriber::EnvFilter::try_new(&cli.log_level)
+    let level = crate::cli::args::effective_log_level(&cli.log_level, cli.verbose, cli.quiet);
+    let filter = tracing_subscriber::EnvFilter::try_new(&level)
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -101,7 +146,7 @@ pub fn run(cli: Cli) -> i32 {
         Some(p) => PathBuf::from(p),
         None => match startup::resolve_db_path() {
             Ok(p) => p,
-            Err(e) => return finish_error(&e, cli.json),
+            Err(e) => return finish_error(&e, startup_error_is_json(&cli)),
         },
     };
 
@@ -109,24 +154,45 @@ pub fn run(cli: Cli) -> i32 {
     let db = if needs_db(&cli.command) {
         match startup::open_and_migrate_db(&db_path) {
             Ok(db) => Some(db),
-            Err(e) => return finish_error(&e, cli.json),
+            Err(e) => return finish_error(&e, startup_error_is_json(&cli)),
         }
     } else {
         None
     };
 
-    // Emitter
-    let json_mode = cli.json;
+    // Compute per-request envelope fields (spec §2.2 / §4.1) before emitter construction.
+    // `started` is consumed by Task 5's envelope-aware emitter.
+    let operation_id = crate::cli::manifest::operation_id_for(&cli.command);
+    let request_id = crate::cli::envelope::gen_request_id();
+    let started = std::time::Instant::now();
+
+    // Emitter selection (spec §3.5). text -> human; json/ndjson -> NDJSON emitter.
+    // True single-object buffering for `json` (vs streamed `ndjson`) is refined in
+    // the P1 envelope plan; here both structured modes share the NDJSON emitter.
+    let fmt = cli.resolved_output();
+    let json_mode = !matches!(fmt, OutputFormat::Text);
     let stdout = io::stdout();
     let stderr = io::stderr();
-    let emitter: Box<dyn Emitter> = if json_mode {
-        Box::new(NdjsonEmitter::new(stdout.lock()))
-    } else {
-        let color = atty::is(atty::Stream::Stdout);
-        Box::new(HumanEmitter::new(stdout.lock(), stderr.lock(), color))
+    let emitter: Box<dyn Emitter> = match fmt {
+        OutputFormat::Text => {
+            let color = crate::cli::args::use_color(
+                cli.no_color,
+                atty::is(atty::Stream::Stdout),
+                std::env::var_os("NO_COLOR").is_some(),
+            );
+            Box::new(HumanEmitter::new(stdout.lock(), stderr.lock(), color))
+        }
+        OutputFormat::Ndjson => {
+            let env = crate::cli::output::EnvelopeCtx { operation_id: operation_id.to_string(), request_id: request_id.clone(), started };
+            Box::new(NdjsonEmitter::new(stdout.lock()).with_envelope(env))
+        }
+        OutputFormat::Json => {
+            let env = crate::cli::output::EnvelopeCtx { operation_id: operation_id.to_string(), request_id: request_id.clone(), started };
+            Box::new(crate::cli::output::JsonEmitter::new(stdout.lock(), env))
+        }
     };
 
-    let mut ctx = Ctx { db, db_path, emitter, json_mode };
+    let mut ctx = Ctx { db, db_path, emitter, json_mode, operation_id, request_id, no_input: cli.no_input };
 
     let result = match cli.command {
         Domain::System { action } => domain_system::handle(&mut ctx, action),
@@ -147,22 +213,56 @@ pub fn run(cli: Cli) -> i32 {
         Domain::LocalCache { action } => domain_local_cache::handle(&mut ctx, action),
         Domain::Deploy { action } => domain_deploy::handle(&mut ctx, action),
         Domain::Zen { action } => domain_zen::handle(&mut ctx, action),
+        Domain::Manifest => {
+            ctx.emitter.emit_value(&crate::cli::manifest::manifest_json()).ok();
+            Ok(())
+        }
     };
 
     match result {
-        Ok(()) => 0,
+        Ok(()) => { let _ = ctx.emitter.finish(); 0 }
         Err(e) => {
             ctx.emitter.emit_error(&e);
+            let _ = ctx.emitter.finish();
             exit_code_for(&e)
         }
     }
 }
 
+/// Whether startup-phase errors (db-path resolve / db open, before the emitter
+/// exists) should be rendered as JSON. Honors `--output json|ndjson` and the
+/// `--json` alias via the resolved format, not just the raw `--json` bool.
+fn startup_error_is_json(cli: &Cli) -> bool {
+    !matches!(cli.resolved_output(), crate::cli::args::OutputFormat::Text)
+}
+
 fn finish_error(err: &UecmError, json: bool) -> i32 {
     if json {
-        // `NdjsonEmitter::new` routes errors to stderr per spec §4.
-        let mut e = NdjsonEmitter::new(io::stdout().lock());
-        e.emit_error(err);
+        // Startup-phase failures (db-path resolve / db open / `--config` load)
+        // happen BEFORE the envelope-aware emitter is built, so we can't reuse
+        // it. Emit the full ErrorEnvelope inline to stderr (spec §4), mirroring
+        // the usage-error path in `bin/uecm-cli.rs`. `operation_id` is unknown
+        // this early, so it is empty.
+        let payload = serde_json::json!({
+            "schema_version": crate::cli::envelope::SCHEMA_VERSION,
+            "status": "error",
+            "operation_id": "",
+            "error": {
+                "code": crate::cli::output::error_code(err),
+                "exit_code": exit_code_for(err),
+                "message": err.to_string(),
+                "retryable": crate::cli::envelope::retryable_for(err),
+            },
+            "meta": {
+                "request_id": "",
+                "duration_ms": 0,
+                "timestamp": crate::cli::envelope::now_iso8601(),
+            }
+        });
+        let mut stderr = io::stderr().lock();
+        let _ = serde_json::to_writer(&mut stderr, &payload);
+        let _ = stderr.write_all(b"\n");
+        let _ = stderr.flush();
     } else {
         let _ = writeln!(io::stderr(), "✗ {}", err);
     }

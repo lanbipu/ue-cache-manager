@@ -5,7 +5,7 @@ use crate::error::UecmResult;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, schemars::JsonSchema)]
 pub struct GpuSignature {
     pub vendor: String,
     pub model: String,
@@ -39,7 +39,7 @@ fn normalize_signature_component(value: &str) -> String {
         .to_ascii_lowercase()
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CellStatus {
     Match,
@@ -47,7 +47,7 @@ pub enum CellStatus {
     Unknown,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct MachineGpuCell {
     pub machine_id: i64,
     pub hostname: String,
@@ -55,13 +55,13 @@ pub struct MachineGpuCell {
     pub status: CellStatus,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct GpuSignatureCount {
     pub signature: GpuSignature,
     pub count: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct GpuMatrix {
     pub signatures: Vec<GpuSignatureCount>,
     pub baseline: Option<GpuSignature>,

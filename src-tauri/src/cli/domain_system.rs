@@ -8,15 +8,15 @@ use crate::error::UecmResult;
 use crate::startup;
 use serde::Serialize;
 
-#[derive(Serialize)]
-struct VersionInfo {
-    binary: &'static str,
-    version: &'static str,
+#[derive(Serialize, schemars::JsonSchema)]
+pub struct VersionInfo {
+    pub binary: &'static str,
+    pub version: &'static str,
 }
 
-#[derive(Serialize)]
-struct PathInfo {
-    path: String,
+#[derive(Serialize, schemars::JsonSchema)]
+pub struct PathInfo {
+    pub path: String,
 }
 
 pub fn handle(ctx: &mut Ctx<'_>, action: SystemAction) -> UecmResult<()> {
@@ -28,6 +28,7 @@ pub fn handle(ctx: &mut Ctx<'_>, action: SystemAction) -> UecmResult<()> {
         SystemAction::Echo { message } => echo(ctx, &message),
         SystemAction::Schema => schema(ctx),
         SystemAction::ExitCodes => exit_codes(ctx),
+        SystemAction::Completion { shell } => completion(ctx, shell),
     }
 }
 
@@ -118,6 +119,18 @@ fn error_code_table() -> serde_json::Value {
     ])
 }
 
+fn completion(_ctx: &mut Ctx<'_>, shell: clap_complete::Shell) -> UecmResult<()> {
+    use clap::CommandFactory;
+    let mut cmd = crate::cli::args::Cli::command();
+    let bin = cmd.get_name().to_string();
+    // 补全脚本是 shell 源码，不是结构化数据——直接写裸 stdout，不走 envelope。
+    let mut out: Vec<u8> = Vec::new();
+    clap_complete::generate(shell, &mut cmd, bin, &mut out);
+    use std::io::Write;
+    let _ = std::io::stdout().write_all(&out);
+    Ok(())
+}
+
 fn command_to_json(cmd: &clap::Command) -> serde_json::Value {
     let args: Vec<serde_json::Value> = cmd
         .get_arguments()
@@ -191,6 +204,9 @@ mod tests {
             db_path: std::path::PathBuf::from(":memory:"),
             emitter,
             json_mode: true,
+            operation_id: "system.echo",
+            request_id: "test-req".into(),
+            no_input: false,
         };
         let result = echo(&mut ctx, "hello");
         assert!(matches!(result, Err(crate::error::UecmError::PowerShell(_))));

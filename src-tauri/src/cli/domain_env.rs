@@ -232,6 +232,9 @@ mod tests {
             db_path: std::path::PathBuf::from(":memory:"),
             emitter,
             json_mode: true,
+            operation_id: "env.unmapped",
+            request_id: "test-req".into(),
+            no_input: false,
         }
     }
 
@@ -265,9 +268,9 @@ mod tests {
         let s = String::from_utf8(buf).unwrap();
         // started + 2 item_started + 2 item_completed + completed = 6 lines
         assert_eq!(s.lines().count(), 6, "stream: {}", s);
-        assert!(s.contains("\"kind\":\"started\""));
-        assert!(s.contains("\"kind\":\"item_completed\""));
-        assert!(s.contains("\"kind\":\"completed\""));
+        assert!(s.contains("\"type\":\"started\""));
+        assert!(s.contains("\"type\":\"item_completed\""));
+        assert!(s.contains("\"type\":\"completed\""));
         // Redaction MUST hold: raw value NEVER in NDJSON.
         assert!(
             !s.contains(secret),

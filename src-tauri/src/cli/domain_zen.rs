@@ -3290,6 +3290,9 @@ mod tests {
             db_path: PathBuf::from(":memory:"),
             emitter,
             json_mode: true,
+            operation_id: "zen.unmapped",
+            request_id: "test-req".into(),
+            no_input: false,
         }
     }
 

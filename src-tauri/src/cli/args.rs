@@ -21,12 +21,80 @@ pub enum BackendChoice {
     Zen,
 }
 
+/// 输出格式（spec §3.5）。`text` 给人类，`json` 单次完整对象，`ndjson` 每行一对象。
+/// `stream-json` 是 `ndjson` 的别名（spec §3.5）。
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+#[clap(rename_all = "snake_case")]
+pub enum OutputFormat {
+    Text,
+    Json,
+    #[value(alias = "stream-json")]
+    Ndjson,
+}
+
+/// stdin 结构化输入格式（spec §3.3）。helper 见 Task 7。
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+#[clap(rename_all = "snake_case")]
+pub enum InputFormat {
+    Json,
+    Yaml,
+    Ndjson,
+}
+
+/// 是否启用 ANSI color。`--no-color` 或 `NO_COLOR` env 任一存在即禁用；
+/// 否则跟随 stdout 是否 TTY。(spec §3.2 / §3.4)
+pub fn use_color(no_color_flag: bool, is_tty: bool, no_color_env: bool) -> bool {
+    !no_color_flag && !no_color_env && is_tty
+}
+
+/// 计算有效 tracing 级别。优先级：--quiet > --verbose 计数 > --log-level 基线。
+/// (spec §3.2)
+pub fn effective_log_level(base: &str, verbose: u8, quiet: bool) -> String {
+    if quiet {
+        return "error".to_string();
+    }
+    match verbose {
+        0 => base.to_string(),
+        1 => "info".to_string(),
+        2 => "debug".to_string(),
+        _ => "trace".to_string(),
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "uecm-cli", version, about = "UECM command-line interface")]
 pub struct Cli {
-    /// Emit machine-readable JSON / NDJSON instead of human-friendly output.
+    /// DEPRECATED 别名：等价 `--output json`。保留以兼容现有 docs/scripts。
     #[arg(long, global = true)]
     pub json: bool,
+
+    /// Output format: text (human) / json (single object) / ndjson (one object per line).
+    #[arg(long, short = 'o', global = true, value_enum)]
+    pub output: Option<OutputFormat>,
+
+    /// Disable ANSI color (also honors the NO_COLOR env var).
+    #[arg(long, global = true)]
+    pub no_color: bool,
+
+    /// Refuse any interactive prompt (recommended for AI / CI callers).
+    #[arg(long, global = true)]
+    pub no_input: bool,
+
+    /// Equivalent to `--log-level error`.
+    #[arg(long, short = 'q', global = true)]
+    pub quiet: bool,
+
+    /// Increase log verbosity (-v = info, -vv = debug). Overrides --log-level upward.
+    #[arg(long, short = 'v', global = true, action = clap::ArgAction::Count)]
+    pub verbose: u8,
+
+    /// Load defaults from a YAML / JSON config file (mode must be <= 0600).
+    #[arg(long, global = true)]
+    pub config: Option<std::path::PathBuf>,
+
+    /// Format of structured data read from stdin (json / yaml / ndjson).
+    #[arg(long, global = true, value_enum)]
+    pub input_format: Option<InputFormat>,
 
     /// Override DB path (otherwise resolved via startup module).
     #[arg(long, global = true, env = "UECM_DB_PATH")]
@@ -38,6 +106,28 @@ pub struct Cli {
 
     #[command(subcommand)]
     pub command: Domain,
+}
+
+impl Cli {
+    /// 解析有效输出格式。优先级：显式 --output > --json 别名 > AI_AGENT=1 env > 默认 text。
+    pub fn resolved_output(&self) -> OutputFormat {
+        let ai_agent = std::env::var("AI_AGENT").map(|v| v == "1").unwrap_or(false);
+        resolve_output(self.output, self.json, ai_agent)
+    }
+}
+
+/// 纯函数核心（可单测，不读 env）。spec §3.4：AI_AGENT=1 是 AI 调用的显式信号。
+pub fn resolve_output(output: Option<OutputFormat>, json: bool, ai_agent: bool) -> OutputFormat {
+    if let Some(fmt) = output {
+        return fmt;
+    }
+    if json {
+        return OutputFormat::Json;
+    }
+    if ai_agent {
+        return OutputFormat::Json;
+    }
+    OutputFormat::Text
 }
 
 #[derive(Subcommand, Debug)]
@@ -132,6 +222,8 @@ pub enum Domain {
         #[command(subcommand)]
         action: ZenAction,
     },
+    /// Print the Contract Manifest (canonical operation registry + schemas; spec §2 / §10.1).
+    Manifest,
 }
 
 // ---------- system ----------
@@ -153,6 +245,11 @@ pub enum SystemAction {
     Schema,
     /// Print the documented process exit-code table.
     ExitCodes,
+    /// Generate a shell completion script (bash / zsh / fish / powershell / elvish).
+    Completion {
+        /// Target shell.
+        shell: clap_complete::Shell,
+    },
 }
 
 // ---------- machine ----------
@@ -1346,6 +1443,69 @@ mod tests {
     use super::*;
     use clap::Parser;
 
+    fn cli_with(json: bool, output: Option<OutputFormat>) -> Cli {
+        Cli {
+            json,
+            output,
+            no_color: false,
+            no_input: false,
+            quiet: false,
+            verbose: 0,
+            config: None,
+            input_format: None,
+            db_path: None,
+            log_level: "warn".into(),
+            command: Domain::System { action: SystemAction::Version },
+        }
+    }
+
+    #[test]
+    fn output_explicit_wins_over_json() {
+        let cli = cli_with(true, Some(OutputFormat::Text));
+        assert_eq!(cli.resolved_output(), OutputFormat::Text);
+    }
+
+    #[test]
+    fn json_alias_maps_to_json() {
+        let cli = cli_with(true, None);
+        assert_eq!(cli.resolved_output(), OutputFormat::Json);
+    }
+
+    #[test]
+    fn default_is_text() {
+        let cli = cli_with(false, None);
+        assert_eq!(cli.resolved_output(), OutputFormat::Text);
+    }
+
+    #[test]
+    fn ai_agent_env_defaults_to_json() {
+        use super::OutputFormat;
+        // 无显式 output、无 --json，但 AI_AGENT=1 -> Json
+        assert_eq!(super::resolve_output(None, false, true), OutputFormat::Json);
+        // 显式 --output text 压过 AI_AGENT
+        assert_eq!(super::resolve_output(Some(OutputFormat::Text), false, true), OutputFormat::Text);
+        // 无任何信号 -> Text
+        assert_eq!(super::resolve_output(None, false, false), OutputFormat::Text);
+        // --json 别名仍 -> Json
+        assert_eq!(super::resolve_output(None, true, false), OutputFormat::Json);
+    }
+
+    #[test]
+    fn output_flag_round_trips_through_clap() {
+        let cli =
+            Cli::try_parse_from(["uecm-cli", "system", "version", "--output", "json"]).unwrap();
+        assert_eq!(cli.output, Some(OutputFormat::Json));
+
+        let cli = Cli::try_parse_from(["uecm-cli", "system", "version", "-o", "ndjson"]).unwrap();
+        assert_eq!(cli.output, Some(OutputFormat::Ndjson));
+
+        // `stream-json` is a clap alias for `ndjson` (spec §3.5).
+        let cli =
+            Cli::try_parse_from(["uecm-cli", "system", "version", "--output", "stream-json"])
+                .unwrap();
+        assert_eq!(cli.output, Some(OutputFormat::Ndjson));
+    }
+
     #[test]
     fn parses_machine_scan() {
         let cli = Cli::try_parse_from(["uecm-cli", "machine", "scan", "192.168.10.0/24"]).unwrap();
@@ -2017,5 +2177,48 @@ mod tests {
             "uecm-cli", "ini", "scan", "--project-id", "5", "--machine-ids", "1,2",
         ]);
         assert!(res.is_err(), "project-id and machine-ids must conflict");
+    }
+
+    #[test]
+    fn use_color_truth_table() {
+        // flag 关 + 非 TTY + 无 env -> 由 is_tty 决定
+        assert!(super::use_color(false, true, false));
+        assert!(!super::use_color(false, false, false));
+        // --no-color 一票否决
+        assert!(!super::use_color(true, true, false));
+        // NO_COLOR env 一票否决
+        assert!(!super::use_color(false, true, true));
+    }
+
+    #[test]
+    fn effective_log_level_rules() {
+        // 默认透传
+        assert_eq!(super::effective_log_level("warn", 0, false), "warn");
+        // --quiet 压到 error，优先级最高
+        assert_eq!(super::effective_log_level("debug", 2, true), "error");
+        // -v -> info, -vv -> debug，覆盖基线
+        assert_eq!(super::effective_log_level("warn", 1, false), "info");
+        assert_eq!(super::effective_log_level("warn", 2, false), "debug");
+        // -vvv 仍封顶 trace
+        assert_eq!(super::effective_log_level("warn", 5, false), "trace");
+    }
+
+    #[test]
+    fn no_input_flag_parses() {
+        let cli = Cli::try_parse_from(["uecm-cli", "--no-input", "system", "version"]).unwrap();
+        assert!(cli.no_input);
+        let cli2 = Cli::try_parse_from(["uecm-cli", "system", "version"]).unwrap();
+        assert!(!cli2.no_input);
+    }
+
+    #[test]
+    fn completion_command_parses_shell() {
+        let cli = Cli::try_parse_from(["uecm-cli", "system", "completion", "bash"]).unwrap();
+        match cli.command {
+            Domain::System { action: SystemAction::Completion { shell } } => {
+                assert_eq!(shell, clap_complete::Shell::Bash);
+            }
+            _ => panic!("expected system completion bash"),
+        }
     }
 }
