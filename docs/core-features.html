@@ -1127,6 +1127,7 @@
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine add <span class="arg">--ip 192.168.10.20</span></span></div>
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine list</span></div>
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine delete <span class="arg">7 --yes</span></span></div>
+      <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine delete <span class="arg">--all --yes</span></span></div>
       <div class="line"><span class="prompt">$</span><span class="cmd">uecm-cli machine refresh <span class="arg">3</span></span></div>
     </div>
     <p class="mode-note" style="margin-top:14px">
@@ -1153,10 +1154,11 @@
         <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::machines::list_machines</span> · 机器列表</span></div>
       </div>
       <div class="cmd-note">
-        <span class="cn-cmd">uecm-cli machine delete <span class="arg">&lt;id&gt; --yes</span></span>
-        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">从库里删掉一台机器(按 id)</span></div>
-        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">清理 scan 误加 / 重复 / 不再管的机器,让库只留要部署的渲染节点(库是持久的,跨 session 累积,要手动清)</span></div>
-        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::machines::delete_machine</span> · 列表行删除入口(单台;UI 后续可做批量清空)</span></div>
+        <span class="cn-cmd">uecm-cli machine delete <span class="arg">&lt;id&gt; --yes</span> · <span class="arg">--machine-ids 1,2,3</span> · <span class="arg">--all</span></span>
+        <div class="cn-row"><span class="cn-k">功能</span><span class="cn-v">从库里删机器,三种目标互斥:位置参数 <span class="k">&lt;id&gt;</span> 删单台 · <span class="k">--machine-ids 1,2,3</span> 批量删指定几台 · <span class="k">--all</span> <strong>一键清空整个库</strong></span></div>
+        <div class="cn-row"><span class="cn-k">作用</span><span class="cn-v">清理 scan 误加 / 重复 / 不再管的机器,让库只留要部署的渲染节点(库是持久的,跨 session 累积,要手动清)。<strong>纯本地 DB 操作,不发远程调用,mac 上也能跑</strong></span></div>
+        <div class="cn-row"><span class="cn-k">参数</span><span class="cn-v"><span class="k">--yes</span> 强制确认(CLI 不交互,只给目标不给 --yes/--dry-run 会报错退出);<span class="k">--dry-run</span> 只预览删哪些不真删(与 --yes 同给时 dry-run 优先);<span class="k">--machine-ids</span> 任一 id 不存在则整批拒绝、一台不删(无半途删)</span></div>
+        <div class="cn-row"><span class="cn-k">UI</span><span class="cn-v"><span class="cn-ui">commands::machines::delete_machine</span> · 列表行删除入口(仅单台 id;<span class="k">--machine-ids</span> / <span class="k">--all</span> 批量清空目前 <span class="cn-ui none">✗ 仅 CLI</span>)</span></div>
       </div>
       <div class="cmd-note">
         <span class="cn-cmd">uecm-cli machine refresh <span class="arg">&lt;id&gt;</span></span>
