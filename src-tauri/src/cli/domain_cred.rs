@@ -126,8 +126,6 @@ fn build_credential_record(
 }
 
 fn delete(ctx: &mut Ctx<'_>, alias: &str, yes: bool, dry_run: bool) -> UecmResult<()> {
-    use crate::core::credentials as core_creds;
-
     let outcome = destructive::check(yes, dry_run, "cred.delete")?;
 
     let db = ctx.require_db()?;
@@ -140,49 +138,25 @@ fn delete(ctx: &mut Ctx<'_>, alias: &str, yes: bool, dry_run: bool) -> UecmResul
             serde_json::json!({
                 "alias": alias,
                 "exists_in_db": exists,
-                "side_effects": ["cmdkey delete", "SQLite delete", "SecretStore delete (best-effort)", "DPAPI delete (best-effort)"],
+                "side_effects": ["SQLite delete", "SecretStore delete (best-effort)"],
             }),
         );
         return Ok(());
     }
 
-    // Step 1: cmdkey delete — keep result, propagate at the end. cmdkey lives only
-    // in the Windows Credential Manager; on a non-Windows operator there is
-    // nothing to delete (and the PS sidecar is Windows-only, so an unconditional
-    // call would always "fail" after the row below is cleared). On Windows surface
-    // a genuine failure — cred-delete.ps1 is idempotent, so an alias with no entry
-    // (e.g. a SecretStore-backed Share) returns Ok.
-    let cm_result = if cfg!(target_os = "windows") {
-        core_creds::delete(alias)
-    } else {
-        Ok(())
-    };
-
-    // Step 2: SQLite delete — environment error if this fails, propagate now.
+    // SQLite delete — environment error if this fails, propagate now.
     data_creds::delete_by_alias(db, alias)?;
 
-    // Step 3: SecretStore delete (the Share svc-secret home since the SSH
-    // migration) — best-effort, mirrors the Tauri delete_credential cleanup so a
-    // CLI delete doesn't leave the AES secret orphaned on disk.
+    // SecretStore delete — best-effort (mirrors the Tauri delete_credential
+    // cleanup so a CLI delete doesn't leave the AES secret orphaned on disk).
     if let Err(e) = crate::core::secrets::SecretStore::from_config().and_then(|s| s.delete(alias)) {
         tracing::warn!(alias = %alias, error = %e, "SecretStore delete failed; orphan secret may remain");
     }
 
-    // Step 4: DPAPI best-effort.
-    if let Err(e) = core_creds::delete_password(alias) {
-        tracing::warn!(
-            alias = %alias,
-            error = %e,
-            "DPAPI delete_password failed; orphan entry will remain in creds.bin"
-        );
-    }
-
-    // Step 5: surface cmdkey result.
-    cm_result.map(|_| {
-        let _ = ctx.emitter.emit_event(&crate::cli::output::Event::Completed {
-            summary: serde_json::json!({ "alias": alias, "deleted": true }),
-        });
-    })
+    let _ = ctx.emitter.emit_event(&crate::cli::output::Event::Completed {
+        summary: serde_json::json!({ "alias": alias, "deleted": true }),
+    });
+    Ok(())
 }
 
 #[cfg(test)]
