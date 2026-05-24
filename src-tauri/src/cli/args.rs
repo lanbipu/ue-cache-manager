@@ -47,6 +47,20 @@ pub fn use_color(no_color_flag: bool, is_tty: bool, no_color_env: bool) -> bool 
     !no_color_flag && !no_color_env && is_tty
 }
 
+/// 计算有效 tracing 级别。优先级：--quiet > --verbose 计数 > --log-level 基线。
+/// (spec §3.2)
+pub fn effective_log_level(base: &str, verbose: u8, quiet: bool) -> String {
+    if quiet {
+        return "error".to_string();
+    }
+    match verbose {
+        0 => base.to_string(),
+        1 => "info".to_string(),
+        2 => "debug".to_string(),
+        _ => "trace".to_string(),
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "uecm-cli", version, about = "UECM command-line interface")]
 pub struct Cli {
@@ -2096,5 +2110,18 @@ mod tests {
         assert!(!super::use_color(true, true, false));
         // NO_COLOR env 一票否决
         assert!(!super::use_color(false, true, true));
+    }
+
+    #[test]
+    fn effective_log_level_rules() {
+        // 默认透传
+        assert_eq!(super::effective_log_level("warn", 0, false), "warn");
+        // --quiet 压到 error，优先级最高
+        assert_eq!(super::effective_log_level("debug", 2, true), "error");
+        // -v -> info, -vv -> debug，覆盖基线
+        assert_eq!(super::effective_log_level("warn", 1, false), "info");
+        assert_eq!(super::effective_log_level("warn", 2, false), "debug");
+        // -vvv 仍封顶 trace
+        assert_eq!(super::effective_log_level("warn", 5, false), "trace");
     }
 }

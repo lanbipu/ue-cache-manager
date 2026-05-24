@@ -88,7 +88,8 @@ fn needs_db(cmd: &Domain) -> bool {
 
 pub fn run(cli: Cli) -> i32 {
     // tracing init
-    let filter = tracing_subscriber::EnvFilter::try_new(&cli.log_level)
+    let level = crate::cli::args::effective_log_level(&cli.log_level, cli.verbose, cli.quiet);
+    let filter = tracing_subscriber::EnvFilter::try_new(&level)
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
