@@ -13,25 +13,20 @@ pub struct CredentialArgs {
     #[arg(long, value_name = "ALIAS", group = "cred")]
     pub cred_alias: Option<String>,
 
-    /// Inline username; use with --pass or --pass-stdin.
+    /// Inline username; use with --pass-stdin.
     #[arg(long, value_name = "USER", group = "cred", requires = "secret")]
     pub user: Option<String>,
 
-    /// Inline password. Leaks into shell history — prefer --pass-stdin
-    /// or --cred-alias.
-    #[arg(
-        long,
-        value_name = "PASS",
-        group = "secret",
-        conflicts_with_all = ["pass_stdin", "cred_alias"]
-    )]
+    /// Internal-only password carrier (set by `inline()`); NOT a CLI flag.
+    /// Passwords arrive via --pass-stdin or --cred-alias (spec §9: no argv secrets).
+    #[arg(skip)]
     pub pass: Option<String>,
 
     /// Read password from stdin (one line, \r\n trimmed).
     #[arg(
         long,
         group = "secret",
-        conflicts_with_all = ["pass", "cred_alias"]
+        conflicts_with_all = ["cred_alias"]
     )]
     pub pass_stdin: bool,
 }
@@ -187,5 +182,15 @@ mod tests {
         let db = fresh_db();
         let r = args.resolve(&db);
         assert!(matches!(r, Err(UecmError::InvalidInput(_))));
+    }
+
+    #[test]
+    fn pass_flag_is_not_accepted_on_cli() {
+        use crate::cli::args::Cli;
+        use clap::Parser;
+        let r = Cli::try_parse_from(["uecm-cli","machine","refresh","1","--user","u","--pass","p"]);
+        assert!(r.is_err(), "--pass should no longer be a CLI flag");
+        let ok = Cli::try_parse_from(["uecm-cli","machine","refresh","1","--user","u","--pass-stdin"]);
+        assert!(ok.is_ok());
     }
 }
