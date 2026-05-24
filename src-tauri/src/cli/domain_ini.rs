@@ -12,7 +12,8 @@ use crate::core::ini_scanner::{self, ScanInputs};
 use crate::core::ini_diagnostics::EnvVarState;
 use crate::core::env_vars;
 use crate::data::{
-    ini_findings, machine_ue_installs, machines as data_machines, scan_runs, IniFinding,
+    ini_config_snapshots, ini_findings, machine_ue_installs, machines as data_machines,
+    scan_runs, IniFinding,
 };
 use crate::error::{UecmError, UecmResult};
 use serde::Serialize;
@@ -700,6 +701,21 @@ fn scan_cluster(
                 }
                 ini_findings::insert(&db, &row)?;
             }
+            // Persist config snapshots (DDC/PSO/Zen actual values).
+            for entry in &outcome.config_snapshots {
+                ini_config_snapshots::insert(&db, &ini_config_snapshots::ConfigSnapshot {
+                    id: None,
+                    scan_run_id,
+                    machine_id: mid,
+                    file_path: entry.file_path.clone(),
+                    ue_version: ue_version_hint.clone(),
+                    domain: entry.domain.to_string(),
+                    section: entry.section.clone(),
+                    key_name: entry.key_name.clone(),
+                    value: entry.value.clone(),
+                    line_number: Some(entry.line_number),
+                })?;
+            }
             Ok((crit, warn, healthy, info, read_count, m_errors, m_not_found))
         };
 
@@ -902,4 +918,70 @@ mod tests {
     // auth `ini remove` no longer requires an operator credential — the
     // require-creds gate it asserted was deleted in P4. The no-credential path is
     // covered by the loopback set/read/remove tests in core::ini_editor.)
+
+    #[cfg(not(windows))]
+    #[test]
+    fn scan_persists_config_snapshots_to_db() {
+        use crate::data::{ini_config_snapshots, machines as data_machines, machine_ue_installs, scan_runs};
+
+        let db = fresh_db();
+
+        // Insert a machine with IP "localhost" so the loopback path is used
+        // by read_local_file (no SSH/WinRM needed in unit tests).
+        let mid = data_machines::insert(
+            &db,
+            &data_machines::Machine::new("TEST-NODE", "localhost"),
+        )
+        .unwrap();
+
+        // Create a temp dir that serves as the UE install root.
+        // enumerate_engine_paths produces: "<install_path>\\Engine\\Config\\BaseEngine.ini"
+        // On non-Windows, the backslashes are literal filename characters —
+        // std::fs::write and std::fs::read_to_string both use the same string,
+        // so the round-trip works correctly (mirrors Task 2.4's approach).
+        let install_dir = tempfile::tempdir().unwrap();
+        let install_path = install_dir.path().to_string_lossy().to_string();
+        let engine_ini_path = format!("{}\\Engine\\Config\\BaseEngine.ini", install_path);
+        std::fs::write(
+            &engine_ini_path,
+            "[DerivedDataBackendGraph]\nRoot=(Type=KeyLength)\n",
+        )
+        .unwrap();
+
+        machine_ue_installs::upsert(
+            &db,
+            &machine_ue_installs::UeInstall {
+                id: None,
+                machine_id: mid,
+                version: "5.4".to_string(),
+                install_path: install_path.clone(),
+                is_primary: true,
+                zen_cli_intree_path: None,
+                zen_cli_intree_version: None,
+                zen_cli_intree_sha256: None,
+                zenserver_intree_path: None,
+                zenserver_intree_version: None,
+                zenserver_intree_sha256: None,
+            },
+        )
+        .unwrap();
+
+        let mut buf: Vec<u8> = Vec::new();
+        let mut ctx = make_ctx(&mut buf, &db);
+        let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false };
+        scan_cluster(&mut ctx, &[mid], &cred).unwrap();
+
+        let run_id = scan_runs::list_recent(&db, "ini", 1).unwrap()[0]
+            .id
+            .unwrap();
+        let snapshots = ini_config_snapshots::list_for_run(&db, run_id).unwrap();
+        assert!(
+            snapshots.iter().any(|s| s.domain == "ddc" && s.key_name == "Root"),
+            "expected ddc/Root in ini_config_snapshots, got: {:?}",
+            snapshots
+                .iter()
+                .map(|s| (s.domain.as_str(), s.key_name.as_str()))
+                .collect::<Vec<_>>()
+        );
+    }
 }

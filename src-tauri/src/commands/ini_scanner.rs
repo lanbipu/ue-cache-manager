@@ -6,7 +6,7 @@ use crate::core::ini_diagnostics::EnvVarState;
 use crate::core::ini_scanner::{self, ScanInputs};
 use crate::core::env_vars;
 use crate::data::{
-    ini_findings, machine_ue_installs,
+    ini_config_snapshots, ini_findings, machine_ue_installs,
     machines as data_machines, scan_runs, Db, IniFinding,
 };
 use crate::error::{UecmError, UecmResult};
@@ -175,6 +175,21 @@ fn scan_inis_summary(
                 _ => {}
             }
             ini_findings::insert(&db, &row)?;
+        }
+        // Persist config snapshots (DDC/PSO/Zen actual values).
+        for entry in &outcome.config_snapshots {
+            ini_config_snapshots::insert(&db, &ini_config_snapshots::ConfigSnapshot {
+                id: None,
+                scan_run_id: scan_id,
+                machine_id: mid,
+                file_path: entry.file_path.clone(),
+                ue_version: ue_version_hint.clone(),
+                domain: entry.domain.to_string(),
+                section: entry.section.clone(),
+                key_name: entry.key_name.clone(),
+                value: entry.value.clone(),
+                line_number: Some(entry.line_number),
+            })?;
         }
     }
 
