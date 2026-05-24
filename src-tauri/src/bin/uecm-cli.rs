@@ -1,11 +1,13 @@
 //! `uecm-cli` entry point.
 //!
 //! Two-stage parse:
-//! 1. Sniff `--json` from raw argv so we know how to format clap parse errors
-//!    (the structured `Cli` is not available yet at that point).
+//! 1. Sniff structured-output intent (`--json` alias plus `--output`/`-o
+//!    json|ndjson|stream-json`) from raw argv so we know how to format clap
+//!    parse errors (the structured `Cli` is not available yet at that point).
 //! 2. Try the real parse; on failure emit a JSON error envelope to stderr
-//!    (exit 64 = sysexits.h EX_USAGE) when `--json` is set, otherwise let
-//!    clap render its native usage message and exit with its default code.
+//!    (exit 64 = sysexits.h EX_USAGE) when structured output was requested,
+//!    otherwise let clap render its native usage message and exit with its
+//!    default code.
 
 use clap::error::ErrorKind;
 use clap::Parser;
@@ -24,6 +26,9 @@ fn main() {
         let s = a.as_os_str();
         s == "--json"
             || s == "--output=json" || s == "--output=ndjson" || s == "--output=stream-json"
+            // Best-effort only, for error formatting — clap's canonical short
+            // form is `-o json` (the `=` glued forms below aren't clap-valid
+            // but cost nothing to recognize here).
             || s == "-o=json" || s == "-o=ndjson" || s == "-o=stream-json"
             || ((s == "--output" || s == "-o")
                 && argv.get(i + 1).map(|n| {

@@ -101,7 +101,7 @@ pub fn run(cli: Cli) -> i32 {
         Some(p) => PathBuf::from(p),
         None => match startup::resolve_db_path() {
             Ok(p) => p,
-            Err(e) => return finish_error(&e, cli.json),
+            Err(e) => return finish_error(&e, startup_error_is_json(&cli)),
         },
     };
 
@@ -109,7 +109,7 @@ pub fn run(cli: Cli) -> i32 {
     let db = if needs_db(&cli.command) {
         match startup::open_and_migrate_db(&db_path) {
             Ok(db) => Some(db),
-            Err(e) => return finish_error(&e, cli.json),
+            Err(e) => return finish_error(&e, startup_error_is_json(&cli)),
         }
     } else {
         None
@@ -160,6 +160,13 @@ pub fn run(cli: Cli) -> i32 {
             exit_code_for(&e)
         }
     }
+}
+
+/// Whether startup-phase errors (db-path resolve / db open, before the emitter
+/// exists) should be rendered as JSON. Honors `--output json|ndjson` and the
+/// `--json` alias via the resolved format, not just the raw `--json` bool.
+fn startup_error_is_json(cli: &Cli) -> bool {
+    !matches!(cli.resolved_output(), crate::cli::args::OutputFormat::Text)
 }
 
 fn finish_error(err: &UecmError, json: bool) -> i32 {

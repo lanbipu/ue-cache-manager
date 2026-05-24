@@ -35,10 +35,14 @@ pub enum OutputFormat {
 /// stdin 结构化输入格式（spec §3.3）。helper 见 Task 7。
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 #[clap(rename_all = "snake_case")]
-pub enum InputFormat { Json, Yaml, Ndjson }
+pub enum InputFormat {
+    Json,
+    Yaml,
+    Ndjson,
+}
 
-/// 是否启用 ANSI color。`--no-color` 或 `NO_COLOR` env 任一存在即禁用；
-/// 否则跟随 stdout 是否 TTY。临时 2 参数版本（Task 2 替换为 3 参数版本 + 测试）。
+/// 是否启用 ANSI color。当前临时 2 参数版本只看 `--no-color` flag + stdout 是否
+/// TTY；`NO_COLOR` env 支持在 Task 2 的 3 参数版本里补上（届时会一并加测试）。
 pub fn use_color(no_color_flag: bool, is_tty: bool) -> bool { !no_color_flag && is_tty }
 
 #[derive(Parser, Debug)]
@@ -1427,6 +1431,22 @@ mod tests {
     fn default_is_text() {
         let cli = cli_with(false, None);
         assert_eq!(cli.resolved_output(), OutputFormat::Text);
+    }
+
+    #[test]
+    fn output_flag_round_trips_through_clap() {
+        let cli =
+            Cli::try_parse_from(["uecm-cli", "system", "version", "--output", "json"]).unwrap();
+        assert_eq!(cli.output, Some(OutputFormat::Json));
+
+        let cli = Cli::try_parse_from(["uecm-cli", "system", "version", "-o", "ndjson"]).unwrap();
+        assert_eq!(cli.output, Some(OutputFormat::Ndjson));
+
+        // `stream-json` is a clap alias for `ndjson` (spec §3.5).
+        let cli =
+            Cli::try_parse_from(["uecm-cli", "system", "version", "--output", "stream-json"])
+                .unwrap();
+        assert_eq!(cli.output, Some(OutputFormat::Ndjson));
     }
 
     #[test]
