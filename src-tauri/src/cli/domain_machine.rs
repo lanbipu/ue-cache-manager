@@ -414,6 +414,17 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64, cred: &crate::cli::credential_args::Crede
         // online/offline tokens with anything else).
     }
 
+    // Human-mode: list the UE installs we just detected/persisted, before
+    // the `done` summary line. JSON consumers get the count in summary.
+    if !ctx.json_mode {
+        let installs = {
+            let db = ctx.require_db()?;
+            machine_ue_installs::list_for_machine(db, id)?
+        };
+        let tbl = render_ue_installs_table(&installs);
+        ctx.emitter.emit_text(&tbl).ok();
+    }
+
     let summary = json!({
         "machine_id": id,
         "ue_versions": detected_ue.len(),
@@ -1102,6 +1113,49 @@ mod tests {
         assert!(out.contains("24576"));
         let amd_line = out.lines().find(|l| l.contains("AMD Radeon Pro")).unwrap();
         assert!(amd_line.contains("N/A"));
+    }
+
+    /// Fake executor that returns a successful probe + hardcoded UE/GPU JSON.
+    /// Dispatches based on the script name so both detect_ue_versions and
+    /// detect_gpus get plausible output.
+    struct FakeRefreshExec;
+    impl RemoteExecutor for FakeRefreshExec {
+        fn run(&self, _host: &str, script: &NodeScript) -> UecmResult<ScriptOutput> {
+            let stdout = match script.name {
+                "query-ue-versions.ps1" =>
+                    r#"[{"version":"5.4","install_path":"C:\\UE_5.4"}]"#.to_string(),
+                "query-gpu-driver.ps1" =>
+                    r#"[{"gpu_model":"RTX 4090","driver_version":"551.86","vendor":"nvidia","vram_mb":24576}]"#.to_string(),
+                _ => "[]".to_string(),
+            };
+            Ok(ScriptOutput { stdout, stderr: String::new(), exit_code: 0 })
+        }
+        fn probe(&self, _host: &str, _user: Option<&str>) -> UecmResult<ProbeResult> {
+            Ok(ProbeResult { ok: true, message: "ok".into(), latency_ms: 1 })
+        }
+    }
+
+    #[test]
+    fn refresh_human_mode_lists_installs_before_done() {
+        use crate::cli::output::{Emitter, HumanEmitter};
+        use crate::data::{open_in_memory, schema};
+        let db = open_in_memory().unwrap();
+        { let mut c = db.lock().unwrap(); schema::migrate(&mut c).unwrap(); }
+        let id = machines::insert(&db, &machines::Machine::new("RENDER-01", "10.0.0.1")).unwrap();
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        {
+            let emitter: Box<dyn Emitter> = Box::new(HumanEmitter::new(&mut stdout, &mut stderr, false));
+            let mut ctx = Ctx { db: Some(db.clone()), db_path: std::path::PathBuf::from(":memory:"),
+                emitter, json_mode: false };
+            let cred = crate::cli::credential_args::CredentialArgs::inline(None);
+            refresh(&mut ctx, id, &cred, &FakeRefreshExec).unwrap();
+        }
+        let s = String::from_utf8(stdout).unwrap();
+        // The UE installs table must appear in human-mode output before the done summary.
+        assert!(s.contains("VERSION"), "stdout should contain the table header VERSION; got:\n{}", s);
+        assert!(s.contains("5.4"), "stdout should contain the detected version 5.4; got:\n{}", s);
     }
 
     #[test]
