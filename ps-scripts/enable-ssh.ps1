@@ -71,6 +71,13 @@ function Enable-UecmLocalAdmin {
     if ([string]::IsNullOrWhiteSpace($name)) {
         throw 'CreateLocalAdmin requested but -LocalAdminName is empty'
     }
+    # UECM's SshExecutor always logs in as 'uecm-svc' (the per-node ssh_user is
+    # not yet plumbed through), so onboarding any other account name would create
+    # a node that reports ready here but is unreachable for every migrated SSH
+    # operation. Reject a non-uecm-svc name rather than producing that mismatch.
+    if ($name -ne 'uecm-svc') {
+        throw "LocalAdminName must be 'uecm-svc' (UECM connects as uecm-svc); got '$name'"
+    }
     if ([string]::IsNullOrWhiteSpace($LocalAdminPassword)) {
         throw "CreateLocalAdmin requested but -LocalAdminPassword is empty for account '$name'"
     }
