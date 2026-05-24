@@ -12,9 +12,12 @@ param(
     [string]$OutputDirectory = (Join-Path (Get-Location) 'UECM-WinRM-Bootstrap'),
     [string]$LocalAdminName = '',
     [string]$LocalAdminPassword = '',
-    # Path to the UECM transport public key (keystore's uecm_ed25519.pub). When set,
-    # enable-ssh.ps1 + uecm.pub are added so the package also onboards SSH transport.
-    [string]$UecmPublicKeyPath = ''
+    # Path to the UECM transport public key (keystore's uecm_ed25519.pub). REQUIRED:
+    # the package always onboards SSH transport (enable-ssh.ps1 + uecm.pub), the
+    # primary transport for all migrated commands. A WinRM-only package can't serve
+    # them, and its .cmd would just fail readiness, so it is no longer produced.
+    [Parameter(Mandatory = $true)]
+    [string]$UecmPublicKeyPath
 )
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -79,25 +82,25 @@ try {
     $targetReadme = Join-Path $OutputDirectory 'README.txt'
     Copy-Item -Path $sourceReadme -Destination $targetReadme -Force
 
-    # SSH transport onboarding files (parallel to WinRM during migration). Only
-    # included when an operator public key is supplied; otherwise the package stays
-    # WinRM-only and the .cmd's SSH step no-ops (it guards on both files existing).
-    $sshIncluded = $false
+    # SSH transport onboarding files — always included (the public key is required),
+    # because SSH is the primary transport for every migrated command and the .cmd
+    # now fails readiness without them.
+    $sshIncluded = $true
     $sourceSshPs1 = Join-Path $scriptRoot 'enable-ssh.ps1'
-    if (-not [string]::IsNullOrWhiteSpace($UecmPublicKeyPath)) {
-        if (-not (Test-Path $sourceSshPs1)) { throw "enable-ssh.ps1 not found at $sourceSshPs1" }
-        if (-not (Test-Path $UecmPublicKeyPath)) { throw "UECM public key not found at $UecmPublicKeyPath" }
-        Copy-Item -Path $sourceSshPs1 -Destination (Join-Path $OutputDirectory 'enable-ssh.ps1') -Force
-        $pub = (Get-Content -Raw $UecmPublicKeyPath).Trim()
-        $encNoBom = New-Object System.Text.UTF8Encoding $false
-        [System.IO.File]::WriteAllText((Join-Path $OutputDirectory 'uecm.pub'), $pub + "`n", $encNoBom)
-        # PsExec64 is required by inject-system-credential.ps1 to write the SYSTEM
-        # cmdkey; enable-ssh.ps1 installs it on the node from this package dir.
-        $sourcePsExec = Join-Path (Split-Path -Parent $scriptRoot) 'vendor\PsExec64.exe'
-        if (-not (Test-Path $sourcePsExec)) { throw "PsExec64.exe not found at $sourcePsExec (needed for SSH SYSTEM-cred injection)" }
-        Copy-Item -Path $sourcePsExec -Destination (Join-Path $OutputDirectory 'PsExec64.exe') -Force
-        $sshIncluded = $true
+    if ([string]::IsNullOrWhiteSpace($UecmPublicKeyPath)) {
+        throw "-UecmPublicKeyPath is required (the package always onboards SSH transport)"
     }
+    if (-not (Test-Path $sourceSshPs1)) { throw "enable-ssh.ps1 not found at $sourceSshPs1" }
+    if (-not (Test-Path $UecmPublicKeyPath)) { throw "UECM public key not found at $UecmPublicKeyPath" }
+    Copy-Item -Path $sourceSshPs1 -Destination (Join-Path $OutputDirectory 'enable-ssh.ps1') -Force
+    $pub = (Get-Content -Raw $UecmPublicKeyPath).Trim()
+    $encNoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText((Join-Path $OutputDirectory 'uecm.pub'), $pub + "`n", $encNoBom)
+    # PsExec64 is required by inject-system-credential.ps1 to write the SYSTEM
+    # cmdkey; enable-ssh.ps1 installs it on the node from this package dir.
+    $sourcePsExec = Join-Path (Split-Path -Parent $scriptRoot) 'vendor\PsExec64.exe'
+    if (-not (Test-Path $sourcePsExec)) { throw "PsExec64.exe not found at $sourcePsExec (needed for SSH SYSTEM-cred injection)" }
+    Copy-Item -Path $sourcePsExec -Destination (Join-Path $OutputDirectory 'PsExec64.exe') -Force
 
     $files = New-Object System.Collections.ArrayList
     [void]$files.AddRange(@('UECM-Bootstrap.cmd', 'UECM-Bootstrap-WinRM.ps1', 'README.txt'))

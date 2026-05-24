@@ -229,11 +229,13 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64, cred: &crate::cli::credential_args::Crede
         (machine.ip.clone(), machine.hostname.clone())
     };
 
-    // Resolve credentials once for the whole refresh (probe + UE detect + GPU detect).
-    let creds = {
+    // SSH key auth: refresh (probe + UE detect + GPU detect) needs no operator
+    // credential. preflight validates --cred-alias existence / flag combo without
+    // reading DPAPI or stdin for a credential that would only be discarded.
+    {
         let db = ctx.require_db()?;
-        cred.resolve(db)?
-    };
+        cred.preflight(db)?;
+    }
 
     ctx.emitter
         .emit_event(&Event::Started {
@@ -242,7 +244,8 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64, cred: &crate::cli::credential_args::Crede
             metadata: serde_json::json!({
                 "ip": host,
                 "hostname": hostname_for_log,
-                "authenticated": creds.is_some(),
+                // SSH key auth always authenticates as uecm-svc.
+                "authenticated": true,
             }),
         })
         .ok();
@@ -379,7 +382,8 @@ fn refresh(ctx: &mut Ctx<'_>, id: i64, cred: &crate::cli::credential_args::Crede
         "ue_versions": detected_ue.len(),
         "gpus": detected_gpus.len(),
         "latency_ms": probe.latency_ms,
-        "authenticated": creds.is_some(),
+        // SSH key auth always authenticates as uecm-svc.
+        "authenticated": true,
     });
     ctx.emitter.emit_event(&Event::Completed { summary }).ok();
     Ok(())

@@ -437,23 +437,25 @@ try {
     # failed/partial account prep must drag readiness to NOT ready (the prep step
     # only WARNs on failure; this end-state probe is the hard gate). Verify the
     # actual end state: exists + enabled + in Administrators (SID S-1-5-32-544).
-    $svcAccountReady = $true
-    if ($CreateLocalAdmin) {
-        $svcAccountReady = $false
-        try {
-            $svcUser = Get-LocalUser -Name $LocalAdminName -ErrorAction SilentlyContinue
-            $svcInAdmins = $false
-            if ($svcUser) {
-                $svcInAdmins = [bool](@(Get-LocalGroupMember -SID 'S-1-5-32-544' -ErrorAction SilentlyContinue) |
-                    Where-Object { $_.SID -eq $svcUser.SID })
-            }
-            # $localAdminOk folds in the prep STEP's success: if Enable-UecmLocalAdmin
-            # threw (e.g. Set-LocalUser -Password failed on an existing account due to
-            # password policy / min-age), the account may still be exists+enabled+in-admins
-            # yet the recorded password was never applied -> not ready.
-            $svcAccountReady = [bool]($localAdminOk -and $svcUser -and $svcUser.Enabled -and $svcInAdmins)
-        } catch { $svcAccountReady = $false }
-    }
+    # SshExecutor ALWAYS logs in as 'uecm-svc', so readiness must verify that
+    # account exists + is enabled + is a local admin UNCONDITIONALLY -- even when
+    # this run didn't create it (-CreateLocalAdmin omitted, e.g. empty
+    # UECM_LOCAL_ADMIN_PASSWORD, or -CheckOnly). Otherwise the script could report
+    # ok for a node UECM can never SSH into.
+    $svcAccountReady = $false
+    try {
+        $svcUser = Get-LocalUser -Name 'uecm-svc' -ErrorAction SilentlyContinue
+        $svcInAdmins = $false
+        if ($svcUser) {
+            $svcInAdmins = [bool](@(Get-LocalGroupMember -SID 'S-1-5-32-544' -ErrorAction SilentlyContinue) |
+                Where-Object { $_.SID -eq $svcUser.SID })
+        }
+        # $localAdminOk folds in this run's prep STEP (it stays true when prep was
+        # skipped): if Enable-UecmLocalAdmin threw (e.g. Set-LocalUser -Password
+        # failed on an existing account due to password policy / min-age), the
+        # recorded password may never have been applied -> not ready.
+        $svcAccountReady = [bool]($localAdminOk -and $svcUser -and $svcUser.Enabled -and $svcInAdmins)
+    } catch { $svcAccountReady = $false }
     $ok = $capInstalled -and $sshdRunning -and $keyAuthorized -and $svcAccountReady
     if ($ok) {
         $msg = "SSH onboarding complete"
