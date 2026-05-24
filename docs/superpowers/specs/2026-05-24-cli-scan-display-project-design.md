@@ -1,6 +1,7 @@
 # CLI 扫描展示增强 + Project 深扫 — 设计 Spec
 
 - **日期**: 2026-05-24
+- **修订**: Rev 2（已纳入 Codex 对抗性 review 的 #1/#2/#3 处置，见 §11）
 - **状态**: 设计已批准（brainstorming 阶段），待实现计划（writing-plans）
 - **关联**: CLI 全覆盖目标；feature03（ini scan）/ project 域
 - **范围**: 仅 uecm-cli（CLI）。UI 版 `scan_inis` 已支持 project_roots，不在本 spec 改动范围。
@@ -62,17 +63,19 @@ human 模式接管 `emit_value` 渲染，输出三块对齐表格：
 
 | domain | 抓取目标 | 来源核对 |
 |---|---|---|
-| `ddc` | `[DerivedDataBackendGraph]` section 全部 key（Root / Local / Shared / Pak / Cloud 等后端图节点） | `ini_backend_graph` / `BackendGraphAction` 操作的 section |
+| `ddc` | `[DerivedDataBackendGraph]` 全部 key（Root / Local / Shared / Pak / Cloud 后端图节点）＋ `[/Script/UnrealEd.DerivedDataCacheSettings]` ＋ **`[InstalledDerivedDataBackendGraph]` 里的 legacy DDC 键（`Shared` / `Pak` / `CompressedPak`）** | `ini_backend_graph` 操作的 section；`ini_diagnostics_zen.rs` 确认 InstalledDDBG 的 Shared/Pak/CompressedPak 是 legacy DDC backend |
 | `pso` | 名字匹配 `r.PSOPrecaching` / `r.PSOPrecache.*` / `r.ShaderPipelineCache.*` 的 cvar（跨 section） | `ini_diagnostics.rs` R008 `r.PSOPrecaching`、R009 `r.PSOPrecache.Compile`、R010 `r.PSOPrecache.GlobalShaders`、R024 `r.ShaderPipelineCache.Enabled` |
-| `zen` | `[InstalledDerivedDataBackendGraph]` section 全部 key（`ZenShared` / `Shared` / Root 等节点） | `ini_diagnostics_zen.rs`（ZenShared / InstalledDerivedDataBackendGraph / legacy Shared） |
+| `zen` | `[InstalledDerivedDataBackendGraph]` 全部 key（`ZenShared` / `Shared` / `Pak` / `CompressedPak` / Root 节点） | `ini_diagnostics_zen.rs:847/857/870` + `docs/research/zen-ini-rules.yaml`（section: InstalledDerivedDataBackendGraph） |
 
 **设计原则**：抓"整个关注 section 的所有 key"（DDC/Zen 是 section-based）+ "匹配前缀的所有 cvar"（PSO 是 cvar-based），而非预定义每个 key —— UE 版本演进导致 key 变化时也能如实抓到实际配置。**不抓关注 section 之外的全文配置**（避免信息爆炸，这正是用户反对的"信息量太大"）。
 
-**注**：DDC 诊断规则用的 `DDC_SECTION = "/Script/UnrealEd.DerivedDataCacheSettings"` 与后端图 `[DerivedDataBackendGraph]` 是两个不同 section。`ddc` domain **两个都抓**（均标 `domain='ddc'`）：`[DerivedDataBackendGraph]`（后端图，主来源）+ `[/Script/UnrealEd.DerivedDataCacheSettings]`（DDC settings）。
+**双标处理（Codex #3）**：`[InstalledDerivedDataBackendGraph]` 既是 Zen upstream 也承载 legacy DDC backend（`Shared`/`Pak`/`CompressedPak`）。其 legacy DDC 键**同时**产出 `domain='ddc'` 和 `domain='zen'` 两条 snapshot 行（domain 列保持单值、便于 `WHERE domain=` 查询），保证 `ini config --domain ddc` 不漏掉 installed-build 的 DDC 拓扑、`--domain zen` 也完整。`ZenShared` 等纯 zen 键只标 `zen`。
+
+**注**：DDC 诊断规则用的 `DDC_SECTION = "/Script/UnrealEd.DerivedDataCacheSettings"` 与后端图 `[DerivedDataBackendGraph]` 是两个不同 section，二者都纳入 `ddc`。
 
 ### 4.2 数据模型（新表 + 迁移）
 
-新增 `ini_config_snapshots`（列风格参照 `ini_findings`）：
+新增 `ini_config_snapshots`（列风格 + FK cascade 参照 `ini_findings`，schema.rs:118-119 已是此模式）：
 
 ```sql
 CREATE TABLE IF NOT EXISTS ini_config_snapshots (
@@ -81,17 +84,21 @@ CREATE TABLE IF NOT EXISTS ini_config_snapshots (
     machine_id   INTEGER NOT NULL,
     file_path    TEXT NOT NULL,        -- 目标机上绝对路径
     ue_version   TEXT,                 -- 关联引擎版本(可空)
-    domain       TEXT NOT NULL,        -- 'ddc' | 'pso' | 'zen'
+    domain       TEXT NOT NULL,        -- 'ddc' | 'pso' | 'zen' (单值; 见 §4.1 双标)
     section      TEXT NOT NULL,        -- INI [section]; PSO cvar 记其所在 section
     key_name     TEXT NOT NULL,
     value        TEXT NOT NULL,
-    line_number  INTEGER               -- 1-based, 可空
+    line_number  INTEGER,              -- 1-based, 可空
+    FOREIGN KEY (scan_run_id) REFERENCES scan_runs(id) ON DELETE CASCADE,
+    FOREIGN KEY (machine_id)  REFERENCES machines(id)  ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_ini_config_snapshots_run
     ON ini_config_snapshots(scan_run_id);
 ```
 
-**追加为新的迁移文件**，不改任何既有 applied 迁移（教训：health migration007 把 uq 索引追加进已 applied 迁移导致永不重跑）。
+- **FK cascade（Codex #2）**：与 `ini_findings` 完全一致 —— 删除 `scan_run` 或 `machine` 时级联清理 snapshot，杜绝孤儿配置值。原 Rev 1 DDL 漏了 FK，本次补上。
+- **追加为新的迁移文件**，不改任何既有 applied 迁移（教训：health migration007 把 uq 索引追加进已 applied 迁移导致永不重跑）。
+- 注：SQLite 外键级联需 `PRAGMA foreign_keys=ON`；实现时确认连接已开启该 pragma（既有 `ini_findings`/`project_locations` 的 cascade 已依赖它，沿用同一连接配置即可）。
 
 ### 4.3 抓取逻辑
 - `core::ini_scanner`：`ScanOutcome` 增 `config_snapshots: Vec<ConfigSnapshot>`；`scan_machine` 对每个成功读取的文件，从已 parse 的 sections 提取上述三类。
@@ -103,7 +110,7 @@ CREATE INDEX IF NOT EXISTS idx_ini_config_snapshots_run
   - human：按 `file_path (+ue_version) → domain → key = value` 缩进/对齐展示；
   - `--json`：`ConfigSnapshot` 数组。
 - 数据层 `data::ini_config_snapshots`：`insert` / `list_for_run` / `list_for_run_domain`。
-- 扫描时是否即时打印 config（vs 仅 `ini scan` 计数、详情走 `ini config`）：默认**不在扫描时刷屏**，详情走查询命令；实现时可再权衡。
+- 扫描时是否即时打印 config（vs 仅 `ini scan` 计数、详情走 `ini config`）：默认**不在扫描时刷屏**，详情走查询命令。
 
 ### 4.5 新 CLI 命令
 ```rust
@@ -137,10 +144,23 @@ ini scan --project-id 5 --machine-id 11    # 新: 多机副本收窄到指定机
 5. 复用 `scan_cluster`（重构成接收 `project_paths_per_machine: HashMap<i64, Vec<String>>`，替换当前硬编码 `&[]`）。
 6. `enumerate_project_paths` 生成 `DefaultEngine.ini` / `ConsoleVariables.ini` / `WindowsEngine.ini` → 扫描 → finding **＋ 改动 2 的 config 快照**。
 
-### 5.3 改动点
+### 5.3 扫描范围隔离（Codex #1）— 关键
+
+**问题**：现有 Health 用 `scan_runs::list_recent(db, "ini", 1)` 取**全局最新** ini run，再 `count_by_severity_for_machine` 数某机 findings（`health_check.rs:318/322`）。若 project 深扫也写 `scan_type="ini"`，一次 project-scoped run 会成为"最新 ini run"，导致：不在该 run 内的机器 count 到 0 findings（误判健康），或 project-only findings 冒充机器/集群 INI baseline。
+
+**处置**：
+- machine-scoped scan 保持 `scan_type="ini"`；**project 深扫写 `scan_type="ini_project"`**。
+- Health 的 `list_recent("ini",1)` 因此天然只取机器维度 run，**不被 project 深扫污染**（Health 查询无需改动）。
+- `ini runs`（`list_runs`）当前只查 `"ini"`；调整为同时列 `"ini"` 与 `"ini_project"`（`scan_type LIKE 'ini%'` 或并查），输出加一列标注 scope，使 project 深扫历史可见。
+- `ini findings <run_id>` / `ini config <run_id>` 按 run_id 取数，不受 scan_type 影响。
+- `scan_runs.summary_json` 在 project 深扫时附 `project_id` 标注。
+
+**已知局限（范围外）**：Health 仍是"全局最新机器维度 ini run"——若该机不在最新一次机器维度 scan 范围内，仍可能 count 0。这是 **pre-existing** 行为（本 spec 未引入，仅做隔离避免加剧）；彻底修法（Health 选"包含该机的最新机器维度 run"）另立任务，不在本 spec。
+
+### 5.4 改动点
 - `args.rs` `IniAction::Scan`：加 `project_id: Option<i64>` / `machine_id: Option<i64>`（clap conflicts_with）。
-- `domain_ini.rs` `scan_cluster`：抽出 project_roots 注入点；machine-scoped 与 project-scoped 共用核心扫描循环。
-- `scan_runs.scan_type` 仍为 `"ini"`；`summary_json` 增加 `project_id` 标注。
+- `domain_ini.rs` `scan_cluster`：抽出 project_roots 注入点；machine-scoped 与 project-scoped 共用核心扫描循环；按维度写不同 `scan_type`。
+- `domain_ini.rs` `list_runs`：列 `ini` + `ini_project`，输出标注 scope。
 
 ---
 
@@ -150,7 +170,8 @@ ini scan --project-id 5 --machine-id 11    # 新: 多机副本收窄到指定机
 |---|---|
 | `machine refresh <id>` | human 加 UE installs 对齐表格 |
 | `machine detail <id>` | human 改对齐表格（替代 pretty JSON） |
-| `ini scan` | 加 `--project-id` / `--machine-id` |
+| `ini scan` | 加 `--project-id` / `--machine-id`；project 维度写 `scan_type="ini_project"` |
+| `ini runs` | 同时列 `ini` + `ini_project`，标注 scope |
 | `ini config <run_id> [--domain]` | **新增** |
 
 ---
@@ -164,8 +185,10 @@ ini scan --project-id 5 --machine-id 11    # 新: 多机副本收窄到指定机
 ---
 
 ## 8. 测试策略
-- **单元**：config 提取（parsed ini fixture → 期望 snapshot，三 domain 各一）；`project_id → project_roots` 解析（单机 / 多机 / 空 / `--machine-id` 过滤）；human 表格渲染（refresh / detail / config）；新迁移幂等。
-- **回归**：现有 968 tests 全绿；`ini scan --machine-ids` 行为不变（project_roots 仍空）。
+- **单元**：config 提取（parsed ini fixture → 期望 snapshot，三 domain 各一；含 `[InstalledDerivedDataBackendGraph]` 的 `Shared/Pak/CompressedPak` 在 `--domain ddc` 与 `--domain zen` 都出现的双标用例）；`project_id → project_roots` 解析（单机 / 多机 / 空 / `--machine-id` 过滤）；human 表格渲染（refresh / detail / config）；新迁移幂等。
+- **回归**：现有 968 tests 全绿；`ini scan --machine-ids` 行为不变（project_roots 仍空、`scan_type="ini"`）。
+- **Codex #1 专项**：project 深扫（`ini_project`）后跑 Health，断言机器维度 INI 信号取的仍是最新 `"ini"` run、未被 project run 污染。
+- **Codex #2 专项**：删除 machine / 删除 scan_run 后，断言 `ini_config_snapshots` 对应行被级联清空（无孤儿）。
 - **真机（lanPC）**：razer `project discover` → `project list` → `ini scan --project-id <id>` → `ini config <run_id>` 验证 DDC/PSO/Zen 实况落库 + 展示。
 
 ---
@@ -175,11 +198,24 @@ ini scan --project-id 5 --machine-id 11    # 新: 多机副本收窄到指定机
 - 不抓取关注 section 之外的全文配置（避免信息爆炸）。
 - 不改 `--json` 既有结构。
 - 不动 UI（UI 版 scan 已支持 project_roots）。
+- **不对 config 快照做敏感值 redact / allowlist**（Codex #2 后半）：本工具面向 home lab 内网统一运维，凭据/路径/hostname 等本就以明文存在于配置与 git（见项目约定），快照内的后端路径/namespace 不构成额外暴露面；FK cascade 已保证删机/删 run 时清理，过滤会增加复杂度且无对应威胁模型。如未来用于多租户/公网场景再重新评估。
+- **不彻底重构 Health 的 INI 信号选取**（见 §5.3 已知局限）：本 spec 仅做 scan scope 隔离，避免 project 深扫加剧；pre-existing 的"全局最新 run 不含某机"问题另立任务。
 
 ---
 
 ## 10. 实现时需从源码核对的精确项
-- DDC：确认 `ddc` domain 抓 `[DerivedDataBackendGraph]` 是否足够，要不要并抓 `[/Script/UnrealEd.DerivedDataCacheSettings]`。
-- Zen：从 `docs/research/zen-ini-rules.yaml` + `ini_diagnostics_zen.rs` 取 zen 关注 section/key 全集（`ZenShared` / `InstalledDerivedDataBackendGraph` / legacy `Shared`）。
+- DDC：确认 `[DerivedDataBackendGraph]` + `[/Script/UnrealEd.DerivedDataCacheSettings]` + `[InstalledDerivedDataBackendGraph]` 的 legacy DDC 键集合（`Shared`/`Pak`/`CompressedPak`）完整。
+- Zen：从 `docs/research/zen-ini-rules.yaml` + `ini_diagnostics_zen.rs` 取 zen 关注 section/key 全集（`ZenShared` / `InstalledDerivedDataBackendGraph` / legacy `Shared`/`Pak`/`CompressedPak`）。
 - PSO：cvar 前缀匹配的完整集合（R008/R009/R010/R024 + 同系列 `r.PSOPrecache.*` / `r.ShaderPipelineCache.*`）。
-- project：`project_locations` 的 `list_for_project` 是否存在；`abs_path` + `uproject_path` 如何拼成项目根目录（`enumerate_project_paths` 需要的是含 `Config\` 的项目根）。
+- project：`project_locations` 的 `list_for_project` 是否存在；`abs_path` + `uproject_path` 如何拼成 `enumerate_project_paths` 需要的项目根目录（含 `Config\`）。
+- `scan_runs::list_recent` 与 `domain_ini::list_runs` 的查询改造（兼容 `ini` + `ini_project`）；确认连接 `PRAGMA foreign_keys=ON`。
+
+---
+
+## 11. Codex 对抗性 Review 处置记录（Rev 2）
+
+2026-05-24 跑 `/codex:adversarial-review --base main`，verdict `needs-attention`，3 个发现逐条核对源码后处置：
+
+- **#1 [high] Project scans 污染 Health 最新 INI 信号** — **采纳**。核对属实（`health_check.rs:318` 全局 `list_recent("ini",1)`）。处置：project 深扫用 `scan_type="ini_project"` 隔离（§5.3）。Health 查询天然隔离、无需改动；`ini runs` 调整为列两类。pre-existing 的"全局最新 run 不含某机"标注为已知局限、范围外。
+- **#2 [high] 快照表无引用清理 / 敏感值** — **半采纳**。核对发现 Codex 论据有误（它称 `ini_findings` 无 FK，实际 schema.rs:118-119 已有 FK cascade），但结论正确：Rev 1 DDL 漏了 FK。处置：补 `scan_run_id` / `machine_id` 的 `ON DELETE CASCADE`（§4.2）。**驳回** redact/allowlist（home lab 内网，无对应威胁模型，§9 说明理由）。
+- **#3 [medium] DDC domain 漏 InstalledDerivedDataBackendGraph** — **采纳**。核对属实（`ini_diagnostics_zen.rs:857/870` 在该 section 查 `Shared/Pak/CompressedPak` 作 legacy DDC）。处置：该 section 的 legacy DDC 键双标 `ddc`+`zen`（§4.1），并加双标测试用例（§8）。
