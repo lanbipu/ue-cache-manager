@@ -83,6 +83,7 @@ fn needs_db(cmd: &Domain) -> bool {
             ZenAction::VerifyRules { run_editor, .. } => *run_editor,
             _ => true,
         },
+        Domain::Manifest => false,
     }
 }
 
@@ -191,6 +192,10 @@ pub fn run(cli: Cli) -> i32 {
         Domain::LocalCache { action } => domain_local_cache::handle(&mut ctx, action),
         Domain::Deploy { action } => domain_deploy::handle(&mut ctx, action),
         Domain::Zen { action } => domain_zen::handle(&mut ctx, action),
+        Domain::Manifest => {
+            ctx.emitter.emit_value(&crate::cli::manifest::manifest_json()).ok();
+            Ok(())
+        }
     };
 
     match result {

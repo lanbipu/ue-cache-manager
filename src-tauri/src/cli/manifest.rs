@@ -85,6 +85,7 @@ pub fn operation_id_for(cmd: &Domain) -> &'static str {
         Domain::LocalCache { .. } => "localcache.unmapped",
         Domain::Deploy { .. } => "deploy.unmapped",
         Domain::Zen { .. } => "zen.unmapped",
+        Domain::Manifest => "manifest.get",
     }
 }
 
@@ -213,5 +214,13 @@ mod tests {
         assert_eq!(output_schema_for("machine.add"), event_schema());
         // emit_result(&T) handlers return dynamic object schemas.
         assert_eq!(output_schema_for("machine.list"), super::dynamic_object_schema());
+    }
+
+    #[test]
+    fn manifest_command_parses() {
+        use crate::cli::args::{Cli, Domain};
+        use clap::Parser;
+        let cli = Cli::try_parse_from(["uecm-cli", "manifest"]).unwrap();
+        assert!(matches!(cli.command, Domain::Manifest));
     }
 }

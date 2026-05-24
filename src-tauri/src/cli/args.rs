@@ -214,6 +214,8 @@ pub enum Domain {
         #[command(subcommand)]
         action: ZenAction,
     },
+    /// Print the Contract Manifest (canonical operation registry + schemas; spec §2 / §10.1).
+    Manifest,
 }
 
 // ---------- system ----------
