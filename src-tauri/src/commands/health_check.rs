@@ -452,6 +452,90 @@ mod tests {
         }
     }
 
+    /// Regression guard (Task 3.4 isolation).
+    ///
+    /// A project deep-scan writes `scan_type = "ini_project"`. Health reads the
+    /// latest `"ini"` run via `scan_runs::list_recent(db, "ini", 1)`. This test
+    /// verifies that inserting a *later* `"ini_project"` run with zero findings
+    /// does NOT displace the earlier `"ini"` run, so Health still returns the
+    /// machine's real INI signal (critical = 1) rather than an empty slate.
+    ///
+    /// Approach: call `derive_ini_outcome` directly (it's `fn` in the same file,
+    /// reachable via `use super::*`). Also assert `list_recent("ini", 1)` returns
+    /// the correct run id for an additional layer of clarity.
+    #[test]
+    fn project_scan_does_not_poison_health_ini_signal() {
+        use crate::data::ini_findings::{self, IniFinding};
+
+        let db = wiring_db();
+        let m1 = machines_data::insert(
+            &db,
+            &Machine::new("RENDER-INI-GUARD", "192.168.10.99"),
+        )
+        .unwrap();
+
+        // 1. Insert a real machine INI scan run and one critical finding for m1.
+        let r_ini = scan_runs::insert(&db, "ini", &[m1]).unwrap();
+        ini_findings::insert(
+            &db,
+            &IniFinding {
+                id: None,
+                scan_run_id: r_ini,
+                machine_id: m1,
+                rule_id: "TEST_RULE_01".into(),
+                severity: "critical".into(),
+                category: "engine".into(),
+                file_path: "C:\\UE\\Config\\Engine.ini".into(),
+                section: Some("[/Script/Engine]".into()),
+                key_name: Some("r.Shadow.Virtual.Enable".into()),
+                line_number: Some(42),
+                snippet_before: "0".into(),
+                snippet_after: Some("1".into()),
+                recommended_action: "Set to 1".into(),
+                recommended_value: Some("1".into()),
+                symptom: "VSM disabled".into(),
+                rationale: "required for quality".into(),
+                fixed_at: None,
+                skipped_at: None,
+            },
+        )
+        .unwrap();
+
+        // 2. Insert a *later* project deep-scan run with NO findings.
+        //    In production this is written by `commands::ini_project_scan` which
+        //    uses scan_type="ini_project" (Task 3.4 fix).
+        let _r_proj = scan_runs::insert(&db, "ini_project", &[m1]).unwrap();
+        // (no ini_findings inserted for r_proj — simulates a clean project scan)
+
+        // 3. Verify list_recent("ini", 1) still returns r_ini, not r_proj.
+        let recent_ini = scan_runs::list_recent(&db, "ini", 1).unwrap();
+        assert_eq!(
+            recent_ini.len(),
+            1,
+            "list_recent(\"ini\", 1) should return exactly one run"
+        );
+        assert_eq!(
+            recent_ini[0].id.unwrap(),
+            r_ini,
+            "list_recent(\"ini\", 1) returned the ini_project run instead of the ini run — \
+             Task 3.4 isolation is broken"
+        );
+
+        // 4. Verify derive_ini_outcome sees critical=1 (from r_ini), not 0.
+        let outcome = derive_ini_outcome(&db, m1).unwrap();
+        assert_eq!(
+            outcome.status, "critical",
+            "derive_ini_outcome returned '{}' — expected 'critical'; \
+             ini_project run is poisoning Health INI signal",
+            outcome.status
+        );
+        assert!(
+            outcome.message.contains("1 critical"),
+            "expected '1 critical' in message, got: {}",
+            outcome.message
+        );
+    }
+
     #[test]
     fn zen_health_merge_does_not_drop_existing_keys() {
         // Production-side concern: if a future change ever made the zen-rows
