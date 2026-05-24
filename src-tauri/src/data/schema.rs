@@ -370,6 +370,29 @@ const MIGRATIONS: &[(&str, &str)] = &[
         ALTER TABLE machines ADD COLUMN ssh_user TEXT;
         "#,
     ),
+    (
+        "023_ini_config_snapshots",
+        r#"
+        CREATE TABLE IF NOT EXISTS ini_config_snapshots (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_run_id  INTEGER NOT NULL,
+            machine_id   INTEGER NOT NULL,
+            file_path    TEXT NOT NULL,
+            ue_version   TEXT,
+            domain       TEXT NOT NULL,
+            section      TEXT NOT NULL,
+            key_name     TEXT NOT NULL,
+            value        TEXT NOT NULL,
+            line_number  INTEGER,
+            FOREIGN KEY (scan_run_id) REFERENCES scan_runs(id) ON DELETE CASCADE,
+            FOREIGN KEY (machine_id)  REFERENCES machines(id)  ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_ini_config_snapshots_run
+            ON ini_config_snapshots(scan_run_id);
+        CREATE INDEX IF NOT EXISTS idx_ini_config_snapshots_machine
+            ON ini_config_snapshots(machine_id);
+        "#,
+    ),
 ];
 
 pub fn migrate(conn: &mut Connection) -> UecmResult<()> {
@@ -937,5 +960,20 @@ mod tests {
             )
             .unwrap();
         assert!(endpoint_ref.is_none(), "zen_endpoint_id should be NULL after endpoint deletion");
+    }
+
+    #[test]
+    fn ini_config_snapshots_table_exists_after_migrate() {
+        let db = open_in_memory().unwrap();
+        let mut conn = db.lock().unwrap();
+        migrate(&mut conn).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='ini_config_snapshots'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }
