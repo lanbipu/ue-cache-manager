@@ -9,7 +9,7 @@ use std::io::{self, BufRead};
 
 #[derive(Args, Debug, Clone)]
 pub struct CredentialArgs {
-    /// Resolve credentials from a saved DPAPI alias.
+    /// Resolve credentials from a saved alias (SecretStore).
     #[arg(long, value_name = "ALIAS", group = "cred")]
     pub cred_alias: Option<String>,
 
@@ -89,13 +89,11 @@ impl CredentialArgs {
     /// Resolve to `(username, password)` if any credential was supplied;
     /// `None` means inherit the caller's Kerberos/NTLM context.
     ///
-    /// `--cred-alias` still yields the real `(user, pass)`: the WinRM/PsExec
-    /// onboarding path (`machine authorize`) is alive until P5a and needs it.
-    /// The password home is the cross-platform SecretStore (post-migration
-    /// saves), falling back to the legacy DPAPI store for older credentials —
-    /// so this no longer fails with "DPAPI is Windows-only" on a non-Windows
-    /// operator or for a SecretStore-only alias (SSH-migrated callers resolve
-    /// then discard it harmlessly). The DPAPI fallback retires in P5b.
+    /// `--cred-alias` yields the real `(user, pass)` from the cross-platform
+    /// SecretStore (the username comes from the SQLite alias metadata). SSH-key
+    /// callers resolve then discard the pair harmlessly; the SMB / svc-secret
+    /// callers actually use it. An alias with no SecretStore entry is an
+    /// `InvalidInput` error.
     pub fn resolve(&self, db: &Db) -> UecmResult<Option<(String, String)>> {
         if let Some(alias) = &self.cred_alias {
             let user = data_creds::find_by_alias(db, alias)?
@@ -103,10 +101,14 @@ impl CredentialArgs {
                     UecmError::InvalidInput(format!("credential alias '{}' not found", alias))
                 })?
                 .username;
-            let pass = match crate::core::secrets::SecretStore::from_config()?.get(alias)? {
-                Some(p) => p,
-                None => crate::core::credentials::resolve_password(alias)?,
-            };
+            let pass = crate::core::secrets::SecretStore::from_config()?
+                .get(alias)?
+                .ok_or_else(|| {
+                    UecmError::InvalidInput(format!(
+                        "no secret stored for credential alias '{}'",
+                        alias
+                    ))
+                })?;
             return Ok(Some((user, pass)));
         }
         match (&self.user, &self.pass, self.pass_stdin) {
