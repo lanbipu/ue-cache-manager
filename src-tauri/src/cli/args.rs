@@ -427,6 +427,12 @@ pub enum IniAction {
     Scan {
         #[arg(long, value_name = "M1,M2,...", value_delimiter = ',')]
         machine_ids: Vec<i64>,
+        /// Project deep-scan: scan this project's INI config (via project_locations).
+        #[arg(long, conflicts_with = "machine_ids")]
+        project_id: Option<i64>,
+        /// Narrow a multi-machine project to one machine (only with --project-id).
+        #[arg(long, requires = "project_id")]
+        machine_id: Option<i64>,
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
@@ -1988,5 +1994,28 @@ mod tests {
             }
             _ => panic!("expected ini config"),
         }
+    }
+
+    #[test]
+    fn parses_ini_scan_project_id() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "ini", "scan", "--project-id", "5", "--machine-id", "11",
+        ]).unwrap();
+        match cli.command {
+            Domain::Ini { action: IniAction::Scan { project_id, machine_id, machine_ids, .. } } => {
+                assert_eq!(project_id, Some(5));
+                assert_eq!(machine_id, Some(11));
+                assert!(machine_ids.is_empty());
+            }
+            _ => panic!("expected ini scan"),
+        }
+    }
+
+    #[test]
+    fn ini_scan_project_id_conflicts_with_machine_ids() {
+        let res = Cli::try_parse_from([
+            "uecm-cli", "ini", "scan", "--project-id", "5", "--machine-ids", "1,2",
+        ]);
+        assert!(res.is_err(), "project-id and machine-ids must conflict");
     }
 }

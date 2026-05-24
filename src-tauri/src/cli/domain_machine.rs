@@ -562,7 +562,7 @@ fn deep_scan(
     if !reachable.is_empty() {
         if let Err(e) = crate::cli::domain_ini::handle(
             ctx,
-            crate::cli::args::IniAction::Scan { machine_ids: reachable.clone(), cred: sub_cred.clone() },
+            crate::cli::args::IniAction::Scan { machine_ids: reachable.clone(), project_id: None, machine_id: None, cred: sub_cred.clone() },
         ) {
             ctx.emitter
                 .emit_event(&Event::Completed {

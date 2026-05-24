@@ -120,7 +120,8 @@ pub fn handle(ctx: &mut Ctx<'_>, action: IniAction) -> UecmResult<()> {
             }
         }
         // Plan-3 additions:
-        IniAction::Scan { machine_ids, cred } => scan_cluster(ctx, &machine_ids, &cred),
+        // TODO(Task 3.4): wire project_id via scan_dispatch
+        IniAction::Scan { machine_ids, project_id: _, machine_id: _, cred } => scan_cluster(ctx, &machine_ids, &cred),
         IniAction::Runs { limit } => list_runs(ctx, limit),
         IniAction::Findings { scan_run_id, severity } => {
             list_findings(ctx, scan_run_id, severity.as_deref())
