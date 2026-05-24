@@ -36,7 +36,6 @@ pub fn handle(ctx: &mut Ctx<'_>, action: MachineAction) -> UecmResult<()> {
 }
 
 /// Render UE installs as an aligned human-mode table. Pure function — no IO.
-#[allow(dead_code)] // wired into detail() in Task 1.3
 fn render_ue_installs_table(installs: &[machine_ue_installs::UeInstall]) -> String {
     if installs.is_empty() {
         return "  (no UE installs)".to_string();
@@ -50,7 +49,6 @@ fn render_ue_installs_table(installs: &[machine_ue_installs::UeInstall]) -> Stri
 }
 
 /// Render GPUs as an aligned human-mode table. Pure function — no IO.
-#[allow(dead_code)] // wired into detail() in Task 1.3
 fn render_gpus_table(gpus: &[machine_gpus::GpuInfo]) -> String {
     if gpus.is_empty() {
         return "  (no GPUs)".to_string();
@@ -106,16 +104,27 @@ fn detail(ctx: &mut Ctx<'_>, id: i64) -> UecmResult<()> {
 
     let machine = machines::find_by_id(db, id)?
         .ok_or_else(|| UecmError::InvalidInput(format!("machine id={} not found", id)))?;
-
     let ue_installs = machine_ue_installs::list_for_machine(db, id)?;
     let gpus = machine_gpus::list_for_machine(db, id)?;
 
-    let detail = json!({
-        "machine": machine,
-        "ue_installs": ue_installs,
-        "gpus": gpus,
-    });
-    ctx.emitter.emit_result(&detail).ok();
+    if ctx.json_mode {
+        let detail = json!({
+            "machine": machine,
+            "ue_installs": ue_installs,
+            "gpus": gpus,
+        });
+        ctx.emitter.emit_result(&detail).ok();
+    } else {
+        let installs_tbl = render_ue_installs_table(&ue_installs);
+        let gpus_tbl = render_gpus_table(&gpus);
+        let text = format!(
+            "Machine: {} ({})  last_seen={}\n\nUE Installs:\n{}\n\nGPUs:\n{}",
+            machine.hostname, machine.ip,
+            machine.last_seen_at.as_deref().unwrap_or("-"),
+            installs_tbl, gpus_tbl,
+        );
+        ctx.emitter.emit_text(&text).ok();
+    }
     Ok(())
 }
 
@@ -1093,5 +1102,31 @@ mod tests {
         assert!(out.contains("24576"));
         let amd_line = out.lines().find(|l| l.contains("AMD Radeon Pro")).unwrap();
         assert!(amd_line.contains("N/A"));
+    }
+
+    #[test]
+    fn detail_human_mode_renders_tables_not_json() {
+        use crate::cli::output::{Emitter, HumanEmitter};
+        use crate::data::{open_in_memory, schema, machine_ue_installs::{self, UeInstall}};
+        let db = open_in_memory().unwrap();
+        { let mut c = db.lock().unwrap(); schema::migrate(&mut c).unwrap(); }
+        let id = machines::insert(&db, &machines::Machine::new("RENDER-01", "1.2.3.4")).unwrap();
+        machine_ue_installs::upsert(&db, &UeInstall { id: None, machine_id: id, version: "5.4".into(),
+            install_path: "C:\\UE_5.4".into(), is_primary: true,
+            zen_cli_intree_path: None, zen_cli_intree_version: None, zen_cli_intree_sha256: None,
+            zenserver_intree_path: None, zenserver_intree_version: None, zenserver_intree_sha256: None }).unwrap();
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        {
+            let emitter: Box<dyn Emitter> = Box::new(HumanEmitter::new(&mut stdout, &mut stderr, false));
+            let mut ctx = Ctx { db: Some(db.clone()), db_path: std::path::PathBuf::from(":memory:"),
+                emitter, json_mode: false };
+            detail(&mut ctx, id).unwrap();
+        }
+        let s = String::from_utf8(stdout).unwrap();
+        assert!(s.contains("VERSION"));      // table header — not JSON
+        assert!(s.contains("5.4"));
+        assert!(!s.contains("\"ue_installs\""));  // not pretty JSON
     }
 }
