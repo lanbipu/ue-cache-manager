@@ -52,6 +52,31 @@ pub fn find_by_id(db: &Db, id: i64) -> UecmResult<Option<ScanRun>> {
     }
 }
 
+pub fn list_recent_types(db: &Db, scan_types: &[&str], limit: i64) -> UecmResult<Vec<ScanRun>> {
+    if scan_types.is_empty() {
+        return Ok(Vec::new());
+    }
+    let conn = db.lock().unwrap();
+    let placeholders = vec!["?"; scan_types.len()].join(",");
+    let sql = format!(
+        "SELECT id, scan_type, started_at, finished_at, machine_ids_json, summary_json
+         FROM scan_runs WHERE scan_type IN ({}) ORDER BY started_at DESC, id DESC LIMIT ?",
+        placeholders
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut params_vec: Vec<&dyn rusqlite::ToSql> = Vec::new();
+    for t in scan_types {
+        params_vec.push(t);
+    }
+    params_vec.push(&limit);
+    let rows = stmt.query_map(params_vec.as_slice(), |row| row_to_scan_run(row))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
 pub fn list_recent(db: &Db, scan_type: &str, limit: i64) -> UecmResult<Vec<ScanRun>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
@@ -153,5 +178,16 @@ mod tests {
         let recent = list_recent(&db, "health", 10).unwrap();
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].id, Some(b));
+    }
+
+    #[test]
+    fn list_recent_types_includes_both_ini_kinds() {
+        let db = setup();
+        let _a = insert(&db, "ini", &[1]).unwrap();
+        let b = insert(&db, "ini_project", &[1]).unwrap();
+        let _h = insert(&db, "health", &[1]).unwrap();
+        let rows = list_recent_types(&db, &["ini", "ini_project"], 10).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, Some(b)); // newest first
     }
 }
