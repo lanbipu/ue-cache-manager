@@ -30,7 +30,8 @@ pub fn operations() -> &'static [Operation] {
         Operation { operation_id: "system.migrate_db", summary: "Force-run schema migrations",             cli_command: "uecm-cli system migrate-db", side_effects: SideEffects{writes:true, external_calls:false,idempotent:true}, exit_codes: &[0,3] },
         Operation { operation_id: "system.echo",       summary: "Round-trip a message via PowerShell",     cli_command: "uecm-cli system echo",       side_effects: SideEffects{writes:false,external_calls:true, idempotent:true}, exit_codes: &[0,4] },
         Operation { operation_id: "system.schema",     summary: "Dump clap command tree as JSON",          cli_command: "uecm-cli system schema",     side_effects: SideEffects{writes:false,external_calls:false,idempotent:true}, exit_codes: &[0] },
-        Operation { operation_id: "system.exit_codes", summary: "Print documented exit-code table",        cli_command: "uecm-cli system exit-codes", side_effects: SideEffects{writes:false,external_calls:false,idempotent:true}, exit_codes: &[0] },
+        Operation { operation_id: "system.exit_codes",  summary: "Print documented exit-code table",                          cli_command: "uecm-cli system exit-codes",   side_effects: SideEffects{writes:false,external_calls:false,idempotent:true}, exit_codes: &[0] },
+        Operation { operation_id: "system.completion", summary: "Generate a shell completion script",                         cli_command: "uecm-cli system completion",  side_effects: SideEffects{writes:false,external_calls:false,idempotent:true}, exit_codes: &[0,2] },
         Operation { operation_id: "machine.list",      summary: "List all known machines",                 cli_command: "uecm-cli machine list",      side_effects: SideEffects{writes:false,external_calls:false,idempotent:true}, exit_codes: &[0,3] },
         Operation { operation_id: "machine.scan",      summary: "Probe a CIDR for live hosts",             cli_command: "uecm-cli machine scan",      side_effects: SideEffects{writes:false,external_calls:true, idempotent:true}, exit_codes: &[0,2] },
         Operation { operation_id: "machine.add",       summary: "Add a machine to inventory",              cli_command: "uecm-cli machine add",       side_effects: SideEffects{writes:true, external_calls:false,idempotent:false}, exit_codes: &[0,2,3] },
@@ -129,6 +130,7 @@ pub fn operation_id_for(cmd: &Domain) -> &'static str {
             SystemAction::Echo { .. } => "system.echo",
             SystemAction::Schema => "system.schema",
             SystemAction::ExitCodes => "system.exit_codes",
+            SystemAction::Completion { .. } => "system.completion",
         },
         Domain::Machine { action } => match action {
             MachineAction::List => "machine.list",
@@ -282,7 +284,7 @@ pub fn output_schema_for(operation_id: &str) -> serde_json::Value {
     match operation_id {
         "system.version" => serde_json::to_value(schema_for!(crate::cli::domain_system::VersionInfo)).unwrap(),
         "system.db_path" | "system.ps_dir" => serde_json::to_value(schema_for!(crate::cli::domain_system::PathInfo)).unwrap(),
-        "system.migrate_db" | "system.echo" | "system.schema" | "system.exit_codes" => dynamic_object_schema(),
+        "system.migrate_db" | "system.echo" | "system.schema" | "system.exit_codes" | "system.completion" => dynamic_object_schema(),
         // emit_event(...) handlers -> event-shaped output. add/delete/rename emit
         // Event::Completed{..} just like scan/refresh/deep_scan/authorize.
         "machine.scan" | "machine.deep_scan" | "machine.refresh" | "machine.authorize"
@@ -530,12 +532,12 @@ mod tests {
             let inner = sub.get_subcommands().filter(|s| s.get_name() != "help").count();
             leaves += if inner == 0 { 1 } else { inner };
         }
-        // Locked numbers (2026-05-24): operations().len()=88, leaves=89.
+        // Locked numbers (2026-05-24): operations().len()=89, leaves=90.
         // `manifest` is a leaf subcommand (no sub-subcommands → counts as 1 leaf)
         // but is NOT in the OPERATIONS table (it's the meta-command that *prints*
         // the manifest). That accounts for the deliberate gap of exactly 1.
         // If you add a new CLI subcommand without a matching OPERATIONS row,
-        // leaves will grow past 89 while operations().len() stays at 88,
+        // leaves will grow past 90 while operations().len() stays at 89,
         // breaking the assertion below — add the OPERATIONS row to fix it.
         assert_eq!(
             operations().len() + 1,

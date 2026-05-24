@@ -407,6 +407,65 @@
     },
     {
       "cli": {
+        "command": "uecm-cli system completion"
+      },
+      "error_schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "错误信封的 `error` 体。**派生 JsonSchema** 作为 manifest 的共享 error_schema。",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "exit_code": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code",
+          "exit_code",
+          "message",
+          "retryable"
+        ],
+        "title": "ErrorBody",
+        "type": "object"
+      },
+      "exit_codes": [
+        0,
+        2
+      ],
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "shell": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "shell"
+        ],
+        "type": "object"
+      },
+      "operation_id": "system.completion",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "side_effects": {
+        "external_calls": false,
+        "idempotent": true,
+        "writes": false
+      },
+      "summary": "Generate a shell completion script"
+    },
+    {
+      "cli": {
         "command": "uecm-cli machine list"
       },
       "error_schema": {

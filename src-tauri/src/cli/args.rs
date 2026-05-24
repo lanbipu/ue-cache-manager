@@ -245,6 +245,11 @@ pub enum SystemAction {
     Schema,
     /// Print the documented process exit-code table.
     ExitCodes,
+    /// Generate a shell completion script (bash / zsh / fish / powershell / elvish).
+    Completion {
+        /// Target shell.
+        shell: clap_complete::Shell,
+    },
 }
 
 // ---------- machine ----------
@@ -2154,5 +2159,16 @@ mod tests {
         assert!(cli.no_input);
         let cli2 = Cli::try_parse_from(["uecm-cli", "system", "version"]).unwrap();
         assert!(!cli2.no_input);
+    }
+
+    #[test]
+    fn completion_command_parses_shell() {
+        let cli = Cli::try_parse_from(["uecm-cli", "system", "completion", "bash"]).unwrap();
+        match cli.command {
+            Domain::System { action: SystemAction::Completion { shell } } => {
+                assert_eq!(shell, clap_complete::Shell::Bash);
+            }
+            _ => panic!("expected system completion bash"),
+        }
     }
 }

@@ -28,6 +28,7 @@ pub fn handle(ctx: &mut Ctx<'_>, action: SystemAction) -> UecmResult<()> {
         SystemAction::Echo { message } => echo(ctx, &message),
         SystemAction::Schema => schema(ctx),
         SystemAction::ExitCodes => exit_codes(ctx),
+        SystemAction::Completion { shell } => completion(ctx, shell),
     }
 }
 
@@ -116,6 +117,19 @@ fn error_code_table() -> serde_json::Value {
         {"code": "powershell_failed", "exit": 4,  "source": "remote PowerShell"},
         {"code": "usage_error",       "exit": 64, "source": "clap argv parse"},
     ])
+}
+
+fn completion(ctx: &mut Ctx<'_>, shell: clap_complete::Shell) -> UecmResult<()> {
+    use clap::CommandFactory;
+    let mut cmd = crate::cli::args::Cli::command();
+    let bin = cmd.get_name().to_string();
+    // 补全脚本是 shell 源码，不是结构化数据——直接写裸 stdout，不走 envelope。
+    let mut out: Vec<u8> = Vec::new();
+    clap_complete::generate(shell, &mut cmd, bin, &mut out);
+    use std::io::Write;
+    let _ = std::io::stdout().write_all(&out);
+    let _ = ctx; // completion 不用 emitter（裸 shell 脚本输出）
+    Ok(())
 }
 
 fn command_to_json(cmd: &clap::Command) -> serde_json::Value {
