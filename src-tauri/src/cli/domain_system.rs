@@ -8,15 +8,15 @@ use crate::error::UecmResult;
 use crate::startup;
 use serde::Serialize;
 
-#[derive(Serialize)]
-struct VersionInfo {
-    binary: &'static str,
-    version: &'static str,
+#[derive(Serialize, schemars::JsonSchema)]
+pub struct VersionInfo {
+    pub binary: &'static str,
+    pub version: &'static str,
 }
 
-#[derive(Serialize)]
-struct PathInfo {
-    path: String,
+#[derive(Serialize, schemars::JsonSchema)]
+pub struct PathInfo {
+    pub path: String,
 }
 
 pub fn handle(ctx: &mut Ctx<'_>, action: SystemAction) -> UecmResult<()> {

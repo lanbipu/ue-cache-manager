@@ -7,7 +7,7 @@ use serde::Serialize;
 use std::io::{self, Write};
 
 /// All events emitted to stdout. Long-running tasks emit one event per stream item.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Event {
     Started {
