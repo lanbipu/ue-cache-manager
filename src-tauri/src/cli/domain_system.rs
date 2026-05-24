@@ -206,6 +206,7 @@ mod tests {
             json_mode: true,
             operation_id: "system.echo",
             request_id: "test-req".into(),
+            no_input: false,
         };
         let result = echo(&mut ctx, "hello");
         assert!(matches!(result, Err(crate::error::UecmError::PowerShell(_))));

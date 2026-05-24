@@ -588,8 +588,9 @@ fn authorize(
 ) -> UecmResult<()> {
     // Credentials are REQUIRED — preflight + bootstrap need a local admin user/pass.
     let (user, pass) = {
+        let no_input = ctx.no_input;
         let db = ctx.require_db()?;
-        cred.resolve(db)?.ok_or_else(|| {
+        cred.resolve(db, no_input)?.ok_or_else(|| {
             UecmError::InvalidInput(
                 "machine authorize requires credentials (--cred-alias or --user/--pass-stdin)".into(),
             )
@@ -769,6 +770,7 @@ mod tests {
             json_mode: true,
             operation_id: "machine.list",
             request_id: "test-req".into(),
+            no_input: false,
         };
 
         // Add a machine
@@ -802,6 +804,7 @@ mod tests {
             json_mode: true,
             operation_id: "machine.deep_scan",
             request_id: "test-req".into(),
+            no_input: false,
         };
 
         add(&mut ctx, "10.0.0.1".to_string(), Some("m1".to_string())).unwrap();
@@ -826,6 +829,7 @@ mod tests {
             json_mode: true,
             operation_id: "machine.deep_scan",
             request_id: "test-req".into(),
+            no_input: false,
         };
         // id 999 does not exist → refresh returns InvalidInput → classified as a
         // failure (not a WinRM skip), but the batch still completes Ok.
@@ -868,6 +872,7 @@ mod tests {
             json_mode: true,
             operation_id: "machine.authorize",
             request_id: "test-req".into(),
+            no_input: false,
         };
         add(&mut ctx, "10.0.0.1".to_string(), Some("m1".to_string())).unwrap();
         // inline(None) resolves to no credentials → authorize must reject.
@@ -887,6 +892,7 @@ mod tests {
             json_mode: true,
             operation_id: "machine.deep_scan",
             request_id: "test-req".into(),
+            no_input: false,
         };
         let cred = crate::cli::credential_args::CredentialArgs::inline(None);
         let res = deep_scan(&mut ctx, vec![], false, &cred, &UnreachableExec);
@@ -904,6 +910,7 @@ mod tests {
             json_mode: true,
             operation_id: "machine.delete",
             request_id: "test-req".into(),
+            no_input: false,
         };
 
         // Try to delete without --yes or --dry-run
@@ -931,6 +938,7 @@ mod tests {
             json_mode: true,
             operation_id: "machine.scan",
             request_id: "test-req".into(),
+            no_input: false,
         };
         // TEST-NET-3 /30 = 2 usable hosts; per-port timeout 200ms → completes well under 2s.
         scan(&mut ctx, "203.0.113.0/30", 200).unwrap();
@@ -940,7 +948,7 @@ mod tests {
 
     fn ctx_with(db: crate::data::Db) -> Ctx<'static> {
         let emitter: Box<dyn Emitter> = Box::new(NdjsonEmitter::new(Vec::new()));
-        Ctx { db: Some(db), db_path: PathBuf::from(":memory:"), emitter, json_mode: true, operation_id: "machine.list", request_id: "test-req".into() }
+        Ctx { db: Some(db), db_path: PathBuf::from(":memory:"), emitter, json_mode: true, operation_id: "machine.list", request_id: "test-req".into(), no_input: false }
     }
 
     #[test]

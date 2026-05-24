@@ -880,6 +880,7 @@ mod tests {
             json_mode: true,
             operation_id: "ini.unmapped",
             request_id: "test-req".into(),
+            no_input: false,
         }
     }
 

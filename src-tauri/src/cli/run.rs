@@ -25,6 +25,10 @@ pub struct Ctx<'a> {
     pub operation_id: &'static str,
     /// Per-request UUID v4 correlation id (spec §4.1). Set at dispatch time.
     pub request_id: String,
+    /// `--no-input`: refuse any implicit stdin / interactive prompt. Handlers
+    /// that would otherwise block reading stdin (e.g. `secret set` without
+    /// `--value`, `--pass-stdin`) must error with `InvalidInput` instead.
+    pub no_input: bool,
 }
 
 impl<'a> Ctx<'a> {
@@ -188,7 +192,7 @@ pub fn run(cli: Cli) -> i32 {
         }
     };
 
-    let mut ctx = Ctx { db, db_path, emitter, json_mode, operation_id, request_id };
+    let mut ctx = Ctx { db, db_path, emitter, json_mode, operation_id, request_id, no_input: cli.no_input };
 
     let result = match cli.command {
         Domain::System { action } => domain_system::handle(&mut ctx, action),
@@ -234,9 +238,31 @@ fn startup_error_is_json(cli: &Cli) -> bool {
 
 fn finish_error(err: &UecmError, json: bool) -> i32 {
     if json {
-        // `NdjsonEmitter::new` routes errors to stderr per spec §4.
-        let mut e = NdjsonEmitter::new(io::stdout().lock());
-        e.emit_error(err);
+        // Startup-phase failures (db-path resolve / db open / `--config` load)
+        // happen BEFORE the envelope-aware emitter is built, so we can't reuse
+        // it. Emit the full ErrorEnvelope inline to stderr (spec §4), mirroring
+        // the usage-error path in `bin/uecm-cli.rs`. `operation_id` is unknown
+        // this early, so it is empty.
+        let payload = serde_json::json!({
+            "schema_version": crate::cli::envelope::SCHEMA_VERSION,
+            "status": "error",
+            "operation_id": "",
+            "error": {
+                "code": crate::cli::output::error_code(err),
+                "exit_code": exit_code_for(err),
+                "message": err.to_string(),
+                "retryable": crate::cli::envelope::retryable_for(err),
+            },
+            "meta": {
+                "request_id": "",
+                "duration_ms": 0,
+                "timestamp": crate::cli::envelope::now_iso8601(),
+            }
+        });
+        let mut stderr = io::stderr().lock();
+        let _ = serde_json::to_writer(&mut stderr, &payload);
+        let _ = stderr.write_all(b"\n");
+        let _ = stderr.flush();
     } else {
         let _ = writeln!(io::stderr(), "✗ {}", err);
     }

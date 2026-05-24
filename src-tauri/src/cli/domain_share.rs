@@ -323,6 +323,7 @@ mod tests {
             json_mode: true,
             operation_id: "share.unmapped",
             request_id: "test-req".into(),
+            no_input: false,
         }
     }
 

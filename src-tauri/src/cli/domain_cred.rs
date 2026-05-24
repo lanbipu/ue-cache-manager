@@ -209,6 +209,7 @@ mod tests {
             json_mode: true,
             operation_id: "cred.unmapped",
             request_id: "test-req".into(),
+            no_input: false,
         }
     }
 
