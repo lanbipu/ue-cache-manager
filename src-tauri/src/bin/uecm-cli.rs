@@ -35,6 +35,7 @@ fn main() {
                     n == "json" || n == "ndjson" || n == "stream-json"
                 }).unwrap_or(false))
     });
+    let json_mode = json_mode || std::env::var("AI_AGENT").map(|v| v == "1").unwrap_or(false);
 
     match Cli::try_parse_from(&argv) {
         Ok(cli) => {
@@ -53,10 +54,21 @@ fn main() {
 
             if json_mode {
                 let payload = serde_json::json!({
-                    "kind": "error",
-                    "code": "usage_error",
-                    "message": e.to_string(),
-                    "clap_kind": format!("{:?}", e.kind()),
+                    "schema_version": "1.0",
+                    "status": "error",
+                    "operation_id": "",
+                    "error": {
+                        "code": "usage_error",
+                        "exit_code": 64,
+                        "message": e.to_string(),
+                        "retryable": false,
+                        "clap_kind": format!("{:?}", e.kind()),
+                    },
+                    "meta": {
+                        "request_id": "",
+                        "duration_ms": 0,
+                        "timestamp": uecm_lib::cli::envelope::now_iso8601(),
+                    }
                 });
                 let mut stderr = io::stderr().lock();
                 let _ = serde_json::to_writer(&mut stderr, &payload);
