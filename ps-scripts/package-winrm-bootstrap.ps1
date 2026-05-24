@@ -16,8 +16,10 @@ param(
     # the package always onboards SSH transport (enable-ssh.ps1 + uecm.pub), the
     # primary transport for all migrated commands. A WinRM-only package can't serve
     # them, and its .cmd would just fail readiness, so it is no longer produced.
-    [Parameter(Mandatory = $true)]
-    [string]$UecmPublicKeyPath
+    # NOT a [Parameter(Mandatory)] on purpose: that prompts/errors during parameter
+    # binding BEFORE the try/catch, so a non-interactive caller would hang instead
+    # of getting the parseable JSON error from the explicit empty-check below.
+    [string]$UecmPublicKeyPath = ''
 )
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8

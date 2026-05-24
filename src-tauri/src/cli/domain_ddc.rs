@@ -561,10 +561,11 @@ fn resolve_creds(
     db: &crate::data::Db,
     cred: &CredentialArgs,
 ) -> UecmResult<(Option<String>, Option<String>)> {
-    match cred.resolve(db)? {
-        Some((u, p)) => Ok((Some(u), Some(p))),
-        None => Ok((None, None)),
-    }
+    // SSH key auth: ddc operations take no operator credential. preflight
+    // validates --cred-alias / flag combo without reading DPAPI or stdin for a
+    // credential that would only be discarded.
+    cred.preflight(db)?;
+    Ok((None, None))
 }
 
 fn resolve_engine_path(db: &crate::data::Db, machine_id: i64) -> UecmResult<String> {

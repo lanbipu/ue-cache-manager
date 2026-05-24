@@ -29,7 +29,10 @@ pub fn handle(ctx: &mut Ctx<'_>, action: LocalCacheAction) -> UecmResult<()> {
                 );
                 return Ok(());
             }
-            let creds = cred.resolve(db)?;
+            // SSH key auth: local-cache create takes no operator credential.
+            // preflight validates flags without reading DPAPI/stdin for a cred
+            // that would only be discarded.
+            cred.preflight(db)?;
             let total = hosts.len() as i64;
             ctx.emitter
                 .emit_event(&Event::Started {
@@ -50,7 +53,7 @@ pub fn handle(ctx: &mut Ctx<'_>, action: LocalCacheAction) -> UecmResult<()> {
                     host,
                     &path,
                     service_account.as_deref(),
-                    creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
+                    None,
                 );
                 match r {
                     Ok(_) => {

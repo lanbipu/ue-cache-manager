@@ -150,11 +150,11 @@ fn create(
     use crate::core::shares;
 
     let db = ctx.require_db()?;
-    let creds = cred.resolve(db)?;
-    let (op_user, op_pass) = match &creds {
-        Some((u, p)) => (Some(u.as_str()), Some(p.as_str())),
-        None => (None, None),
-    };
+    // SSH key auth: share ops take no operator credential (the Mode B svc password
+    // is read from the SecretStore separately). preflight validates flags without
+    // reading DPAPI/stdin for a discarded credential.
+    cred.preflight(db)?;
+    let (op_user, op_pass): (Option<&str>, Option<&str>) = (None, None);
 
     let (result, share_mode, credential_alias) = match mode {
         "a" | "A" => {
@@ -236,11 +236,11 @@ fn inject_system_cred(
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
     let db = ctx.require_db()?;
-    let creds = cred.resolve(db)?;
-    let (op_user, op_pass) = match &creds {
-        Some((u, p)) => (Some(u.as_str()), Some(p.as_str())),
-        None => (None, None),
-    };
+    // SSH key auth: share ops take no operator credential (the Mode B svc password
+    // is read from the SecretStore separately). preflight validates flags without
+    // reading DPAPI/stdin for a discarded credential.
+    cred.preflight(db)?;
+    let (op_user, op_pass): (Option<&str>, Option<&str>) = (None, None);
 
     // Look up the share's svc password from the SecretStore alias created during `share create`.
     // The alias scheme matches `share create`: `share-<host>-<share>`. For

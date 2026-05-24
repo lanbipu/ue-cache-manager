@@ -30,11 +30,13 @@ pub fn handle(ctx: &mut Ctx<'_>, action: DeployAction) -> UecmResult<()> {
                 );
                 return Ok(());
             }
-            let creds = cred.resolve(&db)?;
+            // SSH key auth: deploy steps take no operator credential. preflight
+            // validates flags without reading DPAPI/stdin for a discarded cred.
+            cred.preflight(&db)?;
             deploy_workflow::run_plan(
                 &db,
                 &mut p,
-                creds.as_ref().map(|(u, pw)| (u.as_str(), pw.as_str())),
+                None,
                 RunOptions { stop_on_step_failure: stop_on_failure },
                 &mut |e: DeployEvent| {
                     ctx.emitter.emit_result(&e).ok();

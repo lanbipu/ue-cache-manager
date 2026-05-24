@@ -93,10 +93,9 @@ pub fn handle(ctx: &mut Ctx<'_>, action: HealthAction) -> UecmResult<()> {
             host, editor_exe, project, local_path, shared_path, timeout, cred,
         } => {
             let db = ctx.require_db()?;
-            let creds = cred.resolve(db)?;
-            let creds_ref = creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str()));
+            cred.preflight(db)?;
             let verify = crate::core::ue_log_verify::run_for_host(
-                &host, &editor_exe, &project, timeout, creds_ref,
+                &host, &editor_exe, &project, timeout, None,
             )?;
             let ddc_exec = crate::core::ssh::SshExecutor::from_config()?;
             let stats = crate::core::ddc_file_stats::run(&ddc_exec, &host, &local_path, &shared_path).ok();
@@ -167,12 +166,10 @@ fn run_with_rt(
 ) -> UecmResult<()> {
     let db = ctx.require_db()?.clone();
 
-    // Resolve credentials first (needs DB for alias lookup).
-    let resolved_cred = cred.resolve(&db)?;
-    let (op_user, op_pass) = match &resolved_cred {
-        Some((u, p)) => (u.clone(), p.clone()),
-        None => (String::new(), String::new()),
-    };
+    // SSH key auth: no operator credential needed. preflight validates flags
+    // without reading DPAPI/stdin for a credential that would only be discarded.
+    cred.preflight(&db)?;
+    let (op_user, op_pass) = (String::new(), String::new());
 
     let total = machine_ids.len() as i64;
 

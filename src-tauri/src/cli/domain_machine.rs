@@ -417,14 +417,15 @@ fn deep_scan(
         let db = ctx.require_db()?;
         resolve_target_ids(db, &machine_ids, all)?
     };
-    // Resolve credentials ONCE (stdin/DPAPI). `resolved` is reused for the
-    // explicit reachability probe; `sub_cred` (stdin-free) is reused for every
-    // sub-handler — `--pass-stdin` is only readable once.
-    let resolved = {
+    // SSH key auth: deep-scan's sub-handlers (probe / refresh / ini scan) take no
+    // operator credential, so validate the flags once with preflight (no DPAPI /
+    // stdin read for a credential that would only be discarded) and fan out a
+    // credential-free CredentialArgs to every sub-handler.
+    {
         let db = ctx.require_db()?;
-        cred.resolve(db)?
-    };
-    let sub_cred = crate::cli::credential_args::CredentialArgs::inline(resolved.clone());
+        cred.preflight(db)?;
+    }
+    let sub_cred = crate::cli::credential_args::CredentialArgs::inline(None);
 
     ctx.emitter
         .emit_event(&Event::Started {

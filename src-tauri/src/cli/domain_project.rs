@@ -58,14 +58,13 @@ fn discover(
         })?;
         machine.ip.clone()
     };
-    let creds = {
+    // SSH key auth: no operator credential needed. preflight validates flags
+    // without reading DPAPI/stdin for a credential that would only be discarded.
+    {
         let db = ctx.require_db()?;
-        cred.resolve(db)?
-    };
-    let (op_user, op_pass) = match &creds {
-        Some((u, p)) => (Some(u.clone()), Some(p.clone())),
-        None => (None, None),
-    };
+        cred.preflight(db)?;
+    }
+    let (op_user, op_pass): (Option<String>, Option<String>) = (None, None);
 
     ctx.emitter
         .emit_event(&Event::Started {

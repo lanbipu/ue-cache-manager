@@ -509,7 +509,7 @@ fn detect_binary(
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
     let db = ctx.require_db()?.clone();
-    let creds = cred.resolve(&db)?;
+    cred.preflight(&db)?;
 
     // Resolve target machines. --machine takes precedence; otherwise --all (or
     // no flag) scans every machine in inventory.
@@ -535,7 +535,7 @@ fn detect_binary(
         .emit_event(&Event::Started {
             task_type: "zen_detect_binary".into(),
             task_id: None,
-            metadata: serde_json::json!({ "machines": total, "authenticated": creds.is_some() }),
+            metadata: serde_json::json!({ "machines": total, "authenticated": true }),
         })
         .ok();
 
@@ -544,7 +544,7 @@ fn detect_binary(
     for (idx, m) in target_machines.iter().enumerate() {
         let machine_id = m.id.expect("machine in inventory always has id");
         let host = &m.ip;
-        let detection_result = invoke_detect_binary(host, creds.as_ref());
+        let detection_result = invoke_detect_binary(host, None);
         match detection_result {
             Ok(detection) => {
                 let report = zen_binary::persist(&db, machine_id, &detection)?;
@@ -1132,7 +1132,7 @@ fn apply_config(
     // Reaching the PS sidecar requires Windows (lanPC). On the dev mac the
     // call below errors with `PowerShell("WinRM is Windows-only")` which
     // maps to exit 4 — same contract as M1 detect-binary.
-    let creds = cred.resolve(&db)?;
+    cred.preflight(&db)?;
 
     // operations log row — log the *redacted* invocation so secrets never
     // make it to disk.
@@ -1143,7 +1143,7 @@ fn apply_config(
     let op_id = operations::start(&db, "zen.apply_config", &[ep.machine_id])?;
 
     let expected_sha = sha256_hex_of(&lua);
-    let result = invoke_write_lua(&machine.ip, &lua, dest_path, creds.as_ref())
+    let result = invoke_write_lua(&machine.ip, &lua, dest_path, None)
         .and_then(|response| verify_write_response(&response, &expected_sha, lua.len()));
     finalize_op(&db, op_id, &result, &invocation);
 
@@ -1349,9 +1349,9 @@ fn service_install(
     };
     let service_pass = resolved_pass.as_deref();
 
-    // SSH key auth (uecm-svc); operator creds/auth_method ignored.
-    let creds = cred.resolve(&db)?;
-    let _ = &creds;
+    // SSH key auth (uecm-svc); operator credential not needed. preflight validates
+    // --cred-alias / flag combo without reading DPAPI or stdin for a discarded cred.
+    cred.preflight(&db)?;
     // Build the invocation string for log_text. ServicePassword is wrapped
     // in `--password <REDACTED>`-shape to leverage the existing redactor —
     // the actual flag we pass to PS is `-ServicePassword` which the
@@ -1455,9 +1455,9 @@ fn service_uninstall(
         return Ok(());
     }
 
-    // SSH key auth (uecm-svc); operator creds/auth_method ignored.
-    let creds = cred.resolve(&db)?;
-    let _ = &creds;
+    // SSH key auth (uecm-svc); operator credential not needed. preflight validates
+    // --cred-alias / flag combo without reading DPAPI or stdin for a discarded cred.
+    cred.preflight(&db)?;
     let invocation = redact(&format!(
         "zen-service-uninstall.ps1 -ZenExePath {zen_exe} -ServiceName {DEFAULT_SERVICE_NAME}"
     ));
@@ -1532,9 +1532,9 @@ fn service_simple(
         }
     }
 
-    // SSH key auth (uecm-svc); operator creds/auth_method ignored.
-    let creds = cred.resolve(&db)?;
-    let _ = &creds;
+    // SSH key auth (uecm-svc); operator credential not needed. preflight validates
+    // --cred-alias / flag combo without reading DPAPI or stdin for a discarded cred.
+    cred.preflight(&db)?;
 
     let invocation = redact(&format!("{script} -ServiceName {DEFAULT_SERVICE_NAME}"));
     let op_id = operations::start(&db, op_kind, &[ep.machine_id])?;
@@ -1567,9 +1567,9 @@ fn service_status(
     cred.preflight(&db)?;
     let ep = require_endpoint(&db, endpoint_id)?;
     let machine = require_machine(&db, ep.machine_id)?;
-    // SSH key auth (uecm-svc); operator creds/auth_method ignored.
-    let creds = cred.resolve(&db)?;
-    let _ = &creds;
+    // SSH key auth (uecm-svc); operator credential not needed. preflight validates
+    // --cred-alias / flag combo without reading DPAPI or stdin for a discarded cred.
+    cred.preflight(&db)?;
 
     let raw = run_node(
         &machine.ip,
@@ -1636,9 +1636,9 @@ fn urlacl_add(
         return Ok(());
     }
 
-    // SSH key auth (uecm-svc); operator creds/auth_method ignored.
-    let creds = cred.resolve(&db)?;
-    let _ = &creds;
+    // SSH key auth (uecm-svc); operator credential not needed. preflight validates
+    // --cred-alias / flag combo without reading DPAPI or stdin for a discarded cred.
+    cred.preflight(&db)?;
 
     let invocation = redact(&format!(
         "zen-urlacl-add.ps1 -UrlPrefix {url_prefix} -UserAccount {principal}"
@@ -1674,9 +1674,9 @@ fn urlacl_list(
     let db = ctx.require_db()?.clone();
     cred.preflight(&db)?;
     let m = require_machine(&db, machine)?;
-    // SSH key auth (uecm-svc); operator creds/auth_method ignored.
-    let creds = cred.resolve(&db)?;
-    let _ = &creds;
+    // SSH key auth (uecm-svc); operator credential not needed. preflight validates
+    // --cred-alias / flag combo without reading DPAPI or stdin for a discarded cred.
+    cred.preflight(&db)?;
 
     // PortFilter optional — null when no filter; the node script treats
     // null / empty as "list all reservations".
@@ -1725,9 +1725,9 @@ fn urlacl_remove(
         return Ok(());
     }
 
-    // SSH key auth (uecm-svc); operator creds/auth_method ignored.
-    let creds = cred.resolve(&db)?;
-    let _ = &creds;
+    // SSH key auth (uecm-svc); operator credential not needed. preflight validates
+    // --cred-alias / flag combo without reading DPAPI or stdin for a discarded cred.
+    cred.preflight(&db)?;
 
     let invocation = redact(&format!("zen-urlacl-remove.ps1 -UrlPrefix {url_prefix}"));
     let op_id = operations::start(&db, "zen.urlacl_remove", &[ep.machine_id])?;
@@ -3151,7 +3151,7 @@ fn run_verify_editor(
     let m = machines::find_by_id(&db, machine_id)?.ok_or_else(|| {
         UecmError::InvalidInput(format!("machine id={} not found", machine_id))
     })?;
-    let creds = cred.resolve(&db)?;
+    cred.preflight(&db)?;
 
     let input = crate::core::zen::verify::VerifyInput {
         ue_root: ue_install.to_string(),
@@ -3168,8 +3168,7 @@ fn run_verify_editor(
     ));
     let op_id = operations::start(&db, "zen.verify_rules.run_editor", &[machine_id])?;
 
-    let cred_ref = creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str()));
-    let result = crate::core::zen::verify::verify_endpoint(&m.ip, cred_ref, &input);
+    let result = crate::core::zen::verify::verify_endpoint(&m.ip, None, &input);
 
     let (outcome_json, op_result_for_log) = match result {
         Ok(outcome) => {
