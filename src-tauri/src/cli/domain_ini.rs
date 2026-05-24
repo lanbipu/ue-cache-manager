@@ -121,7 +121,8 @@ pub fn handle(ctx: &mut Ctx<'_>, action: IniAction) -> UecmResult<()> {
         }
         // Plan-3 additions:
         // TODO(Task 3.4): wire project_id via scan_dispatch
-        IniAction::Scan { machine_ids, project_id: _, machine_id: _, cred } => scan_cluster(ctx, &machine_ids, &cred),
+        IniAction::Scan { machine_ids, project_id: _, machine_id: _, cred } =>
+            scan_cluster(ctx, &machine_ids, std::collections::HashMap::new(), "ini", &cred),
         IniAction::Runs { limit } => list_runs(ctx, limit),
         IniAction::Findings { scan_run_id, severity } => {
             list_findings(ctx, scan_run_id, severity.as_deref())
@@ -570,6 +571,8 @@ fn remove_batch(
 fn scan_cluster(
     ctx: &mut Ctx<'_>,
     machine_ids: &[i64],
+    project_paths_per_machine: std::collections::HashMap<i64, Vec<String>>,
+    scan_type: &str,
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
     if machine_ids.is_empty() {
@@ -581,7 +584,7 @@ fn scan_cluster(
     cred.preflight(&db)?;
 
     // Create the scan_runs row up front.
-    let scan_run_id = scan_runs::insert(&db, "ini", machine_ids)?;
+    let scan_run_id = scan_runs::insert(&db, scan_type, machine_ids)?;
     let total = machine_ids.len() as i64;
 
     ctx.emitter
@@ -654,12 +657,14 @@ fn scan_cluster(
             )?;
             let zen_ctx = zen_ctx_owned.as_ref().map(|o| o.as_ctx());
 
+            let project_roots: Vec<String> =
+                project_paths_per_machine.get(&mid).cloned().unwrap_or_default();
             let inputs = ScanInputs {
                 host: &machine.ip,
                 credential: None,
                 installs: &installs,
                 user_profile: "",
-                project_roots: &[],
+                project_roots: &project_roots,
                 env_state,
                 zen_ctx: zen_ctx.as_ref(),
             };
@@ -992,6 +997,41 @@ mod tests {
 
     #[cfg(not(windows))]
     #[test]
+    fn scan_cluster_project_mode_uses_ini_project_type_and_roots() {
+        use crate::data::{scan_runs, machines};
+        let db = fresh_db();
+        let mid = machines::insert(&db, &machines::Machine::new("R1", "localhost")).unwrap();
+        // tempdir with Config/DefaultEngine.ini containing a DDC section.
+        // enumerate_project_paths builds "<root>\Config\DefaultEngine.ini" with backslash
+        // separators. On non-Windows the backslashes are literal filename chars,
+        // so we write the file at the same backslash-named path — mirrors Task 2.5.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_string_lossy().to_string();
+        let default_engine_path = format!("{}\\Config\\DefaultEngine.ini", root);
+        std::fs::write(
+            &default_engine_path,
+            "[DerivedDataBackendGraph]\nRoot=(Type=KeyLength)\n",
+        )
+        .unwrap();
+
+        let mut buf: Vec<u8> = Vec::new();
+        let mut ctx = make_ctx(&mut buf, &db);
+        let mut roots = std::collections::HashMap::new();
+        roots.insert(mid, vec![root]);
+        let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false };
+        scan_cluster(&mut ctx, &[mid], roots, "ini_project", &cred).unwrap();
+        drop(ctx);
+
+        let runs = scan_runs::list_recent(&db, "ini_project", 1).unwrap();
+        assert_eq!(runs.len(), 1);
+        let snaps = ini_config_snapshots::list_for_run(&db, runs[0].id.unwrap()).unwrap();
+        assert!(snaps.iter().any(|s| s.domain == "ddc" && s.key_name == "Root"),
+            "expected ddc/Root snapshot, got: {:?}",
+            snaps.iter().map(|s| (s.domain.as_str(), s.key_name.as_str())).collect::<Vec<_>>());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
     fn scan_persists_config_snapshots_to_db() {
         use crate::data::{ini_config_snapshots, machines as data_machines, machine_ue_installs, scan_runs};
 
@@ -1040,7 +1080,7 @@ mod tests {
         let mut buf: Vec<u8> = Vec::new();
         let mut ctx = make_ctx(&mut buf, &db);
         let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false };
-        scan_cluster(&mut ctx, &[mid], &cred).unwrap();
+        scan_cluster(&mut ctx, &[mid], std::collections::HashMap::new(), "ini", &cred).unwrap();
 
         let run_id = scan_runs::list_recent(&db, "ini", 1).unwrap()[0]
             .id
