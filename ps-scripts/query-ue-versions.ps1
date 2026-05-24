@@ -1,5 +1,5 @@
 # Reads installed Unreal Engine versions from registry.
-# Designed to run via `invoke-remote.ps1` (passed as scriptblock body via stdin),
+# Designed to run as a node-pure script over SSH (JSON args via stdin),
 # but also runnable standalone for local testing.
 # Output: JSON array of { version, install_path }, e.g.
 #   [{"version":"5.4","install_path":"C:\\Program Files\\Epic Games\\UE_5.4"}]

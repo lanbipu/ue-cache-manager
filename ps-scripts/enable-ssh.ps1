@@ -2,7 +2,7 @@
 # Run locally on the target as Administrator. Idempotent; safe to re-run.
 # Emits JSON { ok, changes, message } and exits 0 (ok) / 1 (failed).
 #
-# SSH is the UECM transport going forward; this runs alongside enable-winrm.ps1
+# SSH is the UECM transport; this is the standalone node onboarder.
 # during migration (WinRM is removed in a later phase).
 param(
     [string]$PublicKeyPath = '',

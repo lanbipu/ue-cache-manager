@@ -124,36 +124,14 @@ impl SecretStore {
     }
 }
 
-/// Read a share's svc secret during the WinRM→SSH transition, transparently
-/// migrating a legacy DPAPI entry into the SecretStore on first access.
+/// Read a share's svc secret from the SecretStore. Returns `None` when the
+/// alias has no stored secret.
 ///
-/// Mode B share secrets created before the migration live only in the legacy
-/// DPAPI store (the old `create_share` wrote `core::credentials::store_password`).
-/// The SSH-era read paths consult the SecretStore only, so without this a
-/// pre-upgrade share would report "missing secret" and force the operator to
-/// re-create it. On a SecretStore miss we read DPAPI once, copy the secret into
-/// the SecretStore (self-healing — later reads skip DPAPI), and return it.
-/// `None` means neither store has it (or DPAPI is unavailable — non-Windows,
-/// where no legacy share can exist). Retire this with the DPAPI store in P5.
+/// (Kept its name across the SSH migration for its four call sites. The legacy
+/// DPAPI fallback + self-healing migration were removed in P5b — the
+/// cross-platform SecretStore is the only home now.)
 pub fn get_share_secret_migrating(alias: &str) -> UecmResult<Option<String>> {
-    let store = SecretStore::from_config()?;
-    if let Some(secret) = store.get(alias)? {
-        return Ok(Some(secret));
-    }
-    match crate::core::credentials::resolve_password(alias) {
-        Ok(secret) => {
-            if let Err(e) = store.put(alias, &secret) {
-                tracing::warn!(alias = %alias, error = %e,
-                    "read legacy DPAPI share secret but failed to migrate it into the SecretStore");
-            } else {
-                tracing::info!(alias = %alias,
-                    "migrated legacy DPAPI share secret into the SecretStore");
-            }
-            Ok(Some(secret))
-        }
-        // Not in DPAPI either (or non-Windows / DPAPI error) — genuinely missing.
-        Err(_) => Ok(None),
-    }
+    SecretStore::from_config()?.get(alias)
 }
 
 #[cfg(test)]

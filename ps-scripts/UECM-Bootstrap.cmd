@@ -1,8 +1,8 @@
 @echo off
-REM UECM WinRM Bootstrap -- one-click entry point.
+REM UECM SSH Bootstrap -- one-click entry point.
 REM Double-click this file. If not running elevated, it relaunches itself
-REM with UAC; once elevated it runs UECM-Bootstrap-WinRM.ps1 with all the
-REM switches UECM expects.
+REM with UAC; once elevated it runs enable-ssh.ps1 with all the switches UECM
+REM expects (OpenSSH + authorize uecm.pub + node prep + PsExec64).
 
 REM Admin check via fltmc.exe -- native Windows tool that needs admin token but
 REM does NOT depend on the Server / LanmanServer service. (NET SESSION would
@@ -21,52 +21,28 @@ chcp 65001 >nul
 
 setlocal
 set "SCRIPT_DIR=%~dp0"
-set "PS1=%SCRIPT_DIR%UECM-Bootstrap-WinRM.ps1"
-
-if not exist "%PS1%" (
-    echo.
-    echo [ERROR] UECM-Bootstrap-WinRM.ps1 not found next to this .cmd file.
-    echo Expected at: %PS1%
-    echo.
-    pause
-    exit /b 1
-)
 
 REM ====== UECM local admin account (required for remote management) ======
-REM  To let UECM manage this machine remotely, it needs a local admin account
-REM  it can log in as. Put a strong password below (leave empty = only open
-REM  WinRM/SMB/WMI, do NOT create an account). Account name defaults to uecm-svc.
-REM  Afterwards, register the SAME name/password as a credential in UECM.
+REM  To let UECM manage this machine over SSH, it needs a local admin account
+REM  it can log in as (always uecm-svc). Put a strong password below (leave
+REM  empty = only enable SSH/SMB/WMI, do NOT create an account).
+REM  Afterwards, register the SAME uecm-svc password as a credential in UECM.
 REM  Avoid % " ^ in the password (cmd parsing); letters + digits are safest.
 set "UECM_LOCAL_ADMIN=uecm-svc"
 set "UECM_LOCAL_ADMIN_PASSWORD=UecmRender@2026"
 REM =======================================================================
 
-set "ADMIN_ARGS="
-if not "%UECM_LOCAL_ADMIN_PASSWORD%"=="" set ADMIN_ARGS=-CreateLocalAdmin -LocalAdminName "%UECM_LOCAL_ADMIN%" -LocalAdminPassword "%UECM_LOCAL_ADMIN_PASSWORD%"
-REM The SSH service account is ALWAYS uecm-svc (SshExecutor logs in as uecm-svc),
-REM independent of the WinRM local-admin name above. Hardcode it so enable-ssh.ps1
-REM (which rejects any other name) never gets a mismatched account.
+REM The SSH service account is ALWAYS uecm-svc (SshExecutor logs in as uecm-svc).
+REM Hardcode it so enable-ssh.ps1 (which rejects any other name) never gets a
+REM mismatched account.
 set "SSH_ADMIN_ARGS="
 if not "%UECM_LOCAL_ADMIN_PASSWORD%"=="" set SSH_ADMIN_ARGS=-CreateLocalAdmin -LocalAdminName "uecm-svc" -LocalAdminPassword "%UECM_LOCAL_ADMIN_PASSWORD%"
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS1%" ^
-    -NetworkCategory Private ^
-    -EnableLocalAccountRemoteAdmin ^
-    -EnableSmbServer ^
-    -EnableWmi ^
-    -SetExecutionPolicy RemoteSigned ^
-    -EnableLongPaths ^
-    -PowerProfile HighPerformance ^
-    %ADMIN_ARGS%
-
-set "PS_EXIT=%ERRORLEVEL%"
-
-REM ====== SSH transport onboarding (primary transport for migrated commands) ======
-REM machine refresh / env / ini / zen now connect over SSH, so SSH onboarding is
-REM required: a missing uecm.pub or a failed enable-ssh.ps1 must fail the bootstrap,
-REM not just WinRM prep. Capture the exit code at top level so %ERRORLEVEL% expands
-REM AFTER the run (setting it inside an if-block hits the delayed-expansion trap).
+REM ====== SSH transport onboarding (the UECM transport) ======
+REM machine refresh / env / ini / zen all connect over SSH, so SSH onboarding is
+REM required: a missing uecm.pub or a failed enable-ssh.ps1 must fail the bootstrap.
+REM Capture the exit code at top level so %ERRORLEVEL% expands AFTER the run
+REM (setting it inside an if-block hits the delayed-expansion trap).
 set "SSH_PS1=%SCRIPT_DIR%enable-ssh.ps1"
 set "STAGING_DIR=%SCRIPT_DIR:~0,-1%"
 set "UECM_PUB=%SCRIPT_DIR%uecm.pub"
@@ -79,7 +55,6 @@ set "SSH_EXIT=%ERRORLEVEL%"
 :ssh_done
 
 set "OVERALL=0"
-if not "%PS_EXIT%"=="0" set "OVERALL=1"
 if not "%SSH_EXIT%"=="0" set "OVERALL=1"
 
 echo.
@@ -97,7 +72,7 @@ if "%OVERALL%"=="0" (
     echo ================================================================
     echo.
     echo     [ FAILED ]  UECM bootstrap did not complete.
-    echo     WinRM prep exit %PS_EXIT%, SSH onboarding exit %SSH_EXIT%.
+    echo     SSH onboarding exit %SSH_EXIT%.
     echo     SSH_EXIT=9 means enable-ssh.ps1 or uecm.pub was missing next to this .cmd.
     echo     Check the JSON 'message' / 'missing_critical' fields above.
     echo.
