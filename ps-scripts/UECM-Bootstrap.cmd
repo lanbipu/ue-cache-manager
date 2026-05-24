@@ -59,14 +59,27 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS1%" ^
 
 set "PS_EXIT=%ERRORLEVEL%"
 
-REM ====== SSH transport onboarding (parallel to WinRM during migration) ======
-REM Best-effort: SSH problems do not fail the bootstrap while WinRM is primary.
+REM ====== SSH transport onboarding (primary transport for migrated commands) ======
+REM machine refresh / env / ini / zen now connect over SSH, so SSH onboarding is
+REM required: a missing uecm.pub or a failed enable-ssh.ps1 must fail the bootstrap,
+REM not just WinRM prep. Capture the exit code at top level so %ERRORLEVEL% expands
+REM AFTER the run (setting it inside an if-block hits the delayed-expansion trap).
 set "SSH_PS1=%SCRIPT_DIR%enable-ssh.ps1"
 set "UECM_PUB=%SCRIPT_DIR%uecm.pub"
-if exist "%SSH_PS1%" if exist "%UECM_PUB%" powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SSH_PS1%" -PublicKeyPath "%UECM_PUB%" -StagingSourceDir "%SCRIPT_DIR%" -EnableSmbServer -EnableWmi -EnableLongPaths -PowerProfile HighPerformance -SetExecutionPolicy RemoteSigned %SSH_ADMIN_ARGS%
+set "SSH_EXIT=0"
+if not exist "%SSH_PS1%" set "SSH_EXIT=9"
+if not exist "%UECM_PUB%" set "SSH_EXIT=9"
+if not "%SSH_EXIT%"=="0" goto ssh_done
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SSH_PS1%" -PublicKeyPath "%UECM_PUB%" -StagingSourceDir "%SCRIPT_DIR%" -EnableSmbServer -EnableWmi -EnableLongPaths -PowerProfile HighPerformance -SetExecutionPolicy RemoteSigned %SSH_ADMIN_ARGS%
+set "SSH_EXIT=%ERRORLEVEL%"
+:ssh_done
+
+set "OVERALL=0"
+if not "%PS_EXIT%"=="0" set "OVERALL=1"
+if not "%SSH_EXIT%"=="0" set "OVERALL=1"
 
 echo.
-if "%PS_EXIT%"=="0" (
+if "%OVERALL%"=="0" (
     echo ================================================================
     echo.
     echo     [ OK ]  UECM bootstrap SUCCEEDED - this machine is ready.
@@ -79,7 +92,9 @@ if "%PS_EXIT%"=="0" (
 ) else (
     echo ================================================================
     echo.
-    echo     [ FAILED ]  UECM bootstrap did not complete, exit code %PS_EXIT%.
+    echo     [ FAILED ]  UECM bootstrap did not complete.
+    echo     WinRM prep exit %PS_EXIT%, SSH onboarding exit %SSH_EXIT%.
+    echo     SSH_EXIT=9 means enable-ssh.ps1 or uecm.pub was missing next to this .cmd.
     echo     Check the JSON 'message' / 'missing_critical' fields above.
     echo.
     echo ================================================================
@@ -91,4 +106,4 @@ REM 2>nul: if stdin is redirected (non-interactive) timeout errors out and we
 REM just fall through to exit instead of blocking like pause did.
 echo This window auto-closes in 20s. Press any key to close now...
 timeout /t 20 >nul 2>nul
-exit /b %PS_EXIT%
+exit /b %OVERALL%
