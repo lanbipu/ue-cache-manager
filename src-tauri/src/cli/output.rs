@@ -122,6 +122,12 @@ pub trait Emitter {
     fn emit_event(&mut self, event: &Event) -> io::Result<()>;
     fn emit_value(&mut self, value: &serde_json::Value) -> io::Result<()>;
     fn emit_error(&mut self, err: &UecmError);
+    /// Raw human-facing text line to stdout. JSON emitters ignore it
+    /// (handlers must branch on `ctx.json_mode` and only call this in
+    /// human mode). Default = no-op so NDJSON stays clean.
+    fn emit_text(&mut self, _text: &str) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Convenience generic method available on every `Emitter`, including
@@ -318,6 +324,11 @@ impl<W: Write, E: Write> Emitter for HumanEmitter<W, E> {
     fn emit_error(&mut self, err: &UecmError) {
         let _ = writeln!(self.stderr, "✗ error: {}", err);
     }
+
+    fn emit_text(&mut self, text: &str) -> io::Result<()> {
+        writeln!(self.stdout, "{}", text)?;
+        self.stdout.flush()
+    }
 }
 
 #[cfg(test)]
@@ -397,5 +408,27 @@ mod tests {
         assert!(s.contains("winrm=✓"));
         assert!(s.contains("smb=✗"));
         assert!(s.contains("rpc=✓"));
+    }
+
+    #[test]
+    fn human_emit_text_writes_to_stdout() {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        {
+            let mut emitter = HumanEmitter::new(&mut stdout, &mut stderr, false);
+            emitter.emit_text("VERSION  PRIMARY").unwrap();
+        }
+        let s = String::from_utf8(stdout).unwrap();
+        assert_eq!(s, "VERSION  PRIMARY\n");
+    }
+
+    #[test]
+    fn ndjson_emit_text_is_noop() {
+        let mut buf = Vec::new();
+        {
+            let mut emitter = NdjsonEmitter::new(&mut buf);
+            emitter.emit_text("should not appear").unwrap();
+        }
+        assert!(buf.is_empty());
     }
 }
