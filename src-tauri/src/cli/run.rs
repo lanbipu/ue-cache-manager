@@ -3,7 +3,7 @@
 
 use crate::cli::args::{Cli, Domain, OutputFormat};
 use crate::cli::output::{Emitter, HumanEmitter, NdjsonEmitter, exit_code_for};
-use crate::cli::{domain_cred, domain_ddc, domain_deploy, domain_env, domain_gpu, domain_health, domain_ini, domain_local_cache, domain_machine, domain_project, domain_pso, domain_secret, domain_share, domain_ssh, domain_system, domain_winrm, domain_zen};
+use crate::cli::{domain_cred, domain_ddc, domain_deploy, domain_env, domain_gpu, domain_health, domain_ini, domain_local_cache, domain_machine, domain_project, domain_pso, domain_secret, domain_share, domain_ssh, domain_system, domain_zen};
 use crate::data::Db;
 use crate::error::UecmError;
 use crate::startup;
@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 pub struct Ctx<'a> {
     /// `None` for diagnostic / write-free commands (e.g. `system version`,
-    /// `winrm bootstrap-script`). Handlers that need DB access must call
+    /// `ssh package-bootstrap`). Handlers that need DB access must call
     /// `ctx.require_db()` and propagate the error.
     pub db: Option<Db>,
     /// The DB path the CLI would open / opened. Handlers MUST use this rather
@@ -45,7 +45,7 @@ impl<'a> Ctx<'a> {
 
 /// Whether a parsed command actually needs SQLite to be open.
 ///
-/// DB-free commands (system version / db-path / ps-dir, winrm bootstrap-script)
+/// DB-free commands (system version / db-path / ps-dir, ssh package-bootstrap)
 /// remain runnable even when the data directory is unwritable or the DB file
 /// is broken. Per Codex review feedback on Task 1.4 / 2.1.
 fn needs_db(cmd: &Domain) -> bool {
@@ -57,10 +57,8 @@ fn needs_db(cmd: &Domain) -> bool {
         // `system echo` and the path-printing variants don't open DB;
         // only `migrate-db` does.
         Domain::System { action } => matches!(action, SystemAction::MigrateDb),
-        // None of the WinRM commands touch SQLite — they all talk PowerShell
-        // sidecar or print text.
-        Domain::Winrm { .. } => false,
-        // `ssh probe` only spawns ssh; no DB. (package-bootstrap/authorize land in P5a.)
+        // `ssh probe` spawns ssh; `ssh package-bootstrap` touches the keystore +
+        // file packager. Neither needs SQLite.
         Domain::Ssh { .. } => false,
         // `secret` talks only to the file-backed SecretStore; no DB.
         Domain::Secret { .. } => false,
@@ -197,7 +195,6 @@ pub fn run(cli: Cli) -> i32 {
     let result = match cli.command {
         Domain::System { action } => domain_system::handle(&mut ctx, action),
         Domain::Machine { action } => domain_machine::handle(&mut ctx, action),
-        Domain::Winrm { action } => domain_winrm::handle(&mut ctx, action),
         Domain::Ssh { action } => domain_ssh::handle(&mut ctx, action),
         Domain::Cred { action } => domain_cred::handle(&mut ctx, action),
         Domain::Secret { action } => domain_secret::handle(&mut ctx, action),

@@ -71,9 +71,8 @@ pub struct VerifyOutcome {
 
 /// Run `zen-verify-rules.ps1` against `host` and return the parsed outcome.
 ///
-/// `cred` controls the WinRM authentication path. `Some((user, pass))` calls
-/// `winrm::invoke_with_credential`, `None` falls back to `winrm::invoke`
-/// (caller's Kerberos / NTLM context). Same pattern as M2 zen handlers in
+/// `cred` is a back-compat shim — the sidecar runs over SSH (uecm-svc key auth)
+/// regardless of `cred`. Same envelope pattern as the M2 zen handlers in
 /// `cli::domain_zen` — `run_remote` / `parse_envelope`.
 ///
 /// Returns `Err(UecmError::PowerShell)` when the sidecar's envelope has
@@ -86,7 +85,7 @@ pub fn verify_endpoint(
     input: &VerifyInput,
 ) -> UecmResult<VerifyOutcome> {
     // Same validation the sidecar will do, but failing here gives a clearer
-    // error than waiting for the WinRM round-trip to return `ok:false`.
+    // error than waiting for the SSH round-trip to return `ok:false`.
     if input.ue_root.trim().is_empty() {
         return Err(UecmError::InvalidInput("ue_root must be non-empty".into()));
     }

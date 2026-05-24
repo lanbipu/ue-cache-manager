@@ -1,13 +1,37 @@
-//! Tauri commands for first-contact WinRM bootstrap.
+//! Tauri commands for first-contact node onboarding.
+//!
+//! Remote WinRM push has been retired (SSH migration P5a). These commands are
+//! kept registered + signature-frozen for the published UI: `bootstrap_winrm`
+//! now returns a graceful "use the USB bootstrap" result and
+//! `get_winrm_bootstrap_script` returns the SSH node-onboarder script.
 
-use crate::core::{bootstrap as core_bootstrap, credentials as core_credentials};
 use crate::data::{credentials as data_credentials, machines as data_machines, CredentialKind, Db};
 use crate::error::{UecmError, UecmResult};
+use serde::{Deserialize, Serialize};
 use tauri::State;
+
+/// Frozen response shape (Vue reads `.ok` / `.message` / `.manual_script`).
+/// Moved here from the deleted `core::bootstrap`; the name is kept for serde
+/// compatibility with the Vue `WinrmBootstrapResult` TS type.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WinrmBootstrapResult {
+    pub ok: bool,
+    pub method: String,
+    pub message: String,
+    pub winrm_ok: bool,
+    #[serde(default)]
+    pub changed: Vec<String>,
+    pub manual_script: Option<String>,
+}
+
+fn ssh_onboarder_script() -> String {
+    include_str!("../../../ps-scripts/enable-ssh.ps1").to_string()
+}
 
 #[tauri::command]
 pub fn get_winrm_bootstrap_script() -> UecmResult<String> {
-    Ok(core_bootstrap::manual_winrm_script())
+    // Remote WinRM push retired; the manual onboarder is now the SSH node script.
+    Ok(ssh_onboarder_script())
 }
 
 #[tauri::command]
@@ -16,8 +40,11 @@ pub fn bootstrap_winrm(
     machine_id: i64,
     credential_alias: String,
     enable_local_account_remote_admin: bool,
-) -> UecmResult<core_bootstrap::WinrmBootstrapResult> {
-    let machine = data_machines::find_by_id(&db, machine_id)?
+) -> UecmResult<WinrmBootstrapResult> {
+    let _ = enable_local_account_remote_admin; // accepted for back-compat; unused.
+
+    // Validate inputs so the UI still gets precise errors, but do NOT push.
+    let _machine = data_machines::find_by_id(&db, machine_id)?
         .ok_or_else(|| UecmError::InvalidInput(format!("machine {} not found", machine_id)))?;
     let credential = data_credentials::find_by_alias(&db, &credential_alias)?.ok_or_else(|| {
         UecmError::InvalidInput(format!("credential alias '{}' not found", credential_alias))
@@ -29,20 +56,15 @@ pub fn bootstrap_winrm(
         )));
     }
 
-    let password = core_credentials::resolve_password(&credential_alias)?;
-    let result = core_bootstrap::enable_winrm_with_psexec(
-        &machine.ip,
-        &credential.username,
-        &password,
-        enable_local_account_remote_admin,
-        false,
-    )?;
-
-    if result.winrm_ok {
-        data_machines::mark_seen(&db, machine_id, "online")?;
-    } else {
-        data_machines::mark_seen(&db, machine_id, "offline")?;
-    }
-
-    Ok(result)
+    Ok(WinrmBootstrapResult {
+        ok: false,
+        method: "ssh-onboard-required".into(),
+        message: "Remote WinRM push has been retired. Onboard this node with the \
+                  UECM-Bootstrap.cmd USB bundle (build it via `uecm-cli ssh package-bootstrap`), \
+                  then use machine refresh over SSH."
+            .into(),
+        winrm_ok: false,
+        changed: Vec::new(),
+        manual_script: Some(ssh_onboarder_script()),
+    })
 }

@@ -1,10 +1,12 @@
 //! `uecm-cli ssh <action>` handlers — SSH transport onboarding + probe.
-//! Replaces the retiring `winrm` command domain (P5a adds package-bootstrap +
-//! authorize; P1 ships `probe`).
+//! Replaces the retired `winrm` command domain (`probe` from P1, `package-bootstrap`
+//! from P5a). `ssh authorize` is deferred (see args.rs SshAction TODO).
 
 use crate::cli::args::SshAction;
 use crate::cli::run::Ctx;
 use crate::cli::EmitSerialize;
+use crate::core::keystore::KeyStore;
+use crate::core::powershell;
 use crate::core::ssh::{RemoteExecutor, SshExecutor};
 use crate::error::{UecmError, UecmResult};
 
@@ -19,10 +21,57 @@ pub struct ProbeOut {
     pub latency_ms: i64,
 }
 
+/// Parsed stdout of `package-bootstrap.ps1` (extra keys ignored).
+#[derive(serde::Deserialize)]
+struct PackageOut {
+    ok: bool,
+    output_directory: String,
+    files: Vec<String>,
+}
+
 pub fn handle(ctx: &mut Ctx<'_>, action: SshAction) -> UecmResult<()> {
     match action {
         SshAction::Probe { host } => probe(ctx, &host),
+        SshAction::PackageBootstrap { out, local_admin_password } => {
+            package_bootstrap(ctx, &out, local_admin_password.as_deref())
+        }
     }
+}
+
+/// Assemble a USB SSH onboarding bundle. Ensures the operator keystore keypair
+/// exists, then shells out to `package-bootstrap.ps1` (Windows-only sidecar) to
+/// copy UECM-Bootstrap.cmd + enable-ssh.ps1 + uecm.pub + PsExec64.exe + README
+/// into `out`. Replaces the retired `winrm bootstrap-script`.
+fn package_bootstrap(
+    ctx: &mut Ctx<'_>,
+    out: &str,
+    local_admin_password: Option<&str>,
+) -> UecmResult<()> {
+    let cfg = crate::startup::resolve_config_dir()?;
+    let ks = KeyStore::at(&cfg);
+    ks.ensure_keypair()?;
+    let pubkey_str = ks.public_key_path().to_string_lossy().into_owned();
+
+    let mut args: Vec<&str> = vec!["-OutputDirectory", out, "-UecmPublicKeyPath", &pubkey_str];
+    if let Some(p) = local_admin_password {
+        args.push("-LocalAdminPassword");
+        args.push(p);
+    }
+    let res: PackageOut =
+        powershell::run_json(&powershell::script_path("package-bootstrap.ps1"), &args)?;
+    if !res.ok {
+        return Err(UecmError::OperationFailed(format!(
+            "package-bootstrap failed for {}",
+            res.output_directory
+        )));
+    }
+    ctx.emitter
+        .emit_result(&serde_json::json!({
+            "output_directory": res.output_directory,
+            "files": res.files,
+        }))
+        .ok();
+    Ok(())
 }
 
 fn probe(ctx: &mut Ctx<'_>, host: &str) -> UecmResult<()> {

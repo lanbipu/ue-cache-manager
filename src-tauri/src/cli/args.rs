@@ -142,17 +142,12 @@ pub enum Domain {
         #[command(subcommand)]
         action: MachineAction,
     },
-    /// WinRM probe + onboarding.
-    Winrm {
-        #[command(subcommand)]
-        action: WinrmAction,
-    },
-    /// SSH transport onboarding + probe (replaces the retiring winrm domain).
+    /// SSH transport onboarding + probe (replaced the retired winrm domain).
     Ssh {
         #[command(subcommand)]
         action: SshAction,
     },
-    /// Credential storage (DPAPI + cmdkey + SQLite metadata).
+    /// Credential alias storage (SecretStore + SQLite metadata).
     Cred {
         #[command(subcommand)]
         action: CredAction,
@@ -272,7 +267,7 @@ pub enum MachineAction {
         #[arg(long)]
         hostname: Option<String>,
     },
-    /// Refresh a machine: WinRM probe + detect UE installs + GPUs.
+    /// Refresh a machine: SSH probe + detect UE installs + GPUs.
     ///
     /// Plan 3: now accepts credentials. When supplied, all three remote
     /// calls (probe / detect_ue / detect_gpus) authenticate as the given
@@ -303,7 +298,7 @@ pub enum MachineAction {
     /// Rename a machine.
     Rename { id: i64, hostname: String },
     /// Deep scan a set of machines: refresh (UE/GPU) + INI scan + health, per machine.
-    /// WinRM-unreachable machines are skipped (run `machine authorize` first) and the
+    /// SSH-unreachable machines are skipped (re-onboard via UECM-Bootstrap.cmd) and the
     /// batch continues.
     DeepScan {
         #[arg(long, value_name = "M1,M2,...", value_delimiter = ',', conflicts_with = "all")]
@@ -314,16 +309,17 @@ pub enum MachineAction {
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },
-    /// Authorize a set of machines for remote management: winrm preflight -> bootstrap
-    /// (Path B remote PsExec). Machines where Path B is not viable fall back to a USB
-    /// script hint. The batch continues past per-machine failures.
+    /// Deprecated: remote WinRM push is retired (SSH migration). Emits guidance to
+    /// build a USB onboarding bundle with `ssh package-bootstrap` and run
+    /// UECM-Bootstrap.cmd on each node. `--save-as` / credential flags are accepted
+    /// but ignored (kept for back-compat).
     Authorize {
         #[arg(long, value_name = "M1,M2,...", value_delimiter = ',', conflicts_with = "all")]
         machine_ids: Vec<i64>,
         /// Authorize every machine in inventory.
         #[arg(long, conflicts_with = "machine_ids")]
         all: bool,
-        /// Save the resolved --user/--pass-stdin credential as this DPAPI alias for reuse.
+        /// Accepted but ignored (remote push retired).
         #[arg(long, value_name = "ALIAS")]
         save_as: Option<String>,
         #[command(flatten)]
@@ -336,6 +332,21 @@ pub enum MachineAction {
 pub enum SshAction {
     /// Probe a host's SSH reachability (uecm-svc key auth).
     Probe { host: String },
+    /// Assemble a USB onboarding bundle (UECM-Bootstrap.cmd + enable-ssh.ps1 +
+    /// uecm.pub + PsExec64.exe + README) into an output directory. Replaces the
+    /// retired `winrm bootstrap-script`. Windows-only (PowerShell packager).
+    PackageBootstrap {
+        /// Output directory for the bundle (created if missing).
+        #[arg(long, value_name = "DIR")]
+        out: String,
+        /// Optionally bake the uecm-svc local-admin password into the packaged
+        /// .cmd so first-contact double-click creates the account unattended.
+        #[arg(long, value_name = "PASS")]
+        local_admin_password: Option<String>,
+    },
+    // TODO(P5-followup): `ssh authorize <host>` — re-push the current keystore
+    // pubkey to an already-SSH-reachable node (key rotation). Deferred: not a
+    // 1:1 replacement of any retiring command; remote push is intentionally gone.
 }
 
 // ---------- secret ----------
@@ -365,60 +376,12 @@ pub enum SecretAction {
     },
 }
 
-// ---------- winrm ----------
-#[derive(Subcommand, Debug)]
-pub enum WinrmAction {
-    /// Probe a single host's WinRM endpoint.
-    Probe { host: String },
-    /// Print the manual WinRM enable script (no-arg PS1 body).
-    BootstrapScript {
-        /// Write to this file instead of stdout.
-        #[arg(long)]
-        output: Option<String>,
-    },
-    /// Remote bootstrap WinRM via PsExec.
-    Bootstrap {
-        host: String,
-        #[arg(long)]
-        user: String,
-        /// Password (leaks into shell history; prefer --pass-stdin).
-        #[arg(long, group = "bootstrap_secret", conflicts_with = "pass_stdin")]
-        pass: Option<String>,
-        /// Read password from stdin (one line).
-        #[arg(long, group = "bootstrap_secret", conflicts_with = "pass")]
-        pass_stdin: bool,
-        #[arg(long)]
-        enable_local_admin: bool,
-    },
-    /// Preflight check whether Path B (remote PsExec bootstrap) is viable for a host.
-    /// Default mode: TCP 135/445 + ADMIN$ mount + write probe (zero-trace on target).
-    /// With --probe: also actually runs PsExec to test SCM service registration
-    /// (writes one service install/remove pair to target Event Log).
-    Preflight {
-        /// Target host (IP or hostname).
-        host: String,
-        /// Local administrator username on target (e.g. Administrator).
-        #[arg(long)]
-        user: String,
-        /// Password (leaks into shell history; prefer --pass-stdin).
-        #[arg(long, group = "preflight_secret", conflicts_with = "pass_stdin")]
-        pass: Option<String>,
-        /// Read password from stdin (one line).
-        #[arg(long, group = "preflight_secret", conflicts_with = "pass")]
-        pass_stdin: bool,
-        /// Run the actual PsExec SCM probe. Without this flag, preflight stops at
-        /// ADMIN$ mount + write test (cannot detect UAC remote token filter blocks).
-        #[arg(long)]
-        probe: bool,
-    },
-}
-
 // ---------- cred ----------
 #[derive(Subcommand, Debug)]
 pub enum CredAction {
     /// List saved credential aliases.
     List,
-    /// Save a credential (cmdkey + DPAPI + SQLite metadata).
+    /// Save a credential (SecretStore + SQLite metadata).
     Save {
         #[arg(long)]
         alias: String,

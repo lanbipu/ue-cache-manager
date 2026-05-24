@@ -102,8 +102,8 @@ pub fn script_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// Load a sidecar script's text. Used when the script body is forwarded over
-/// WinRM via `core::winrm::invoke*` rather than executed locally.
+/// Load a sidecar script's text. Used when the script body is forwarded to a
+/// node and run there (over SSH) rather than executed locally.
 pub fn read_script(name: &str) -> UecmResult<String> {
     Ok(fs::read_to_string(script_path(name))?)
 }

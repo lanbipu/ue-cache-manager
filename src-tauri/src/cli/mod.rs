@@ -10,7 +10,6 @@ pub mod output;
 pub mod run;
 pub mod domain_system;
 pub mod domain_machine;
-pub mod domain_winrm;
 pub mod domain_ssh;
 pub mod domain_cred;
 pub mod domain_secret;
