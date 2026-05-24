@@ -1,6 +1,7 @@
 pub mod connection;
 pub mod credentials;
 pub mod health_check_runs;
+pub mod ini_config_snapshots;
 pub mod ini_findings;
 pub mod machine_gpus;
 pub mod machine_ue_installs;
