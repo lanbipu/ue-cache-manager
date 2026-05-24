@@ -576,7 +576,7 @@ fn scan_dispatch(
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
     match project_id {
-        None => scan_cluster(ctx, &machine_ids, HashMap::new(), "ini", cred),
+        None => scan_cluster(ctx, &machine_ids, HashMap::new(), "ini", None, cred),
         Some(pid) => {
             let (mids, roots) = {
                 let db = ctx.require_db()?;
@@ -600,7 +600,7 @@ fn scan_dispatch(
                 }
                 (mids, roots)
             };
-            scan_cluster(ctx, &mids, roots, "ini_project", cred)
+            scan_cluster(ctx, &mids, roots, "ini_project", Some(pid), cred)
         }
     }
 }
@@ -618,6 +618,7 @@ fn scan_cluster(
     machine_ids: &[i64],
     project_paths_per_machine: HashMap<i64, Vec<String>>,
     scan_type: &str,
+    project_id: Option<i64>,
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
     if machine_ids.is_empty() {
@@ -807,6 +808,7 @@ fn scan_cluster(
 
     let summary = serde_json::json!({
         "scan_run_id": scan_run_id,
+        "project_id": project_id,
         "critical": total_critical,
         "warning": total_warning,
         "healthy": total_healthy,
@@ -1065,7 +1067,7 @@ mod tests {
         let mut roots = HashMap::new();
         roots.insert(mid, vec![root]);
         let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false };
-        scan_cluster(&mut ctx, &[mid], roots, "ini_project", &cred).unwrap();
+        scan_cluster(&mut ctx, &[mid], roots, "ini_project", None, &cred).unwrap();
         drop(ctx);
 
         let runs = scan_runs::list_recent(&db, "ini_project", 1).unwrap();
@@ -1129,6 +1131,56 @@ mod tests {
         let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false };
         let err = scan_dispatch(&mut ctx, vec![], Some(pid), None, &cred).unwrap_err();
         assert!(matches!(err, UecmError::InvalidInput(_)));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn scan_dispatch_project_tags_summary_with_project_id() {
+        use crate::data::{
+            machines, projects::{self, Project},
+            project_locations::{self, ProjectLocation, DiscoveryStatus},
+            scan_runs,
+        };
+        let db = fresh_db();
+        let mid = machines::insert(&db, &machines::Machine::new("R1", "localhost")).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_string_lossy().to_string();
+        let default_engine_path = format!("{}\\Config\\DefaultEngine.ini", root);
+        std::fs::write(
+            &default_engine_path,
+            "[DerivedDataBackendGraph]\nRoot=(Type=KeyLength)\n",
+        )
+        .unwrap();
+        let pid = projects::upsert(&db, &Project {
+            id: None, uproject_name: "Demo.uproject".into(),
+            uproject_stem_lower: "demo".into(), uproject_guid: None, display_name: None,
+            first_seen_at: None, last_seen_at: None, ue_version_major: None, ue_version_minor: None,
+            engine_association_raw: None, engine_association_kind: None,
+        })
+        .unwrap();
+        project_locations::upsert(&db, &ProjectLocation {
+            id: None, project_id: pid, machine_id: mid,
+            abs_path: root.clone(),
+            uproject_path: format!("{}\\Demo.uproject", root),
+            discovery_status: DiscoveryStatus::Auto, discovered_at: None,
+        })
+        .unwrap();
+
+        let mut buf: Vec<u8> = Vec::new();
+        let mut ctx = make_ctx(&mut buf, &db);
+        let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false };
+        scan_dispatch(&mut ctx, vec![], Some(pid), None, &cred).unwrap();
+        drop(ctx);
+
+        let run = scan_runs::list_recent(&db, "ini_project", 1).unwrap().remove(0);
+        let summary = run.summary.as_ref().expect("summary must be set");
+        assert_eq!(
+            summary["project_id"].as_i64(),
+            Some(pid),
+            "summary must carry project_id={}, got: {}",
+            pid,
+            summary
+        );
     }
 
     #[test]
@@ -1196,7 +1248,7 @@ mod tests {
         let mut buf: Vec<u8> = Vec::new();
         let mut ctx = make_ctx(&mut buf, &db);
         let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false };
-        scan_cluster(&mut ctx, &[mid], HashMap::new(), "ini", &cred).unwrap();
+        scan_cluster(&mut ctx, &[mid], HashMap::new(), "ini", None, &cred).unwrap();
 
         let run_id = scan_runs::list_recent(&db, "ini", 1).unwrap()[0]
             .id
