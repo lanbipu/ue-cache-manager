@@ -2124,4 +2124,12 @@ mod tests {
         // -vvv 仍封顶 trace
         assert_eq!(super::effective_log_level("warn", 5, false), "trace");
     }
+
+    #[test]
+    fn no_input_flag_parses() {
+        let cli = Cli::try_parse_from(["uecm-cli", "--no-input", "system", "version"]).unwrap();
+        assert!(cli.no_input);
+        let cli2 = Cli::try_parse_from(["uecm-cli", "system", "version"]).unwrap();
+        assert!(!cli2.no_input);
+    }
 }
