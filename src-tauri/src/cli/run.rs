@@ -87,6 +87,35 @@ fn needs_db(cmd: &Domain) -> bool {
 }
 
 pub fn run(cli: Cli) -> i32 {
+    // Load --config defaults (explicit CLI flags still win).
+    let file_cfg = match &cli.config {
+        Some(p) => match crate::cli::config_file::load(p) {
+            Ok(c) => c,
+            Err(e) => return finish_error(&e, cli.json),
+        },
+        None => crate::cli::config_file::FileConfig::default(),
+    };
+    let mut cli = cli; // shadow as mutable to apply config fallbacks
+    if cli.db_path.is_none() {
+        cli.db_path = file_cfg.db_path.clone();
+    }
+    if cli.log_level == "warn" {
+        // "warn" is the clap default; treat as "not explicitly set".
+        if let Some(lvl) = &file_cfg.log_level {
+            cli.log_level = lvl.clone();
+        }
+    }
+    if cli.output.is_none() && !cli.json {
+        if let Some(out) = file_cfg.output.as_deref() {
+            cli.output = match out {
+                "text" => Some(crate::cli::args::OutputFormat::Text),
+                "json" => Some(crate::cli::args::OutputFormat::Json),
+                "ndjson" | "stream-json" => Some(crate::cli::args::OutputFormat::Ndjson),
+                _ => None,
+            };
+        }
+    }
+
     // tracing init
     let level = crate::cli::args::effective_log_level(&cli.log_level, cli.verbose, cli.quiet);
     let filter = tracing_subscriber::EnvFilter::try_new(&level)
