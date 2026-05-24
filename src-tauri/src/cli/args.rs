@@ -239,6 +239,21 @@ pub enum MachineAction {
 pub enum SshAction {
     /// Probe a host's SSH reachability (uecm-svc key auth).
     Probe { host: String },
+    /// Assemble a USB onboarding bundle (UECM-Bootstrap.cmd + enable-ssh.ps1 +
+    /// uecm.pub + PsExec64.exe + README) into an output directory. Replaces the
+    /// retired `winrm bootstrap-script`. Windows-only (PowerShell packager).
+    PackageBootstrap {
+        /// Output directory for the bundle (created if missing).
+        #[arg(long, value_name = "DIR")]
+        out: String,
+        /// Optionally bake the uecm-svc local-admin password into the packaged
+        /// .cmd so first-contact double-click creates the account unattended.
+        #[arg(long, value_name = "PASS")]
+        local_admin_password: Option<String>,
+    },
+    // TODO(P5-followup): `ssh authorize <host>` — re-push the current keystore
+    // pubkey to an already-SSH-reachable node (key rotation). Deferred: not a
+    // 1:1 replacement of any retiring command; remote push is intentionally gone.
 }
 
 // ---------- secret ----------

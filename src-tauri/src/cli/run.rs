@@ -52,7 +52,8 @@ fn needs_db(cmd: &Domain) -> bool {
         // None of the WinRM commands touch SQLite — they all talk PowerShell
         // sidecar or print text.
         Domain::Winrm { .. } => false,
-        // `ssh probe` only spawns ssh; no DB. (package-bootstrap/authorize land in P5a.)
+        // `ssh probe` spawns ssh; `ssh package-bootstrap` touches the keystore +
+        // file packager. Neither needs SQLite.
         Domain::Ssh { .. } => false,
         // `secret` talks only to the file-backed SecretStore; no DB.
         Domain::Secret { .. } => false,
