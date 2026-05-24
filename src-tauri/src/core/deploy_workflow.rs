@@ -341,9 +341,11 @@ fn execute_one(
                 })?;
             let source_location =
                 project_location_for(db, plan.project_id, plan.source_machine_id)?;
-            let (op_user, op_pass) = creds
-                .map(|(u, p)| (Some(u.to_string()), Some(p.to_string())))
-                .unwrap_or((None, None));
+            // SSH key auth: the SOURCE SMB credential comes from the source host's
+            // registered Mode B share (SecretStore), not the operator credential
+            // (which is gone). resolve_source_smb errors clearly if the source has
+            // no usable share rather than mounting anonymously and failing robocopy.
+            let smb = pak_distribute::resolve_source_smb(db, plan.source_machine_id, None, true)?;
             let profile = pak_distribute::DistributeProfile::ddc_pak();
             let items = pak_distribute::plan(
                 &profile,
@@ -354,10 +356,10 @@ fn execute_one(
                 &[machine_id],
                 plan.project_id,
                 plan.shared_cache.unc_path.as_deref(),
-                op_user.clone(),
-                op_pass.clone(),
-                op_user,
-                op_pass,
+                None,
+                None,
+                smb.user,
+                smb.pass,
             )?;
             let item = items
                 .into_iter()
@@ -426,9 +428,10 @@ fn execute_one(
                     "no PSO cache files collected on source".into(),
                 ));
             }
-            let (op_user, op_pass) = creds
-                .map(|(u, p)| (Some(u.to_string()), Some(p.to_string())))
-                .unwrap_or((None, None));
+            // SSH key auth: source SMB credential from the source's registered
+            // Mode B share (SecretStore), not the operator credential. See
+            // DistributeDdcPak.
+            let smb = pak_distribute::resolve_source_smb(db, plan.source_machine_id, None, true)?;
             let mut total_bytes: i64 = 0;
             for file in &files {
                 let items = pso_distribute::plan(
@@ -437,10 +440,10 @@ fn execute_one(
                     file,
                     &[machine_id],
                     plan.shared_cache.unc_path.as_deref(),
-                    op_user.clone(),
-                    op_pass.clone(),
-                    op_user.clone(),
-                    op_pass.clone(),
+                    None,
+                    None,
+                    smb.user.clone(),
+                    smb.pass.clone(),
                 )?;
                 let item = items
                     .into_iter()

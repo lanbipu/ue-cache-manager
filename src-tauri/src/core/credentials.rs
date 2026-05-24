@@ -13,8 +13,8 @@
 //!     side dep-free and survives windows-rs API drift.
 //!
 //! Non-Windows: `store_password` and `delete_password` are no-ops returning
-//! Ok(()) so the dev box `save_credential` path still works end-to-end;
-//! `resolve_password` returns `UecmError::PowerShell("DPAPI is Windows-only")`.
+//! Ok(()); `resolve_password` is SecretStore-first (cross-platform) and only
+//! falls back to the Windows DPAPI store, so off Windows it reads the SecretStore.
 
 use crate::core::powershell;
 use crate::error::{UecmError, UecmResult};
@@ -107,9 +107,17 @@ pub fn store_password(alias: &str, password: &str) -> UecmResult<()> {
 /// or otherwise persist the result.
 #[cfg(windows)]
 pub fn resolve_password(alias: &str) -> UecmResult<String> {
+    // SecretStore (cross-platform, AES-GCM) is the home for every credential saved
+    // since the SSH migration; fall back to the legacy DPAPI store for aliases
+    // saved before it. This keeps the still-registered DPAPI consumers
+    // (bootstrap_winrm, deploy_ddc_run, machine authorize) working for a
+    // freshly-saved alias. The DPAPI store + this fallback retire in P5b.
+    if let Some(secret) = crate::core::secrets::SecretStore::from_config()?.get(alias)? {
+        return Ok(secret);
+    }
     let store = read_store()?;
     let encoded = store.get(alias).ok_or_else(|| {
-        UecmError::OperationFailed(format!("no DPAPI entry for alias '{}'", alias))
+        UecmError::OperationFailed(format!("no stored secret for alias '{}'", alias))
     })?;
     let ciphertext = base64_decode(encoded)?;
     let plaintext = dpapi::unprotect(&ciphertext)?;
@@ -120,10 +128,10 @@ pub fn resolve_password(alias: &str) -> UecmResult<String> {
 
 #[cfg(not(windows))]
 pub fn resolve_password(alias: &str) -> UecmResult<String> {
-    let _ = alias;
-    Err(UecmError::PowerShell(
-        "DPAPI is Windows-only".to_string(),
-    ))
+    // No DPAPI off Windows — the cross-platform SecretStore is the only home.
+    crate::core::secrets::SecretStore::from_config()?
+        .get(alias)?
+        .ok_or_else(|| UecmError::OperationFailed(format!("no stored secret for alias '{}'", alias)))
 }
 
 /// Remove the DPAPI entry for `alias`. Missing entry is not an error.
@@ -264,12 +272,10 @@ mod tests {
         assert!(matches!(result, Err(UecmError::PowerShell(_))));
     }
 
-    #[cfg(not(windows))]
-    #[test]
-    fn resolve_password_returns_powershell_error_on_non_windows() {
-        let result = resolve_password("UECM:winrm:HOST");
-        assert!(matches!(result, Err(UecmError::PowerShell(_))));
-    }
+    // (Removed `resolve_password_returns_powershell_error_on_non_windows`:
+    // resolve_password is now SecretStore-first and cross-platform — off Windows
+    // it reads the SecretStore, not DPAPI. The SecretStore read/miss behavior is
+    // covered hermetically in core::secrets tests.)
 
     #[cfg(not(windows))]
     #[test]
