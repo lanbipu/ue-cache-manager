@@ -3,7 +3,7 @@
 
 use crate::cli::args::{Cli, Domain};
 use crate::cli::output::{Emitter, HumanEmitter, NdjsonEmitter, exit_code_for};
-use crate::cli::{domain_cred, domain_ddc, domain_deploy, domain_env, domain_gpu, domain_health, domain_ini, domain_local_cache, domain_machine, domain_project, domain_pso, domain_share, domain_ssh, domain_system, domain_winrm, domain_zen};
+use crate::cli::{domain_cred, domain_ddc, domain_deploy, domain_env, domain_gpu, domain_health, domain_ini, domain_local_cache, domain_machine, domain_project, domain_pso, domain_secret, domain_share, domain_ssh, domain_system, domain_winrm, domain_zen};
 use crate::data::Db;
 use crate::error::UecmError;
 use crate::startup;
@@ -54,6 +54,8 @@ fn needs_db(cmd: &Domain) -> bool {
         Domain::Winrm { .. } => false,
         // `ssh probe` only spawns ssh; no DB. (package-bootstrap/authorize land in P5a.)
         Domain::Ssh { .. } => false,
+        // `secret` talks only to the file-backed SecretStore; no DB.
+        Domain::Secret { .. } => false,
         // Phase 2 domains (cred/env/ini/share) — all will require DB for now.
         Domain::Cred { .. } => true,
         Domain::Env { .. } => true,
@@ -132,6 +134,7 @@ pub fn run(cli: Cli) -> i32 {
         Domain::Winrm { action } => domain_winrm::handle(&mut ctx, action),
         Domain::Ssh { action } => domain_ssh::handle(&mut ctx, action),
         Domain::Cred { action } => domain_cred::handle(&mut ctx, action),
+        Domain::Secret { action } => domain_secret::handle(&mut ctx, action),
         Domain::Env { action } => domain_env::handle(&mut ctx, action),
         Domain::Ini { action } => domain_ini::handle(&mut ctx, action),
         Domain::Share { action } => domain_share::handle(&mut ctx, action),

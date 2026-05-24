@@ -1,5 +1,5 @@
-//! CRUD for the `credentials` table. Stores ONLY alias + display username;
-//! the actual password lives in Windows Credential Manager (set via cmdkey).
+//! CRUD for the `credentials` table. Stores ONLY alias metadata (kind + display
+//! username); the actual secret lives in the cross-platform SecretStore (AES-GCM).
 
 use crate::data::Db;
 use crate::error::UecmResult;
@@ -25,11 +25,14 @@ impl CredentialKind {
         match s {
             "winrm" => Ok(CredentialKind::Winrm),
             "share" => Ok(CredentialKind::Share),
-            other => Err(rusqlite::Error::FromSqlConversionFailure(
-                0,
-                rusqlite::types::Type::Text,
-                format!("unknown credential kind: {}", other).into(),
-            )),
+            // Tolerate an unknown / legacy kind instead of failing the whole
+            // credential list (one bad row would otherwise break the UI's
+            // credential picker). Map it to Winrm — the conservative default the
+            // UI's kind==='winrm' filters already expect.
+            other => {
+                tracing::warn!(kind = %other, "unknown credential kind in DB; decoding as winrm");
+                Ok(CredentialKind::Winrm)
+            }
         }
     }
 }

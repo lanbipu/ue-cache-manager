@@ -115,6 +115,13 @@ impl SecretStore {
         m.remove(alias);
         self.write_all(&m)
     }
+    /// List all stored aliases (keys only — never the secrets), sorted. Backs the
+    /// `secret list` CLI command without exposing any plaintext.
+    pub fn list(&self) -> UecmResult<Vec<String>> {
+        let mut keys: Vec<String> = self.read_all()?.into_keys().collect();
+        keys.sort();
+        Ok(keys)
+    }
 }
 
 /// Read a share's svc secret during the WinRM→SSH transition, transparently

@@ -1,8 +1,10 @@
-//! Tauri commands for credential management. Combines the SQLite alias
-//! record with the cmdkey side effect (transparent SMB auth) and the DPAPI
-//! side effect (per-call WinRM auth).
+//! Tauri commands for credential management. The SQLite `credentials` row holds
+//! the alias metadata (kind + username); the secret lives in the cross-platform
+//! SecretStore (AES-GCM). delete_credential also best-effort clears the legacy
+//! cmdkey / DPAPI stores until they are removed in P5b.
 
 use crate::core::credentials as core_creds;
+use crate::core::secrets::SecretStore;
 use crate::data::{credentials as data_creds, CredentialKind, CredentialRecord, Db};
 use crate::error::UecmResult;
 use tauri::State;
@@ -22,23 +24,11 @@ pub fn save_credential(
 ) -> UecmResult<i64> {
     let username = core_creds::normalize_username_for_storage(&username);
 
-    // Cmdkey first: if this fails, nothing else gets written.
-    core_creds::store(&alias, &username, &password)?;
-
-    // DPAPI must succeed for per-call WinRM auth (share creation, batch ops)
-    // to work later. Roll back the cmdkey entry if DPAPI fails so the saved
-    // state is consistent — half-saved aliases caused user-visible "no DPAPI
-    // entry" errors downstream during Plan 3 lanPC E2E.
-    if let Err(e) = core_creds::store_password(&alias, &password) {
-        if let Err(rollback_err) = core_creds::delete(&alias) {
-            tracing::warn!(
-                alias = %alias,
-                error = %rollback_err,
-                "cmdkey rollback after DPAPI failure also failed"
-            );
-        }
-        return Err(e);
-    }
+    // Store the secret in the cross-platform SecretStore (AES-GCM), replacing the
+    // Windows-only cmdkey + DPAPI writes. If this fails nothing else is written,
+    // so the saved state stays consistent (no half-saved alias). SQLite then holds
+    // the alias metadata that `list_credentials` surfaces.
+    SecretStore::from_config()?.put(&alias, &password)?;
 
     let record = CredentialRecord {
         id: None,

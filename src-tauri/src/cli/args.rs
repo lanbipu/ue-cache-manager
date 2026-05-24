@@ -67,6 +67,11 @@ pub enum Domain {
         #[command(subcommand)]
         action: CredAction,
     },
+    /// Manage the cross-platform SecretStore (AES-GCM) directly.
+    Secret {
+        #[command(subcommand)]
+        action: SecretAction,
+    },
     /// Read / write system-level environment variables on remote hosts.
     Env {
         #[command(subcommand)]
@@ -234,6 +239,33 @@ pub enum MachineAction {
 pub enum SshAction {
     /// Probe a host's SSH reachability (uecm-svc key auth).
     Probe { host: String },
+}
+
+// ---------- secret ----------
+#[derive(Subcommand, Debug)]
+pub enum SecretAction {
+    /// Store (or overwrite) a secret under an alias. Reads the value from
+    /// --value or, when omitted, one line from stdin (\r\n trimmed).
+    Set {
+        alias: String,
+        /// Inline secret value. Leaks into shell history — prefer stdin.
+        #[arg(long, value_name = "VALUE")]
+        value: Option<String>,
+    },
+    /// Print the stored secret for an alias (plaintext to stdout).
+    Get { alias: String },
+    /// List all stored aliases (keys only, never the secrets).
+    List,
+    /// Delete the secret for an alias.
+    Delete {
+        alias: String,
+        /// Confirm the destructive action.
+        #[arg(long)]
+        yes: bool,
+        /// Preview without deleting.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 // ---------- winrm ----------
