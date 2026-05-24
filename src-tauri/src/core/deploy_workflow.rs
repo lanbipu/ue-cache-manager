@@ -122,6 +122,32 @@ fn host_for(db: &Db, machine_id: i64) -> UecmResult<String> {
         .ok_or_else(|| UecmError::InvalidInput(format!("machine {} not found", machine_id)))
 }
 
+/// Source SMB credential for a deploy distribution step. The targets mount the
+/// shared-cache share created by `CreateSmbShare` on
+/// `shared_cache.server_machine_id`: a Mode B (managed) share's svc password is
+/// read from the SecretStore under the deterministic alias `CreateSmbShare`
+/// wrote; a Mode A (open) share needs no credential. Derived from the plan's own
+/// share spec (not a DB share lookup), so a same-run open share that was never
+/// persisted to `share_configs` still distributes.
+fn deploy_source_smb(db: &Db, plan: &DeployPlan) -> UecmResult<(Option<String>, Option<String>)> {
+    match plan.shared_cache.mode.as_str() {
+        "b" | "B" => {
+            let server_host = host_for(db, plan.shared_cache.server_machine_id)?;
+            let alias = format!("UECM:share:{}:ddc-svc", server_host);
+            let pass = crate::core::secrets::SecretStore::from_config()?
+                .get(&alias)?
+                .ok_or_else(|| {
+                    UecmError::OperationFailed(format!(
+                        "Mode B share secret '{alias}' missing from the SecretStore; \
+                         re-run the share-creation step"
+                    ))
+                })?;
+            Ok((Some("ddc-svc".to_string()), Some(pass)))
+        }
+        _ => Ok((None, None)), // Mode A (open) share — anonymous mount, no credential
+    }
+}
+
 fn project_root_for(db: &Db, project_id: i64, machine_id: i64) -> UecmResult<String> {
     project_locations::get_for_project_machine(db, project_id, machine_id)?
         .map(|loc| loc.abs_path)
@@ -380,15 +406,10 @@ fn execute_one(
                 })?;
             let source_location =
                 project_location_for(db, plan.project_id, plan.source_machine_id)?;
-            // SSH key auth: the SOURCE SMB credential comes from the source host's
-            // registered Mode B share (SecretStore), not the operator credential
-            // (which is gone). resolve_source_smb errors clearly if the source has
-            // no usable share rather than mounting anonymously and failing robocopy.
-            // The SMB credential is for the shared-cache share (created by
-            // CreateSmbShare on shared_cache.server_machine_id), which is the share
-            // the targets mount — resolve it from THAT host, not the pak source
-            // (the UI lets them differ).
-            let smb = pak_distribute::resolve_source_smb(db, plan.shared_cache.server_machine_id, None, true)?;
+            // SSH key auth: source SMB credential for the shared-cache share the
+            // targets mount — Mode B svc password from the SecretStore, or none for
+            // an open Mode A share. (See deploy_source_smb; operator creds gone.)
+            let (smb_user, smb_pass) = deploy_source_smb(db, plan)?;
             let profile = pak_distribute::DistributeProfile::ddc_pak();
             let items = pak_distribute::plan(
                 &profile,
@@ -401,8 +422,8 @@ fn execute_one(
                 plan.shared_cache.unc_path.as_deref(),
                 None,
                 None,
-                smb.user,
-                smb.pass,
+                smb_user,
+                smb_pass,
             )?;
             let item = items
                 .into_iter()
@@ -471,14 +492,10 @@ fn execute_one(
                     "no PSO cache files collected on source".into(),
                 ));
             }
-            // SSH key auth: source SMB credential from the source's registered
-            // Mode B share (SecretStore), not the operator credential. See
-            // DistributeDdcPak.
-            // The SMB credential is for the shared-cache share (created by
-            // CreateSmbShare on shared_cache.server_machine_id), which is the share
-            // the targets mount — resolve it from THAT host, not the pak source
-            // (the UI lets them differ).
-            let smb = pak_distribute::resolve_source_smb(db, plan.shared_cache.server_machine_id, None, true)?;
+            // SSH key auth: source SMB credential for the shared-cache share (Mode
+            // B svc password from the SecretStore, or none for open Mode A). See
+            // deploy_source_smb / DistributeDdcPak.
+            let (smb_user, smb_pass) = deploy_source_smb(db, plan)?;
             let mut total_bytes: i64 = 0;
             for file in &files {
                 let items = pso_distribute::plan(
@@ -489,8 +506,8 @@ fn execute_one(
                     plan.shared_cache.unc_path.as_deref(),
                     None,
                     None,
-                    smb.user.clone(),
-                    smb.pass.clone(),
+                    smb_user.clone(),
+                    smb_pass.clone(),
                 )?;
                 let item = items
                     .into_iter()

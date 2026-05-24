@@ -339,25 +339,12 @@ impl SshExecutor {
 
 impl RemoteExecutor for SshExecutor {
     fn run(&self, host: &str, script: &NodeScript) -> UecmResult<ScriptOutput> {
-        // Loopback target (operator running a node script on its own box): on
-        // Windows run the script locally rather than SSH-to-self — the operator
-        // host then needn't onboard its own OpenSSH/uecm-svc, and it keeps probe's
-        // loopback bypass honest (probe reports reachable, run executes here). The
-        // node scripts read their JSON args from stdin, same contract as remote.
-        // Off Windows there is no local sidecar, so loopback falls through to real
-        // SSH (matching probe, which only bypasses on Windows).
-        if cfg!(target_os = "windows") && crate::core::loopback::is_loopback_target(host) {
-            let result = crate::core::powershell::run_script_stdin(
-                &crate::core::powershell::script_path(script.name),
-                &serde_json::to_string(&script.args)
-                    .map_err(|e| UecmError::InvalidInput(format!("encode args: {e}")))?,
-            )?;
-            return Ok(ScriptOutput {
-                stdout: result.stdout,
-                stderr: result.stderr,
-                exit_code: result.exit_code,
-            });
-        }
+        // No loopback bypass: a loopback target runs over a real SSH-to-self as
+        // uecm-svc (a local admin), so admin-requiring node scripts
+        // (zen-service-install, setx-machine, setup-share-mode-b, urlacl-add …)
+        // execute elevated even when the UECM process itself isn't. The
+        // distribute fan-out uses its own local-robocopy fast path for loopback
+        // (no admin needed); everything else goes through SSH here.
         let user = script.ssh_user.as_deref().unwrap_or(&self.default_user);
         self.ensure_scripts_staged(host, user)?;
         let args = build_ssh_args(
@@ -395,19 +382,11 @@ impl RemoteExecutor for SshExecutor {
     }
 
     fn probe(&self, host: &str, ssh_user: Option<&str>) -> UecmResult<ProbeResult> {
-        // Loopback target (operator probing its own box): no point SSHing to self,
-        // and a real ssh-to-self can hit host-key/loopback quirks. Only bypass on
-        // Windows, where `run()` can actually execute the node scripts locally
-        // (via powershell). On a non-Windows operator the local sidecar isn't
-        // available, so reporting ok here would be a false positive — fall through
-        // to the real SSH probe instead.
-        if cfg!(target_os = "windows") && crate::core::loopback::is_loopback_target(host) {
-            return Ok(ProbeResult {
-                ok: true,
-                message: "loopback target; ssh bypassed".to_string(),
-                latency_ms: 0,
-            });
-        }
+        // No loopback bypass: a loopback target is probed by a real SSH-to-self as
+        // uecm-svc (the same path `run` uses), so probe never reports ok for a host
+        // the migrated SSH operations can't actually reach. Running node scripts on
+        // the operator's own box therefore goes through uecm-svc (a local admin),
+        // not the possibly-unelevated UECM process — admin-requiring scripts work.
         let started = std::time::Instant::now();
         let user = ssh_user.unwrap_or(&self.default_user);
         let mut args = build_ssh_args(
@@ -532,25 +511,10 @@ mod tests {
         assert!(exec.key_path.ends_with("uecm_ed25519"));
     }
 
-    // Windows-only: the loopback bypass is gated on cfg(windows) (off Windows the
-    // local sidecar can't run, so probe falls through to a real SSH probe and this
-    // bypass assertion doesn't hold — and we don't want to spawn ssh in a unit test).
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn probe_bypasses_loopback_without_spawning_ssh() {
-        // Nonexistent key/known_hosts: if probe tried to spawn ssh it would fail,
-        // so a successful Ok proves the loopback bypass short-circuits first.
-        let exec = SshExecutor {
-            key_path: std::path::PathBuf::from("/nonexistent/key"),
-            known_hosts: std::path::PathBuf::from("/nonexistent/known_hosts"),
-            default_user: "uecm-svc".to_string(),
-            staging_root: STAGING_ROOT.to_string(),
-        };
-        let p = exec.probe("127.0.0.1", None).unwrap();
-        assert!(p.ok);
-        assert!(p.message.contains("loopback"));
-        assert_eq!(p.latency_ms, 0);
-    }
+    // (Removed `probe_bypasses_loopback_without_spawning_ssh`: the loopback bypass
+    // was dropped — a loopback target is now probed/run via real SSH-to-self as
+    // uecm-svc, so admin-requiring node scripts execute elevated and probe never
+    // falsely reports ok. Real-node loopback behavior is validated on lanPC.)
 
     #[test]
     fn remote_manifest_parses_node_json() {
