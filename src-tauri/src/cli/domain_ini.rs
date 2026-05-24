@@ -93,16 +93,9 @@ pub fn handle(ctx: &mut Ctx<'_>, action: IniAction) -> UecmResult<()> {
             let t = target.require_one()?;
             let outcome = destructive::check(yes, dry_run, "ini.remove")?;
             let db = ctx.require_db()?;
-            // Preflight: alias / flag-shape only. Then require cred SUPPLIED
-            // (alias or --user --pass[-stdin] given) without consuming stdin.
+            // SSH key auth: `ini remove` needs no operator credential. Preflight
+            // validates --cred-alias existence / flag shape without consuming stdin.
             cred.preflight(db)?;
-            let cred_supplied =
-                cred.cred_alias.is_some() || cred.user.is_some() || cred.pass_stdin;
-            if !cred_supplied {
-                return Err(UecmError::InvalidInput(
-                    "ini remove requires credentials (--cred-alias or --user --pass / --pass-stdin)".into(),
-                ));
-            }
             if outcome == Outcome::DryRun {
                 let hosts: Vec<String> = match &t {
                     HostTarget::Single(h) => vec![h.clone()],
@@ -136,16 +129,10 @@ pub fn handle(ctx: &mut Ctx<'_>, action: IniAction) -> UecmResult<()> {
             let outcome = destructive::check(yes, dry_run, "ini.apply")?;
             // Mirror the --yes path's preconditions locally so dry-run cannot
             // succeed on inputs that the real command would immediately reject:
-            // credentials are mandatory; finding row must exist.
+            // the finding row must exist. SSH key auth: no operator credential
+            // required; preflight only validates --cred-alias / flag shape.
             let db = ctx.require_db()?;
             cred.preflight(db)?;
-            let cred_supplied =
-                cred.cred_alias.is_some() || cred.user.is_some() || cred.pass_stdin;
-            if !cred_supplied {
-                return Err(UecmError::InvalidInput(
-                    "ini apply requires credentials (--cred-alias or --user --pass / --pass-stdin)".into(),
-                ));
-            }
             let finding = ini_findings::find_by_id(db, finding_id)?.ok_or_else(|| {
                 UecmError::InvalidInput(format!("finding id={} not found", finding_id))
             })?;
