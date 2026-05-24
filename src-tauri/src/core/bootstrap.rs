@@ -8,7 +8,7 @@ use crate::core::powershell;
 use crate::error::UecmResult;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct WinrmBootstrapResult {
     pub ok: bool,
     pub method: String,

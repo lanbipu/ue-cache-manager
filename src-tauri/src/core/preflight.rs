@@ -10,14 +10,14 @@ use crate::core::powershell;
 use crate::error::UecmResult;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct PreflightStep {
     pub name: String,
     pub status: String,
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct PreflightResult {
     pub ok: bool,
     pub verdict: String,

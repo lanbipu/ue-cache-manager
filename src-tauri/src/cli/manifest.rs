@@ -40,6 +40,23 @@ pub fn operations() -> &'static [Operation] {
         Operation { operation_id: "machine.rename",    summary: "Rename a machine",                        cli_command: "uecm-cli machine rename",    side_effects: SideEffects{writes:true, external_calls:false,idempotent:true}, exit_codes: &[0,2] },
         Operation { operation_id: "machine.deep_scan", summary: "Refresh + INI scan + health per machine", cli_command: "uecm-cli machine deep-scan", side_effects: SideEffects{writes:true, external_calls:true, idempotent:true}, exit_codes: &[0,2,3,4] },
         Operation { operation_id: "machine.authorize", summary: "Authorize machines for remote mgmt",      cli_command: "uecm-cli machine authorize", side_effects: SideEffects{writes:true, external_calls:true, idempotent:true}, exit_codes: &[0,2,4] },
+        // ---- Task 6 batch 1: gpu / log / ssh / deploy / cred / local-cache / secret / winrm ----
+        Operation { operation_id: "gpu.matrix",             summary: "GPU consistency matrix across all machines",          cli_command: "uecm-cli gpu matrix",            side_effects: SideEffects{writes:false,external_calls:false,idempotent:true},  exit_codes: &[0,3] },
+        Operation { operation_id: "log.verify_startup",     summary: "Run UE nullrhi + parse DDC startup output",            cli_command: "uecm-cli log verify-startup",    side_effects: SideEffects{writes:false,external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "ssh.probe",              summary: "Probe a host's SSH reachability",                      cli_command: "uecm-cli ssh probe",             side_effects: SideEffects{writes:false,external_calls:true, idempotent:true},  exit_codes: &[0,3] },
+        Operation { operation_id: "deploy.ddc",             summary: "Run the full DDC deployment plan from a JSON file",    cli_command: "uecm-cli deploy ddc",            side_effects: SideEffects{writes:true, external_calls:true, idempotent:false}, exit_codes: &[0,1,2,3] },
+        Operation { operation_id: "cred.list",              summary: "List saved credential aliases",                        cli_command: "uecm-cli cred list",             side_effects: SideEffects{writes:false,external_calls:false,idempotent:true},  exit_codes: &[0,3] },
+        Operation { operation_id: "cred.save",              summary: "Save a credential (SecretStore + SQLite metadata)",    cli_command: "uecm-cli cred save",             side_effects: SideEffects{writes:true, external_calls:false,idempotent:true},  exit_codes: &[0,2,3] },
+        Operation { operation_id: "cred.delete",            summary: "Delete a credential alias",                            cli_command: "uecm-cli cred delete",           side_effects: SideEffects{writes:true, external_calls:false,idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "localcache.create",      summary: "Create the local DDC directory on one or more hosts",  cli_command: "uecm-cli local-cache create",    side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3] },
+        Operation { operation_id: "secret.set",             summary: "Store (or overwrite) a secret under an alias",         cli_command: "uecm-cli secret set",            side_effects: SideEffects{writes:true, external_calls:false,idempotent:true},  exit_codes: &[0,2,3] },
+        Operation { operation_id: "secret.get",             summary: "Print the stored secret for an alias",                 cli_command: "uecm-cli secret get",            side_effects: SideEffects{writes:false,external_calls:false,idempotent:true},  exit_codes: &[0,2,3] },
+        Operation { operation_id: "secret.list",            summary: "List all stored aliases (keys only)",                  cli_command: "uecm-cli secret list",           side_effects: SideEffects{writes:false,external_calls:false,idempotent:true},  exit_codes: &[0,3] },
+        Operation { operation_id: "secret.delete",          summary: "Delete the secret for an alias",                       cli_command: "uecm-cli secret delete",         side_effects: SideEffects{writes:true, external_calls:false,idempotent:true},  exit_codes: &[0,2,3] },
+        Operation { operation_id: "winrm.probe",            summary: "Probe a single host's WinRM endpoint",                 cli_command: "uecm-cli winrm probe",           side_effects: SideEffects{writes:false,external_calls:true, idempotent:true},  exit_codes: &[0,4] },
+        Operation { operation_id: "winrm.bootstrap_script", summary: "Print the manual WinRM enable script",                 cli_command: "uecm-cli winrm bootstrap-script",side_effects: SideEffects{writes:false,external_calls:false,idempotent:true},  exit_codes: &[0,3] },
+        Operation { operation_id: "winrm.bootstrap",        summary: "Remote bootstrap WinRM via PsExec",                    cli_command: "uecm-cli winrm bootstrap",       side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,1,2,4] },
+        Operation { operation_id: "winrm.preflight",        summary: "Preflight whether Path B remote bootstrap is viable",  cli_command: "uecm-cli winrm preflight",       side_effects: SideEffects{writes:false,external_calls:true, idempotent:true},  exit_codes: &[0,1,2,4] },
     ];
     OPS
 }
@@ -68,22 +85,48 @@ pub fn operation_id_for(cmd: &Domain) -> &'static str {
             MachineAction::Authorize { .. } => "machine.authorize",
             // 不加 `_ =>`：保持穷尽，新增变体编译器强制来补。
         },
-        // Task 6 在此追加其余 16 域。临时兜底（§2.3 / schema 完整性测试会抓到）：
-        Domain::Winrm { .. } => "winrm.unmapped",
-        Domain::Ssh { .. } => "ssh.unmapped",
-        Domain::Cred { .. } => "cred.unmapped",
-        Domain::Secret { .. } => "secret.unmapped",
+        // Task 6: per-domain exhaustive maps (no `_` wildcard — new variants must
+        // force a compile error so the manifest can never silently drift).
+        Domain::Winrm { action } => match action {
+            crate::cli::args::WinrmAction::Probe { .. } => "winrm.probe",
+            crate::cli::args::WinrmAction::BootstrapScript { .. } => "winrm.bootstrap_script",
+            crate::cli::args::WinrmAction::Bootstrap { .. } => "winrm.bootstrap",
+            crate::cli::args::WinrmAction::Preflight { .. } => "winrm.preflight",
+        },
+        Domain::Ssh { action } => match action {
+            crate::cli::args::SshAction::Probe { .. } => "ssh.probe",
+        },
+        Domain::Cred { action } => match action {
+            crate::cli::args::CredAction::List => "cred.list",
+            crate::cli::args::CredAction::Save { .. } => "cred.save",
+            crate::cli::args::CredAction::Delete { .. } => "cred.delete",
+        },
+        Domain::Secret { action } => match action {
+            crate::cli::args::SecretAction::Set { .. } => "secret.set",
+            crate::cli::args::SecretAction::Get { .. } => "secret.get",
+            crate::cli::args::SecretAction::List => "secret.list",
+            crate::cli::args::SecretAction::Delete { .. } => "secret.delete",
+        },
+        // Remaining 8 domains land in a later dispatch (still temporary bottoms):
         Domain::Env { .. } => "env.unmapped",
         Domain::Ini { .. } => "ini.unmapped",
         Domain::Share { .. } => "share.unmapped",
         Domain::Project { .. } => "project.unmapped",
         Domain::Health { .. } => "health.unmapped",
-        Domain::Gpu { .. } => "gpu.unmapped",
+        Domain::Gpu { action } => match action {
+            crate::cli::args::GpuAction::Matrix => "gpu.matrix",
+        },
         Domain::Ddc { .. } => "ddc.unmapped",
         Domain::Pso { .. } => "pso.unmapped",
-        Domain::Log { .. } => "log.unmapped",
-        Domain::LocalCache { .. } => "localcache.unmapped",
-        Domain::Deploy { .. } => "deploy.unmapped",
+        Domain::Log { action } => match action {
+            crate::cli::args::LogAction::VerifyStartup { .. } => "log.verify_startup",
+        },
+        Domain::LocalCache { action } => match action {
+            crate::cli::args::LocalCacheAction::Create { .. } => "localcache.create",
+        },
+        Domain::Deploy { action } => match action {
+            crate::cli::args::DeployAction::Ddc { .. } => "deploy.ddc",
+        },
         Domain::Zen { .. } => "zen.unmapped",
         Domain::Manifest => "manifest.get",
     }
@@ -118,6 +161,32 @@ pub fn output_schema_for(operation_id: &str) -> serde_json::Value {
         // emit_result(&T) handlers (machine.list / machine.detail) return ad-hoc json
         // (Task 6 可换成命名类型）：
         s if s.starts_with("machine.") => dynamic_object_schema(),
+
+        // ---- Task 6 batch 1 ----
+        // Typed emit_result(&T): named Serialize structs given schemars::JsonSchema.
+        "gpu.matrix"         => serde_json::to_value(schema_for!(crate::core::gpu_consistency::GpuMatrix)).unwrap(),
+        "log.verify_startup" => serde_json::to_value(schema_for!(crate::core::ue_log_verify::VerifyReport)).unwrap(),
+        "ssh.probe"          => serde_json::to_value(schema_for!(crate::cli::domain_ssh::ProbeOut)).unwrap(),
+        "cred.list"          => serde_json::to_value(schema_for!(Vec<crate::data::credentials::CredentialRecord>)).unwrap(),
+        "winrm.probe"        => serde_json::to_value(schema_for!(crate::cli::domain_winrm::ProbeOut)).unwrap(),
+        "winrm.bootstrap"    => serde_json::to_value(schema_for!(crate::core::bootstrap::WinrmBootstrapResult)).unwrap(),
+        "winrm.preflight"    => serde_json::to_value(schema_for!(crate::core::preflight::PreflightResult)).unwrap(),
+        // emit_event(...) only: cred save/delete emit Event::Completed; local-cache
+        // create emits the full Started/ItemStarted/ItemCompleted stream.
+        "cred.save" | "cred.delete" | "localcache.create" => event_schema(),
+        // Dynamic: ad-hoc serde_json::Value emit_result, or a single op that emits
+        // two unrelated shapes so no one schema is honest.
+        //   secret.*            -> all four emit ad-hoc json (set/get/list, and
+        //                          delete's success {alias,deleted}; delete dry-run
+        //                          emits an Event, hence not typed).
+        //   deploy.ddc          -> streams typed DeployEvent items on success but
+        //                          emits Event::Completed on --dry-run; mixed.
+        //   winrm.bootstrap_script -> Event::Completed (file mode) OR ad-hoc
+        //                          {script} json OR raw stdout; mixed.
+        s if s.starts_with("secret.") => dynamic_object_schema(),
+        "deploy.ddc"              => dynamic_object_schema(),
+        "winrm.bootstrap_script"  => dynamic_object_schema(),
+
         // Task 6 之前其余域走兜底（schema 完整性测试会盯着 unmapped 不放）：
         _ => dynamic_object_schema(),
     }

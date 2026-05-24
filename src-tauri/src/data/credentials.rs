@@ -6,7 +6,7 @@ use crate::error::UecmResult;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum CredentialKind {
     Winrm,
@@ -37,7 +37,7 @@ impl CredentialKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 pub struct CredentialRecord {
     pub id: Option<i64>,
     pub alias: String, // e.g. "UECM:winrm:RENDER-01"

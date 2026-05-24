@@ -15,7 +15,7 @@ struct ScriptResult {
     message: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct VerifyReport {
     pub host: String,
     pub local_path: Option<String>,
@@ -30,7 +30,7 @@ pub struct VerifyReport {
     pub log_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct MaintenanceFact {
     pub layer: String,
     pub file_count: u64,

@@ -7,12 +7,12 @@ use crate::core::{bootstrap, preflight, winrm};
 use crate::error::{UecmError, UecmResult};
 use serde::Serialize;
 
-#[derive(Serialize)]
-struct ProbeOut {
-    host: String,
-    ok: bool,
-    message: String,
-    latency_ms: i64,
+#[derive(Serialize, schemars::JsonSchema)]
+pub struct ProbeOut {
+    pub host: String,
+    pub ok: bool,
+    pub message: String,
+    pub latency_ms: i64,
 }
 
 pub fn handle(ctx: &mut Ctx<'_>, action: WinrmAction) -> UecmResult<()> {
