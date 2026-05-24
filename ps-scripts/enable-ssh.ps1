@@ -311,6 +311,11 @@ function Set-UecmPowerPlan {
 
 try {
     if (-not $StagingSourceDir) { $StagingSourceDir = Split-Path -Parent $PSCommandPath }
+    # Defense: a caller (e.g. an unpatched UECM-Bootstrap.cmd passing "%SCRIPT_DIR%"
+    # with a trailing backslash -> \" command-line trap) may hand us a path with a
+    # stray trailing quote/backslash. Normalize it so Join-Path / Test-Path below
+    # never choke with "Illegal characters in path." and abort onboarding.
+    $StagingSourceDir = $StagingSourceDir.Trim().Trim('"').TrimEnd('\')
     if (-not $PublicKeyPath) { $PublicKeyPath = Join-Path $StagingSourceDir 'uecm.pub' }
 
     # 1. resolve UECM public key
@@ -390,23 +395,31 @@ try {
     #    does not fail onboarding (SSH itself is up); inject fails with a clear
     #    message later if it was never staged.
     if (-not $CheckOnly) {
-        $psexecSrc = Join-Path $StagingSourceDir 'PsExec64.exe'
-        $psexecDst = Join-Path $uecmDir 'PsExec64.exe'
-        if (Test-Path -LiteralPath $psexecSrc) {
-            if (-not (Test-Path $uecmDir)) { New-Item -ItemType Directory -Path $uecmDir -Force | Out-Null }
-            # Staging from C:\ProgramData\UECM itself makes src == dst; Copy-Item
-            # -Force errors on copy-onto-itself, so skip when paths resolve equal
-            # (keeps re-runs idempotent for that valid layout).
-            if ([System.IO.Path]::GetFullPath($psexecSrc) -ieq [System.IO.Path]::GetFullPath($psexecDst)) {
-                Note "PsExec64 already at $uecmDir (staging source is the UECM dir); skipped copy"
+        # PsExec is non-load-bearing for SSH itself (only SYSTEM cmdkey injection
+        # needs it). Any failure here -- incl. a polluted StagingSourceDir yielding
+        # an illegal path -- must degrade to a WARNING, never abort onboarding.
+        try {
+            $psexecSrc = Join-Path $StagingSourceDir 'PsExec64.exe'
+            $psexecDst = Join-Path $uecmDir 'PsExec64.exe'
+            if (Test-Path -LiteralPath $psexecSrc) {
+                if (-not (Test-Path $uecmDir)) { New-Item -ItemType Directory -Path $uecmDir -Force | Out-Null }
+                # Staging from C:\ProgramData\UECM itself makes src == dst; Copy-Item
+                # -Force errors on copy-onto-itself, so skip when paths resolve equal
+                # (keeps re-runs idempotent for that valid layout).
+                if ([System.IO.Path]::GetFullPath($psexecSrc) -ieq [System.IO.Path]::GetFullPath($psexecDst)) {
+                    Note "PsExec64 already at $uecmDir (staging source is the UECM dir); skipped copy"
+                }
+                else {
+                    Copy-Item -LiteralPath $psexecSrc -Destination $psexecDst -Force
+                    Note "installed PsExec64 -> $uecmDir"
+                }
             }
             else {
-                Copy-Item -LiteralPath $psexecSrc -Destination $psexecDst -Force
-                Note "installed PsExec64 -> $uecmDir"
+                Note "WARNING: PsExec64.exe not in bootstrap package; SYSTEM credential injection unavailable until staged"
             }
         }
-        else {
-            Note "WARNING: PsExec64.exe not in bootstrap package; SYSTEM credential injection unavailable until staged"
+        catch {
+            Note "WARNING: PsExec64 install skipped: $($_.Exception.Message)"
         }
     }
 

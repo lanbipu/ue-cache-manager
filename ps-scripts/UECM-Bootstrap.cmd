@@ -68,12 +68,13 @@ REM required: a missing uecm.pub or a failed enable-ssh.ps1 must fail the bootst
 REM not just WinRM prep. Capture the exit code at top level so %ERRORLEVEL% expands
 REM AFTER the run (setting it inside an if-block hits the delayed-expansion trap).
 set "SSH_PS1=%SCRIPT_DIR%enable-ssh.ps1"
+set "STAGING_DIR=%SCRIPT_DIR:~0,-1%"
 set "UECM_PUB=%SCRIPT_DIR%uecm.pub"
 set "SSH_EXIT=0"
 if not exist "%SSH_PS1%" set "SSH_EXIT=9"
 if not exist "%UECM_PUB%" set "SSH_EXIT=9"
 if not "%SSH_EXIT%"=="0" goto ssh_done
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SSH_PS1%" -PublicKeyPath "%UECM_PUB%" -StagingSourceDir "%SCRIPT_DIR%" -EnableSmbServer -EnableWmi -EnableLongPaths -PowerProfile HighPerformance -SetExecutionPolicy RemoteSigned %SSH_ADMIN_ARGS%
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SSH_PS1%" -PublicKeyPath "%UECM_PUB%" -StagingSourceDir "%STAGING_DIR%" -EnableSmbServer -EnableWmi -EnableLongPaths -PowerProfile HighPerformance -SetExecutionPolicy RemoteSigned %SSH_ADMIN_ARGS%
 set "SSH_EXIT=%ERRORLEVEL%"
 :ssh_done
 
