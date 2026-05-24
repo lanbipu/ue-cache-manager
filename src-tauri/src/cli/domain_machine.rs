@@ -35,6 +35,34 @@ pub fn handle(ctx: &mut Ctx<'_>, action: MachineAction) -> UecmResult<()> {
     }
 }
 
+/// Render UE installs as an aligned human-mode table. Pure function — no IO.
+#[allow(dead_code)] // wired into detail() in Task 1.3
+fn render_ue_installs_table(installs: &[machine_ue_installs::UeInstall]) -> String {
+    if installs.is_empty() {
+        return "  (no UE installs)".to_string();
+    }
+    let mut out = String::from("  VERSION  PRIMARY  INSTALL PATH\n");
+    for i in installs {
+        let primary = if i.is_primary { "*" } else { " " };
+        out.push_str(&format!("  {:<7}  {:^7}  {}\n", i.version, primary, i.install_path));
+    }
+    out.trim_end().to_string()
+}
+
+/// Render GPUs as an aligned human-mode table. Pure function — no IO.
+#[allow(dead_code)] // wired into detail() in Task 1.3
+fn render_gpus_table(gpus: &[machine_gpus::GpuInfo]) -> String {
+    if gpus.is_empty() {
+        return "  (no GPUs)".to_string();
+    }
+    let mut out = format!("  {:<28}  {:<11}  {}\n", "GPU MODEL", "DRIVER", "VRAM(MB)");
+    for g in gpus {
+        let vram = g.vram_mb.map(|v| v.to_string()).unwrap_or_else(|| "N/A".to_string());
+        out.push_str(&format!("  {:<28}  {:<11}  {}\n", g.gpu_model, g.driver_version, vram));
+    }
+    out.trim_end().to_string()
+}
+
 fn list(ctx: &mut Ctx<'_>) -> UecmResult<()> {
     let db = ctx.require_db()?;
     let rows = machines::list_all(db)?;
@@ -1009,5 +1037,61 @@ mod tests {
         // Atomic: a bad batch must not delete the valid ids either.
         let remaining = machines::list_all(ctx.db.as_ref().unwrap()).unwrap();
         assert_eq!(remaining.len(), 1, "a rejected batch must leave every machine intact");
+    }
+
+    #[test]
+    fn render_ue_installs_table_aligns_columns_and_marks_primary() {
+        use crate::data::machine_ue_installs::UeInstall;
+        let installs = vec![
+            UeInstall { id: None, machine_id: 1, version: "5.0".into(),
+                install_path: "C:\\Program Files\\Epic Games\\UE_5.0".into(), is_primary: false,
+                zen_cli_intree_path: None, zen_cli_intree_version: None, zen_cli_intree_sha256: None,
+                zenserver_intree_path: None, zenserver_intree_version: None, zenserver_intree_sha256: None },
+            UeInstall { id: None, machine_id: 1, version: "5.4".into(),
+                install_path: "C:\\Program Files\\Epic Games\\UE_5.4".into(), is_primary: true,
+                zen_cli_intree_path: None, zen_cli_intree_version: None, zen_cli_intree_sha256: None,
+                zenserver_intree_path: None, zenserver_intree_version: None, zenserver_intree_sha256: None },
+        ];
+        let out = render_ue_installs_table(&installs);
+        assert!(out.contains("VERSION"));
+        assert!(out.contains("PRIMARY"));
+        assert!(out.contains("INSTALL PATH"));
+        let line_54 = out.lines().find(|l| l.contains("5.4")).unwrap();
+        assert!(line_54.contains('*'));
+        let line_50 = out.lines().find(|l| l.contains("5.0")).unwrap();
+        assert!(!line_50.contains('*'));
+        assert!(line_50.contains("UE_5.0"));
+    }
+
+    #[test]
+    fn render_ue_installs_table_handles_empty() {
+        let out = render_ue_installs_table(&[]);
+        assert!(out.contains("(no UE installs)"));
+    }
+
+    #[test]
+    fn render_gpus_table_handles_empty() {
+        let out = render_gpus_table(&[]);
+        assert!(out.contains("(no GPUs)"));
+    }
+
+    #[test]
+    fn render_gpus_table_shows_na_for_missing_vram_and_renders_model_driver() {
+        use crate::data::machine_gpus::{GpuInfo, GpuVendor};
+        let gpus = vec![
+            GpuInfo { id: None, machine_id: 1, gpu_model: "NVIDIA RTX 4090".into(),
+                driver_version: "551.86".into(), vendor: GpuVendor::Nvidia, vram_mb: Some(24576) },
+            GpuInfo { id: None, machine_id: 1, gpu_model: "AMD Radeon Pro".into(),
+                driver_version: "23.40".into(), vendor: GpuVendor::Amd, vram_mb: None },
+        ];
+        let out = render_gpus_table(&gpus);
+        assert!(out.contains("GPU MODEL"));
+        assert!(out.contains("DRIVER"));
+        assert!(out.contains("VRAM(MB)"));
+        assert!(out.contains("NVIDIA RTX 4090"));
+        assert!(out.contains("551.86"));
+        assert!(out.contains("24576"));
+        let amd_line = out.lines().find(|l| l.contains("AMD Radeon Pro")).unwrap();
+        assert!(amd_line.contains("N/A"));
     }
 }
