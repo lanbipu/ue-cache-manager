@@ -232,6 +232,8 @@ mod tests {
             db_path: std::path::PathBuf::from(":memory:"),
             emitter,
             json_mode: true,
+            operation_id: "env.unmapped",
+            request_id: "test-req".into(),
         }
     }
 

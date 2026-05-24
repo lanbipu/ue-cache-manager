@@ -191,6 +191,8 @@ mod tests {
             db_path: std::path::PathBuf::from(":memory:"),
             emitter,
             json_mode: true,
+            operation_id: "system.echo",
+            request_id: "test-req".into(),
         };
         let result = echo(&mut ctx, "hello");
         assert!(matches!(result, Err(crate::error::UecmError::PowerShell(_))));

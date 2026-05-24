@@ -767,6 +767,8 @@ mod tests {
             db_path: PathBuf::from(":memory:"),
             emitter,
             json_mode: true,
+            operation_id: "machine.list",
+            request_id: "test-req".into(),
         };
 
         // Add a machine
@@ -798,6 +800,8 @@ mod tests {
             db_path: PathBuf::from(":memory:"),
             emitter,
             json_mode: true,
+            operation_id: "machine.deep_scan",
+            request_id: "test-req".into(),
         };
 
         add(&mut ctx, "10.0.0.1".to_string(), Some("m1".to_string())).unwrap();
@@ -820,6 +824,8 @@ mod tests {
             db_path: PathBuf::from(":memory:"),
             emitter,
             json_mode: true,
+            operation_id: "machine.deep_scan",
+            request_id: "test-req".into(),
         };
         // id 999 does not exist → refresh returns InvalidInput → classified as a
         // failure (not a WinRM skip), but the batch still completes Ok.
@@ -860,6 +866,8 @@ mod tests {
             db_path: PathBuf::from(":memory:"),
             emitter,
             json_mode: true,
+            operation_id: "machine.authorize",
+            request_id: "test-req".into(),
         };
         add(&mut ctx, "10.0.0.1".to_string(), Some("m1".to_string())).unwrap();
         // inline(None) resolves to no credentials → authorize must reject.
@@ -877,6 +885,8 @@ mod tests {
             db_path: PathBuf::from(":memory:"),
             emitter,
             json_mode: true,
+            operation_id: "machine.deep_scan",
+            request_id: "test-req".into(),
         };
         let cred = crate::cli::credential_args::CredentialArgs::inline(None);
         let res = deep_scan(&mut ctx, vec![], false, &cred, &UnreachableExec);
@@ -892,6 +902,8 @@ mod tests {
             db_path: PathBuf::from(":memory:"),
             emitter,
             json_mode: true,
+            operation_id: "machine.delete",
+            request_id: "test-req".into(),
         };
 
         // Try to delete without --yes or --dry-run
@@ -917,6 +929,8 @@ mod tests {
             db_path: PathBuf::from(":memory:"),
             emitter,
             json_mode: true,
+            operation_id: "machine.scan",
+            request_id: "test-req".into(),
         };
         // TEST-NET-3 /30 = 2 usable hosts; per-port timeout 200ms → completes well under 2s.
         scan(&mut ctx, "203.0.113.0/30", 200).unwrap();
@@ -926,7 +940,7 @@ mod tests {
 
     fn ctx_with(db: crate::data::Db) -> Ctx<'static> {
         let emitter: Box<dyn Emitter> = Box::new(NdjsonEmitter::new(Vec::new()));
-        Ctx { db: Some(db), db_path: PathBuf::from(":memory:"), emitter, json_mode: true }
+        Ctx { db: Some(db), db_path: PathBuf::from(":memory:"), emitter, json_mode: true, operation_id: "machine.list", request_id: "test-req".into() }
     }
 
     #[test]

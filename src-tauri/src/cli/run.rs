@@ -21,6 +21,10 @@ pub struct Ctx<'a> {
     pub db_path: PathBuf,
     pub emitter: Box<dyn Emitter + 'a>,
     pub json_mode: bool,
+    /// Canonical operation identifier (spec §2.2 / §4.1). Set at dispatch time.
+    pub operation_id: &'static str,
+    /// Per-request UUID v4 correlation id (spec §4.1). Set at dispatch time.
+    pub request_id: String,
 }
 
 impl<'a> Ctx<'a> {
@@ -152,6 +156,12 @@ pub fn run(cli: Cli) -> i32 {
         None
     };
 
+    // Compute per-request envelope fields (spec §2.2 / §4.1) before emitter construction.
+    // `started` is consumed by Task 5's envelope-aware emitter.
+    let operation_id = crate::cli::manifest::operation_id_for(&cli.command);
+    let request_id = crate::cli::envelope::gen_request_id();
+    let started = std::time::Instant::now();
+
     // Emitter selection (spec §3.5). text -> human; json/ndjson -> NDJSON emitter.
     // True single-object buffering for `json` (vs streamed `ndjson`) is refined in
     // the P1 envelope plan; here both structured modes share the NDJSON emitter.
@@ -171,7 +181,8 @@ pub fn run(cli: Cli) -> i32 {
         OutputFormat::Json | OutputFormat::Ndjson => Box::new(NdjsonEmitter::new(stdout.lock())),
     };
 
-    let mut ctx = Ctx { db, db_path, emitter, json_mode };
+    let mut ctx = Ctx { db, db_path, emitter, json_mode, operation_id, request_id: request_id.clone() };
+    let _ = started; // consumed by Task 5's envelope emitter
 
     let result = match cli.command {
         Domain::System { action } => domain_system::handle(&mut ctx, action),
