@@ -378,7 +378,11 @@ pub struct JsonEmitter<W: Write, E: Write = io::Stderr> {
     writer: W,
     error_writer: E,
     envelope: EnvelopeCtx,
-    data: Option<serde_json::Value>,
+    /// All `emit_value`/`emit_result` payloads, accumulated losslessly. A
+    /// handler may emit more than once (`deploy ddc` emits one value per
+    /// `DeployEvent`); keeping a `Vec` ensures none are dropped. `finish()`
+    /// collapses a lone value back to the bare one-shot shape.
+    values: Vec<serde_json::Value>,
     events: Vec<serde_json::Value>,
     errored: bool,
     finished: bool,
@@ -386,7 +390,7 @@ pub struct JsonEmitter<W: Write, E: Write = io::Stderr> {
 
 impl<W: Write> JsonEmitter<W, io::Stderr> {
     pub fn new(writer: W, envelope: EnvelopeCtx) -> Self {
-        Self { writer, error_writer: io::stderr(), envelope, data: None, events: Vec::new(), errored: false, finished: false }
+        Self { writer, error_writer: io::stderr(), envelope, values: Vec::new(), events: Vec::new(), errored: false, finished: false }
     }
 }
 
@@ -396,7 +400,7 @@ impl<W: Write, E: Write> Emitter for JsonEmitter<W, E> {
         Ok(())
     }
     fn emit_value(&mut self, value: &serde_json::Value) -> io::Result<()> {
-        self.data = Some(value.clone());
+        self.values.push(value.clone());
         Ok(())
     }
     fn emit_error(&mut self, err: &UecmError) {
@@ -411,15 +415,19 @@ impl<W: Write, E: Write> Emitter for JsonEmitter<W, E> {
         if self.finished { return Ok(()); }
         self.finished = true;
         if self.errored { return Ok(()); } // 错误已发 stderr，stdout 不发成功体
-        let data = match self.data.take() {
-            Some(v) => {
-                debug_assert!(self.events.is_empty(), "JsonEmitter: events silently dropped when data is also set");
-                v
-            }
+        let values = std::mem::take(&mut self.values);
+        let events = std::mem::take(&mut self.events);
+        let data = match (values.len(), events.is_empty()) {
             // 什么都没 emit（如 `system completion` 直写裸 shell 脚本到 stdout，
             // 绕过 emitter）-> finish no-op，避免在裸输出后再吐一个空 envelope 污染 stdout。
-            None if self.events.is_empty() => return Ok(()),
-            None => serde_json::json!({ "events": std::mem::take(&mut self.events) }),
+            (0, true) => return Ok(()),
+            // ONE-SHOT: 恰好一个 value 且无事件 -> data 即裸 value（不包裹），
+            // 保持 `v["data"]["version"]` 这类既有契约不变。
+            (1, true) => values.into_iter().next().expect("len checked == 1"),
+            // 纯流事件 collapse（无 value）-> data.events。
+            (0, false) => serde_json::json!({ "events": events }),
+            // 多 value，或 value+event 混发 -> 全部保留，谁都不丢。
+            _ => serde_json::json!({ "results": values, "events": events }),
         };
         let payload = self.envelope.success(data);
         serde_json::to_writer(&mut self.writer, &payload)?;
@@ -511,6 +519,50 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&buf).unwrap();
         assert_eq!(v["status"], "ok");
         assert_eq!(v["data"]["events"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn json_emitter_multiple_values_all_survive_in_results() {
+        // Regression: `deploy ddc` emits one value per DeployEvent. The old
+        // `data: Option<Value>` overwrote on every emit, keeping only the LAST.
+        // All values must now survive losslessly under `data.results`.
+        let mut buf = Vec::new();
+        {
+            let mut e = JsonEmitter::new(&mut buf, env_ctx());
+            e.emit_value(&serde_json::json!({"step":1})).unwrap();
+            e.emit_value(&serde_json::json!({"step":2})).unwrap();
+            e.emit_value(&serde_json::json!({"step":3})).unwrap();
+            e.finish().unwrap();
+        }
+        let v: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+        assert_eq!(v["status"], "ok");
+        let results = v["data"]["results"].as_array().unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0]["step"], 1);
+        assert_eq!(results[1]["step"], 2);
+        assert_eq!(results[2]["step"], 3);
+    }
+
+    #[test]
+    fn json_emitter_value_and_event_mix_keeps_both() {
+        // Regression: `zen enable` emits a one-shot result value AND a terminal
+        // `Completed` event. The old finish() dropped the buffered events when
+        // data was set (debug_assert would even panic). Both must survive.
+        let mut buf = Vec::new();
+        {
+            let mut e = JsonEmitter::new(&mut buf, env_ctx());
+            e.emit_value(&serde_json::json!({"ok_count":2})).unwrap();
+            e.emit_event(&Event::Completed{ summary: serde_json::json!({"ok_count":2}) }).unwrap();
+            e.finish().unwrap();
+        }
+        let v: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+        assert_eq!(v["status"], "ok");
+        let results = v["data"]["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["ok_count"], 2);
+        let events = v["data"]["events"].as_array().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "completed");
     }
 
     #[test]
