@@ -456,6 +456,13 @@ pub enum IniAction {
     },
     /// Mark a finding as skipped (won't apply).
     Skip { finding_id: i64 },
+    /// List captured DDC/PSO/Zen config snapshots for a scan run.
+    Config {
+        scan_run_id: i64,
+        /// Filter by concern domain (ddc / pso / zen).
+        #[arg(long)]
+        domain: Option<String>,
+    },
     /// Verify PSO precaching CVars (R008-R010) in a project's ConsoleVariables.ini.
     VerifyPsoPrecaching {
         #[arg(long)]
@@ -1967,5 +1974,19 @@ mod tests {
             "--backend", "garbage",
         ]);
         assert!(r.is_err(), "clap must reject unknown --backend values");
+    }
+
+    #[test]
+    fn parses_ini_config_with_domain() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "ini", "config", "37", "--domain", "ddc",
+        ]).unwrap();
+        match cli.command {
+            Domain::Ini { action: IniAction::Config { scan_run_id, domain } } => {
+                assert_eq!(scan_run_id, 37);
+                assert_eq!(domain.as_deref(), Some("ddc"));
+            }
+            _ => panic!("expected ini config"),
+        }
     }
 }

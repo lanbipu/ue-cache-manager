@@ -200,6 +200,7 @@ pub fn handle(ctx: &mut Ctx<'_>, action: IniAction) -> UecmResult<()> {
             apply_finding(ctx, finding_id, &cred)
         }
         IniAction::Skip { finding_id } => skip_finding(ctx, finding_id),
+        IniAction::Config { scan_run_id, domain } => config(ctx, scan_run_id, domain.as_deref()),
         IniAction::VerifyPsoPrecaching { project_id } => verify_pso_precaching(ctx, project_id),
         IniAction::GcPause { target, project_id, yes, dry_run, cred } => {
             let hosts: Vec<String> = match target.require_one()? {
@@ -778,6 +779,33 @@ fn list_runs(ctx: &mut Ctx<'_>, limit: i64) -> UecmResult<()> {
     Ok(())
 }
 
+fn config(ctx: &mut Ctx<'_>, scan_run_id: i64, domain: Option<&str>) -> UecmResult<()> {
+    let db = ctx.require_db()?;
+    let rows = match domain {
+        Some(d) => ini_config_snapshots::list_for_run_domain(db, scan_run_id, d)?,
+        None => ini_config_snapshots::list_for_run(db, scan_run_id)?,
+    };
+    if ctx.json_mode {
+        ctx.emitter.emit_result(&rows).ok();
+    } else {
+        let mut text = String::new();
+        let mut last_key = (i64::MIN, String::new()); // (machine_id, file_path)
+        for r in &rows {
+            let key = (r.machine_id, r.file_path.clone());
+            if key != last_key {
+                text.push_str(&format!("\nmachine {} — {} (UE {})\n",
+                    r.machine_id, r.file_path, r.ue_version.as_deref().unwrap_or("?")));
+                last_key = key;
+            }
+            text.push_str(&format!("  [{}] [{}] {} = {}\n",
+                r.domain, r.section, r.key_name, r.value));
+        }
+        if rows.is_empty() { text.push_str("(no config snapshots)\n"); }
+        ctx.emitter.emit_text(text.trim_end()).ok();
+    }
+    Ok(())
+}
+
 fn list_findings(
     ctx: &mut Ctx<'_>,
     scan_run_id: i64,
@@ -918,6 +946,48 @@ mod tests {
     // auth `ini remove` no longer requires an operator credential — the
     // require-creds gate it asserted was deleted in P4. The no-credential path is
     // covered by the loopback set/read/remove tests in core::ini_editor.)
+
+    #[test]
+    fn config_handler_emits_snapshots() {
+        use crate::data::{scan_runs, machines, ini_config_snapshots as ics};
+        let db = fresh_db();
+        let mid = machines::insert(&db, &machines::Machine::new("R1", "1.1.1.1")).unwrap();
+        let run = scan_runs::insert(&db, "ini", &[mid]).unwrap();
+        ics::insert(&db, &ics::ConfigSnapshot { id: None, scan_run_id: run, machine_id: mid,
+            file_path: "C:\\P\\Config\\DefaultEngine.ini".into(), ue_version: Some("5.4".into()),
+            domain: "ddc".into(), section: "DerivedDataBackendGraph".into(),
+            key_name: "Root".into(), value: "(Type=KeyLength)".into(), line_number: Some(3) }).unwrap();
+        let mut buf: Vec<u8> = Vec::new();
+        let mut ctx = make_ctx(&mut buf, &db);
+        config(&mut ctx, run, None).unwrap();
+        drop(ctx);
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.contains("DerivedDataBackendGraph"));
+        assert!(s.contains("Root"));
+    }
+
+    #[test]
+    fn config_handler_filters_by_domain() {
+        use crate::data::{scan_runs, machines, ini_config_snapshots as ics};
+        let db = fresh_db();
+        let mid = machines::insert(&db, &machines::Machine::new("R1", "1.1.1.1")).unwrap();
+        let run = scan_runs::insert(&db, "ini", &[mid]).unwrap();
+        ics::insert(&db, &ics::ConfigSnapshot { id: None, scan_run_id: run, machine_id: mid,
+            file_path: "C:\\P\\Config\\DefaultEngine.ini".into(), ue_version: Some("5.4".into()),
+            domain: "ddc".into(), section: "DerivedDataBackendGraph".into(),
+            key_name: "Root".into(), value: "(Type=KeyLength)".into(), line_number: Some(3) }).unwrap();
+        ics::insert(&db, &ics::ConfigSnapshot { id: None, scan_run_id: run, machine_id: mid,
+            file_path: "C:\\P\\Config\\ConsoleVariables.ini".into(), ue_version: Some("5.4".into()),
+            domain: "pso".into(), section: "ConsoleVariables".into(),
+            key_name: "r.PSOPrecaching".into(), value: "1".into(), line_number: Some(7) }).unwrap();
+        let mut buf: Vec<u8> = Vec::new();
+        let mut ctx = make_ctx(&mut buf, &db);
+        config(&mut ctx, run, Some("ddc")).unwrap();
+        drop(ctx);
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.contains("Root"), "expected ddc row key, got: {}", s);
+        assert!(!s.contains("r.PSOPrecaching"), "pso row leaked under --domain ddc: {}", s);
+    }
 
     #[cfg(not(windows))]
     #[test]
