@@ -2,6 +2,7 @@
 //!
 //! Event taxonomy matches §8.2 of the design spec.
 
+use crate::cli::envelope::{ErrorBody, ErrorEnvelope, Meta, SuccessEnvelope, SCHEMA_VERSION};
 use crate::error::UecmError;
 use serde::Serialize;
 use std::io::{self, Write};
@@ -10,7 +11,7 @@ use std::io::{self, Write};
 // JsonSchema feeds manifest::event_schema(). The `serde_json::Value` fields
 // (metadata/summary/details) become permissive `{}` schemas (any JSON allowed).
 #[derive(Debug, Serialize, schemars::JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     Started {
         task_type: String,
@@ -114,6 +115,30 @@ pub fn exit_code_for(err: &UecmError) -> i32 {
     }
 }
 
+/// Per-request envelope context (spec §4.1). Carries the canonical
+/// `operation_id`, the request correlation id, and the dispatch start instant
+/// so emitters can compute `meta.duration_ms` at finish time.
+pub struct EnvelopeCtx {
+    pub operation_id: String,
+    pub request_id: String,
+    pub started: std::time::Instant,
+}
+impl EnvelopeCtx {
+    fn meta(&self) -> Meta {
+        Meta { request_id: self.request_id.clone(), duration_ms: self.started.elapsed().as_millis(), timestamp: crate::cli::envelope::now_iso8601() }
+    }
+    fn success(&self, data: serde_json::Value) -> serde_json::Value {
+        serde_json::to_value(SuccessEnvelope { schema_version: SCHEMA_VERSION, status: "ok", operation_id: &self.operation_id, data, meta: self.meta() }).unwrap_or(serde_json::Value::Null)
+    }
+    fn error(&self, err: &UecmError) -> serde_json::Value {
+        let body = ErrorBody { code: error_code(err).into(), exit_code: exit_code_for(err), message: err.to_string(), retryable: crate::cli::envelope::retryable_for(err), details: serde_json::Value::Null };
+        serde_json::to_value(ErrorEnvelope { schema_version: SCHEMA_VERSION, status: "error", operation_id: &self.operation_id, error: body, meta: self.meta() }).unwrap_or(serde_json::Value::Null)
+    }
+}
+fn is_terminal(event: &Event) -> bool {
+    matches!(event, Event::Completed{..} | Event::Cancelled{..} | Event::Error{..})
+}
+
 /// Object-safe emitter trait.
 ///
 /// `emit_value` takes an already-serialized `serde_json::Value` so the trait
@@ -124,6 +149,8 @@ pub trait Emitter {
     fn emit_event(&mut self, event: &Event) -> io::Result<()>;
     fn emit_value(&mut self, value: &serde_json::Value) -> io::Result<()>;
     fn emit_error(&mut self, err: &UecmError);
+    /// 终结输出。JsonEmitter 在此吐出恰好一个 envelope；其它实现 no-op。
+    fn finish(&mut self) -> io::Result<()> { Ok(()) }
 }
 
 /// Convenience generic method available on every `Emitter`, including
@@ -154,6 +181,15 @@ pub struct NdjsonEmitter<W: Write, E: Write = io::Stderr> {
     /// `emit_error` so NDJSON consumers don't see `completed` then `cancelled`
     /// back-to-back (e.g. batch ops that summarize then return Err).
     stream_terminated: bool,
+    /// Per-request envelope context (spec §4.1). When set, `emit_value` wraps
+    /// the one-shot result in a `SuccessEnvelope`, `emit_event` decorates each
+    /// stream item with `sequence`/`timestamp`/`request_id`/`schema_version`
+    /// (+`final` on terminals), and `emit_error` writes an `ErrorEnvelope`.
+    /// `None` keeps the legacy bare-event behavior (startup-error path).
+    envelope: Option<EnvelopeCtx>,
+    /// Monotonic per-stream event index, surfaced as `sequence` when an
+    /// envelope is attached.
+    sequence: u64,
 }
 
 impl<W: Write> NdjsonEmitter<W, io::Stderr> {
@@ -165,6 +201,8 @@ impl<W: Write> NdjsonEmitter<W, io::Stderr> {
             error_writer: io::stderr(),
             stream_started: false,
             stream_terminated: false,
+            envelope: None,
+            sequence: 0,
         }
     }
 }
@@ -178,13 +216,29 @@ impl<W: Write, E: Write> NdjsonEmitter<W, E> {
             error_writer,
             stream_started: false,
             stream_terminated: false,
+            envelope: None,
+            sequence: 0,
         }
     }
+
+    /// Attach a per-request envelope context so structured `ndjson` output
+    /// carries `sequence`/`request_id`/`schema_version` per event and wraps
+    /// one-shot values in a `SuccessEnvelope`.
+    pub fn with_envelope(mut self, ctx: EnvelopeCtx) -> Self { self.envelope = Some(ctx); self }
 }
 
 impl<W: Write, E: Write> Emitter for NdjsonEmitter<W, E> {
     fn emit_event(&mut self, event: &Event) -> io::Result<()> {
-        serde_json::to_writer(&mut self.writer, event)?;
+        let mut obj = serde_json::to_value(event)?;
+        if let (Some(c), Some(map)) = (&self.envelope, obj.as_object_mut()) {
+            map.insert("sequence".into(), serde_json::json!(self.sequence));
+            map.insert("timestamp".into(), serde_json::json!(crate::cli::envelope::now_iso8601()));
+            map.insert("request_id".into(), serde_json::json!(c.request_id));
+            map.insert("schema_version".into(), serde_json::json!(SCHEMA_VERSION));
+            if is_terminal(event) { map.insert("final".into(), serde_json::json!(true)); }
+        }
+        self.sequence += 1;
+        serde_json::to_writer(&mut self.writer, &obj)?;
         self.writer.write_all(b"\n")?;
         self.writer.flush()?;
         self.stream_started = true;
@@ -193,17 +247,15 @@ impl<W: Write, E: Write> Emitter for NdjsonEmitter<W, E> {
         // `emit_error` so NDJSON consumers never see two terminal events.
         // Handlers MUST NOT emit `Completed` while later steps could still
         // fail (see `pso collect`, which delays Completed until persist).
-        if matches!(
-            event,
-            Event::Completed { .. } | Event::Cancelled { .. } | Event::Error { .. }
-        ) {
+        if is_terminal(event) {
             self.stream_terminated = true;
         }
         Ok(())
     }
 
     fn emit_value(&mut self, value: &serde_json::Value) -> io::Result<()> {
-        serde_json::to_writer(&mut self.writer, value)?;
+        let payload = match &self.envelope { Some(c) => c.success(value.clone()), None => value.clone() };
+        serde_json::to_writer(&mut self.writer, &payload)?;
         self.writer.write_all(b"\n")?;
         self.writer.flush()
     }
@@ -225,12 +277,11 @@ impl<W: Write, E: Write> Emitter for NdjsonEmitter<W, E> {
         }
 
         // Full error envelope to stderr per spec §4 always.
-        let envelope = Event::Error {
-            code: error_code(err).into(),
-            message: err.to_string(),
-            details: serde_json::Value::Null,
+        let env = match &self.envelope {
+            Some(c) => c.error(err),
+            None => serde_json::json!({ "type":"error", "code": error_code(err), "message": err.to_string() }),
         };
-        if serde_json::to_writer(&mut self.error_writer, &envelope).is_ok() {
+        if serde_json::to_writer(&mut self.error_writer, &env).is_ok() {
             let _ = self.error_writer.write_all(b"\n");
             let _ = self.error_writer.flush();
         }
@@ -322,9 +373,116 @@ impl<W: Write, E: Write> Emitter for HumanEmitter<W, E> {
     }
 }
 
+/// 单对象 JSON 输出（spec §3.5 的 `json`）。缓冲所有 emit，在 finish 吐出恰好一个
+/// envelope；流事件收进 data.events，确保 `--output json` 永远是一个可被 jq 解析的对象。
+pub struct JsonEmitter<W: Write, E: Write = io::Stderr> {
+    writer: W,
+    error_writer: E,
+    envelope: EnvelopeCtx,
+    data: Option<serde_json::Value>,
+    events: Vec<serde_json::Value>,
+    errored: bool,
+    finished: bool,
+}
+
+impl<W: Write> JsonEmitter<W, io::Stderr> {
+    pub fn new(writer: W, envelope: EnvelopeCtx) -> Self {
+        Self { writer, error_writer: io::stderr(), envelope, data: None, events: Vec::new(), errored: false, finished: false }
+    }
+}
+
+impl<W: Write, E: Write> Emitter for JsonEmitter<W, E> {
+    fn emit_event(&mut self, event: &Event) -> io::Result<()> {
+        self.events.push(serde_json::to_value(event)?);
+        Ok(())
+    }
+    fn emit_value(&mut self, value: &serde_json::Value) -> io::Result<()> {
+        self.data = Some(value.clone());
+        Ok(())
+    }
+    fn emit_error(&mut self, err: &UecmError) {
+        self.errored = true;
+        let env = self.envelope.error(err);
+        if serde_json::to_writer(&mut self.error_writer, &env).is_ok() {
+            let _ = self.error_writer.write_all(b"\n");
+            let _ = self.error_writer.flush();
+        }
+    }
+    fn finish(&mut self) -> io::Result<()> {
+        if self.finished { return Ok(()); }
+        self.finished = true;
+        if self.errored { return Ok(()); } // 错误已发 stderr，stdout 不发成功体
+        let data = match self.data.take() {
+            Some(v) => v,
+            // 什么都没 emit（如 `system completion` 直写裸 shell 脚本到 stdout，
+            // 绕过 emitter）-> finish no-op，避免在裸输出后再吐一个空 envelope 污染 stdout。
+            None if self.events.is_empty() => return Ok(()),
+            None => serde_json::json!({ "events": std::mem::take(&mut self.events) }),
+        };
+        let payload = self.envelope.success(data);
+        serde_json::to_writer(&mut self.writer, &payload)?;
+        self.writer.write_all(b"\n")?;
+        self.writer.flush()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn env_ctx() -> EnvelopeCtx {
+        EnvelopeCtx { operation_id: "system.version".into(), request_id: "rq".into(), started: std::time::Instant::now() }
+    }
+
+    #[test]
+    fn ndjson_stream_events_carry_type_sequence_and_final() {
+        let mut buf = Vec::new();
+        {
+            let mut e = NdjsonEmitter::new(&mut buf).with_envelope(env_ctx());
+            e.emit_event(&Event::HostProbe{ ip:"1.1.1.1".into(), winrm_open:true, smb_open:false, rpc_open:false }).unwrap();
+            e.emit_event(&Event::Completed{ summary: serde_json::json!({"n":1}) }).unwrap();
+            e.finish().unwrap();
+        }
+        let s = String::from_utf8(buf).unwrap();
+        let lines: Vec<&str> = s.trim_end().split('\n').collect();
+        let l0: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(l0["type"], "host_probe");
+        assert_eq!(l0["sequence"], 0);
+        assert_eq!(l0["request_id"], "rq");
+        let l1: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(l1["type"], "completed");
+        assert_eq!(l1["final"], true);
+    }
+
+    #[test]
+    fn json_emitter_one_shot_is_single_success_envelope() {
+        let mut buf = Vec::new();
+        {
+            let mut e = JsonEmitter::new(&mut buf, env_ctx());
+            e.emit_value(&serde_json::json!({"version":"0.1.0"})).unwrap();
+            e.finish().unwrap();
+        }
+        // 必须恰好一个 JSON 对象（整 buf 可被 jq/from_slice 一次解析）
+        let v: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+        assert_eq!(v["status"], "ok");
+        assert_eq!(v["operation_id"], "system.version");
+        assert_eq!(v["data"]["version"], "0.1.0");
+    }
+
+    #[test]
+    fn json_emitter_stream_collapses_to_single_object() {
+        let mut buf = Vec::new();
+        {
+            let mut e = JsonEmitter::new(&mut buf, env_ctx());
+            e.emit_event(&Event::HostProbe{ ip:"1.1.1.1".into(), winrm_open:true, smb_open:true, rpc_open:true }).unwrap();
+            e.emit_event(&Event::Completed{ summary: serde_json::json!({"n":1}) }).unwrap();
+            e.finish().unwrap();
+        }
+        // 仍是恰好一个对象；流事件收进 data.events
+        let v: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+        assert_eq!(v["status"], "ok");
+        assert_eq!(v["data"]["events"].as_array().unwrap().len(), 2);
+    }
 
     #[test]
     fn ndjson_emits_one_line_per_event() {
@@ -349,7 +507,7 @@ mod tests {
         let lines: Vec<&str> = s.trim_end().split('\n').collect();
         assert_eq!(lines.len(), 2);
         let parsed: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
-        assert_eq!(parsed["kind"], "host_probe");
+        assert_eq!(parsed["type"], "host_probe");
         assert_eq!(parsed["ip"], "192.168.10.20");
         assert_eq!(parsed["winrm_open"], true);
         assert_eq!(parsed["rpc_open"], true);

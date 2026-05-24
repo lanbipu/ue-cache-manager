@@ -20,8 +20,11 @@ fn version_subcommand_works() {
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8(out.stdout).unwrap();
     let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
-    assert_eq!(v["binary"], "uecm-cli");
-    assert!(v["version"].is_string());
+    // Envelope-aware emitter (spec §4): one-shot results are wrapped in a
+    // SuccessEnvelope; the handler payload lives under `data`.
+    assert_eq!(v["status"], "ok");
+    assert_eq!(v["data"]["binary"], "uecm-cli");
+    assert!(v["data"]["version"].is_string());
 }
 
 #[test]
@@ -36,7 +39,7 @@ fn machine_list_on_fresh_db_returns_empty_array() {
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8(out.stdout).unwrap();
     let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
-    assert_eq!(v, serde_json::Value::Array(vec![]));
+    assert_eq!(v["data"], serde_json::Value::Array(vec![]));
 }
 
 #[test]
@@ -65,7 +68,7 @@ fn cred_list_on_fresh_db_returns_empty_array() {
     );
     let stdout = String::from_utf8(out.stdout).unwrap();
     let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
-    assert_eq!(v, serde_json::Value::Array(vec![]));
+    assert_eq!(v["data"], serde_json::Value::Array(vec![]));
 }
 
 #[test]
@@ -81,7 +84,8 @@ fn env_set_without_target_returns_invalid_input() {
     let stderr = String::from_utf8(out.stderr).unwrap();
     let v: serde_json::Value =
         serde_json::from_str(stderr.trim_end()).expect("stderr should be JSON envelope");
-    assert_eq!(v["code"], "invalid_input");
+    assert_eq!(v["status"], "error");
+    assert_eq!(v["error"]["code"], "invalid_input");
 }
 
 #[test]
@@ -122,7 +126,7 @@ fn project_list_on_fresh_db_returns_empty_array() {
     assert!(out.status.success());
     let stdout = String::from_utf8(out.stdout).unwrap();
     let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
-    assert_eq!(v, serde_json::Value::Array(vec![]));
+    assert_eq!(v["data"], serde_json::Value::Array(vec![]));
 }
 
 #[test]
@@ -137,7 +141,7 @@ fn health_runs_on_fresh_db_returns_empty_array() {
     assert!(out.status.success());
     let stdout = String::from_utf8(out.stdout).unwrap();
     let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
-    assert_eq!(v, serde_json::Value::Array(vec![]));
+    assert_eq!(v["data"], serde_json::Value::Array(vec![]));
 }
 
 #[test]
@@ -153,7 +157,7 @@ fn gpu_matrix_on_empty_db_returns_empty_matrix() {
     let stdout = String::from_utf8(out.stdout).unwrap();
     let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
     // Empty matrix has cells == []
-    assert_eq!(v["cells"], serde_json::Value::Array(vec![]));
+    assert_eq!(v["data"]["cells"], serde_json::Value::Array(vec![]));
 }
 
 #[test]
@@ -168,7 +172,7 @@ fn ini_runs_on_fresh_db_returns_empty_array() {
     assert!(out.status.success());
     let stdout = String::from_utf8(out.stdout).unwrap();
     let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
-    assert_eq!(v, serde_json::Value::Array(vec![]));
+    assert_eq!(v["data"], serde_json::Value::Array(vec![]));
 }
 
 #[test]
@@ -199,8 +203,8 @@ fn machine_refresh_accepts_cred_alias_flag_without_clap_error() {
     let stderr = String::from_utf8(out.stderr).unwrap();
     let v: serde_json::Value =
         serde_json::from_str(stderr.trim_end()).expect("stderr should be JSON envelope");
-    assert_eq!(v["kind"], "error");
-    assert_eq!(v["code"], "invalid_input");
+    assert_eq!(v["status"], "error");
+    assert_eq!(v["error"]["code"], "invalid_input");
 }
 
 // -------------------------------------------------------------------------
@@ -219,7 +223,7 @@ fn zen_status_on_empty_db_returns_empty_endpoints_doc() {
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8(out.stdout).unwrap();
     let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
-    assert_eq!(v["endpoints"], serde_json::Value::Array(vec![]));
+    assert_eq!(v["data"]["endpoints"], serde_json::Value::Array(vec![]));
 }
 
 #[test]
@@ -234,7 +238,7 @@ fn zen_list_endpoints_on_empty_db_returns_empty_array() {
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8(out.stdout).unwrap();
     let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
-    assert_eq!(v, serde_json::Value::Array(vec![]));
+    assert_eq!(v["data"], serde_json::Value::Array(vec![]));
 }
 
 #[test]
@@ -249,7 +253,7 @@ fn zen_baseline_list_on_empty_db_returns_empty_array() {
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8(out.stdout).unwrap();
     let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
-    assert_eq!(v, serde_json::Value::Array(vec![]));
+    assert_eq!(v["data"], serde_json::Value::Array(vec![]));
 }
 
 #[test]
@@ -271,7 +275,8 @@ fn zen_baseline_lock_without_yes_returns_invalid_input() {
     let stderr = String::from_utf8(out.stderr).unwrap();
     let v: serde_json::Value =
         serde_json::from_str(stderr.trim_end()).expect("stderr JSON envelope");
-    assert_eq!(v["code"], "invalid_input");
+    assert_eq!(v["status"], "error");
+    assert_eq!(v["error"]["code"], "invalid_input");
 }
 
 #[test]
@@ -315,7 +320,8 @@ fn zen_register_for_unknown_machine_returns_invalid_input() {
     let stderr = String::from_utf8(out.stderr).unwrap();
     let v: serde_json::Value =
         serde_json::from_str(stderr.trim_end()).expect("stderr JSON envelope");
-    assert_eq!(v["code"], "invalid_input");
+    assert_eq!(v["status"], "error");
+    assert_eq!(v["error"]["code"], "invalid_input");
 }
 
 #[test]
@@ -343,8 +349,9 @@ fn zen_register_then_lua_preview_round_trip() {
         .output()
         .expect("spawn");
     assert!(reg.status.success(), "stderr: {}", String::from_utf8_lossy(&reg.stderr));
-    let reg_doc: serde_json::Value =
+    let reg_env: serde_json::Value =
         serde_json::from_str(String::from_utf8(reg.stdout).unwrap().trim_end()).unwrap();
+    let reg_doc = &reg_env["data"];
     assert_eq!(reg_doc["ok"], serde_json::Value::Bool(true));
     assert_eq!(reg_doc["inserted"], serde_json::Value::Bool(true));
     assert_eq!(reg_doc["declared_port"], serde_json::Value::from(8558));
@@ -364,8 +371,9 @@ fn zen_register_then_lua_preview_round_trip() {
         .output()
         .expect("spawn");
     assert!(reg2.status.success());
-    let reg2_doc: serde_json::Value =
+    let reg2_env: serde_json::Value =
         serde_json::from_str(String::from_utf8(reg2.stdout).unwrap().trim_end()).unwrap();
+    let reg2_doc = &reg2_env["data"];
     assert_eq!(reg2_doc["inserted"], serde_json::Value::Bool(false));
     assert_eq!(reg2_doc["endpoint_id"], serde_json::Value::from(endpoint_id));
 
@@ -379,8 +387,9 @@ fn zen_register_then_lua_preview_round_trip() {
         .output()
         .expect("spawn");
     assert!(preview.status.success(), "stderr: {}", String::from_utf8_lossy(&preview.stderr));
-    let preview_doc: serde_json::Value =
+    let preview_env: serde_json::Value =
         serde_json::from_str(String::from_utf8(preview.stdout).unwrap().trim_end()).unwrap();
+    let preview_doc = &preview_env["data"];
     let lua = preview_doc["lua"].as_str().expect("lua string");
     assert!(lua.contains("server = {"));
     assert!(lua.contains("port = 8558"));
@@ -460,7 +469,8 @@ fn zen_verify_rules_verified_version_emits_ok_true_plan() {
         .expect("spawn");
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8(out.stdout).unwrap();
-    let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    let env: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    let v = &env["data"];
     assert_eq!(v["ok"], serde_json::Value::Bool(true));
     assert_eq!(v["ue_version"], "5.7");
     assert_eq!(v["matched_rule_version"], "5.7");
@@ -491,7 +501,8 @@ fn zen_verify_rules_unverified_refuse_emits_ok_false_exit_zero() {
     // Exit code 0 even though ok:false — the JSON flag carries the signal.
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8(out.stdout).unwrap();
-    let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    let env: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    let v = &env["data"];
     assert_eq!(v["ok"], serde_json::Value::Bool(false));
     assert_eq!(v["ue_version"], "5.8");
     assert!(v["message"].as_str().unwrap().contains("5.8"));
@@ -522,7 +533,8 @@ fn zen_verify_rules_write_verified_appends_new_version_to_yaml() {
         .expect("spawn");
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8(out.stdout).unwrap();
-    let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    let env: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    let v = &env["data"];
     assert_eq!(v["ok"], serde_json::Value::Bool(true));
     assert_eq!(v["wrote"], serde_json::Value::Bool(true));
     let after = v["verified_versions_after"].as_array().unwrap();
@@ -554,7 +566,8 @@ fn zen_verify_rules_write_verified_on_already_verified_returns_wrote_false() {
         .expect("spawn");
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8(out.stdout).unwrap();
-    let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    let env: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    let v = &env["data"];
     assert_eq!(v["ok"], serde_json::Value::Bool(true));
     assert_eq!(v["wrote"], serde_json::Value::Bool(false));
     // File on disk untouched.
@@ -591,7 +604,8 @@ fn zen_verify_rules_runs_without_writable_db() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8(out.stdout).unwrap();
-    let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    let env: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    let v = &env["data"];
     assert_eq!(v["ok"], serde_json::Value::Bool(true));
 }
 
@@ -710,8 +724,9 @@ fn zen_verify_rules_resolve_only_unaffected_by_run_editor_addition() {
         .output()
         .expect("spawn");
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
-    let v: serde_json::Value =
+    let env: serde_json::Value =
         serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim_end()).unwrap();
+    let v = &env["data"];
     assert_eq!(v["ok"], serde_json::Value::Bool(true));
     assert_eq!(v["verify_outcome"], serde_json::Value::Null);
     // Existing fields are untouched.
@@ -789,7 +804,8 @@ fn ddc_generate_with_backend_zen_returns_skipped_no_op() {
     // (and only) stdout payload.
     let stdout = String::from_utf8(out.stdout).unwrap();
     let last = stdout.trim_end().lines().last().expect("at least one line");
-    let v: serde_json::Value = serde_json::from_str(last).expect("valid JSON");
+    let env: serde_json::Value = serde_json::from_str(last).expect("valid JSON");
+    let v = &env["data"];
     assert_eq!(v["backend"], "zen");
     assert_eq!(v["skipped"], serde_json::Value::Bool(true));
     assert_eq!(v["reason"], "zen handles caching natively");
@@ -823,7 +839,8 @@ fn ddc_verify_with_backend_zen_returns_skipped_no_op() {
 
     let stdout = String::from_utf8(out.stdout).unwrap();
     let last = stdout.trim_end().lines().last().expect("at least one line");
-    let v: serde_json::Value = serde_json::from_str(last).expect("valid JSON");
+    let env: serde_json::Value = serde_json::from_str(last).expect("valid JSON");
+    let v = &env["data"];
     assert_eq!(v["backend"], "zen");
     assert_eq!(v["skipped"], serde_json::Value::Bool(true));
     assert_eq!(v["operation"], "ddc.verify");
@@ -858,7 +875,8 @@ fn ddc_distribute_with_backend_zen_returns_skipped_no_op() {
 
     let stdout = String::from_utf8(out.stdout).unwrap();
     let last = stdout.trim_end().lines().last().expect("at least one line");
-    let v: serde_json::Value = serde_json::from_str(last).expect("valid JSON");
+    let env: serde_json::Value = serde_json::from_str(last).expect("valid JSON");
+    let v = &env["data"];
     assert_eq!(v["backend"], "zen");
     assert_eq!(v["skipped"], serde_json::Value::Bool(true));
     assert_eq!(v["operation"], "ddc.distribute");
@@ -917,7 +935,8 @@ fn ddc_verify_with_backend_zen_emits_single_json_line_with_routing_folded_in() {
         1,
         "forced --backend zen verify must emit ONE stdout line, got: {stdout}"
     );
-    let v: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    let env: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    let v = &env["data"];
     assert_eq!(v["backend"], "zen");
     // Forced backend → no `routing` field folded in (router was never called).
     assert!(
@@ -1011,13 +1030,24 @@ fn ddc_generate_with_backend_auto_default_falls_through_to_legacy_path() {
     // Legacy path errors out on "no UE installs" — exit 2 (invalid_input).
     assert!(!out.status.success());
     assert_eq!(out.status.code(), Some(2));
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    // The routing decision must have been emitted to stdout as a Started
-    // event before the error surfaced on stderr.
+    // Under the single-object `json` emitter (spec §3.5), intermediate stream
+    // events (including the routing `Started` event) are buffered, and a
+    // command that errors emits only the ErrorEnvelope to stderr — stdout stays
+    // empty. The auto→legacy routing is proven by the legacy "no UE installs"
+    // error: routing resolved to legacy and ran it.
     let stdout = String::from_utf8(out.stdout).unwrap();
+    let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(
-        stdout.contains("backend_resolution"),
-        "expected routing event in stdout, got: {stdout}\nstderr: {stderr}"
+        stdout.trim().is_empty(),
+        "json mode must not leak buffered events to stdout on error, got: {stdout}"
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(stderr.trim_end()).expect("stderr should be JSON envelope");
+    assert_eq!(v["status"], "error");
+    assert_eq!(v["error"]["code"], "invalid_input");
+    assert!(
+        v["error"]["message"].as_str().unwrap().contains("no detected UE installs"),
+        "auto routing should fall through to legacy and fail on missing UE installs; stderr: {stderr}"
     );
 }
 
@@ -1044,7 +1074,8 @@ fn zen_enable_without_yes_or_dry_run_returns_invalid_input() {
     let stderr = String::from_utf8(out.stderr).unwrap();
     let v: serde_json::Value =
         serde_json::from_str(stderr.trim_end()).expect("stderr JSON envelope");
-    assert_eq!(v["code"], "invalid_input");
+    assert_eq!(v["status"], "error");
+    assert_eq!(v["error"]["code"], "invalid_input");
 }
 
 #[test]
@@ -1118,9 +1149,9 @@ fn zen_enable_dry_run_emits_plan_for_seeded_project() {
         .output()
         .expect("spawn");
     assert!(reg.status.success(), "stderr: {}", String::from_utf8_lossy(&reg.stderr));
-    let reg_doc: serde_json::Value =
+    let reg_env: serde_json::Value =
         serde_json::from_str(String::from_utf8(reg.stdout).unwrap().trim_end()).unwrap();
-    let endpoint_id = reg_doc["endpoint_id"].as_i64().unwrap();
+    let endpoint_id = reg_env["data"]["endpoint_id"].as_i64().unwrap();
 
     // Create project with UE 5.7. `project create-manual` doesn't set the
     // version, so we'll work around by also doing set-location THEN we rely
@@ -1171,9 +1202,9 @@ fn zen_apply_config_dry_run_emits_plan_without_invoking_powershell() {
         ])
         .output()
         .expect("spawn");
-    let reg_doc: serde_json::Value =
+    let reg_env: serde_json::Value =
         serde_json::from_str(String::from_utf8(reg.stdout).unwrap().trim_end()).unwrap();
-    let endpoint_id = reg_doc["endpoint_id"].as_i64().unwrap();
+    let endpoint_id = reg_env["data"]["endpoint_id"].as_i64().unwrap();
 
     let out = Command::new(bin())
         .env("UECM_DB_PATH", &path)
@@ -1187,8 +1218,12 @@ fn zen_apply_config_dry_run_emits_plan_without_invoking_powershell() {
         .expect("spawn");
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8(out.stdout).unwrap();
-    let v: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
-    assert_eq!(v["kind"], "completed");
+    // `json` mode buffers stream events into a single SuccessEnvelope; the
+    // `completed` plan event is collected under `data.events`.
+    let env: serde_json::Value = serde_json::from_str(stdout.trim_end()).unwrap();
+    assert_eq!(env["status"], "ok");
+    let v = &env["data"]["events"][0];
+    assert_eq!(v["type"], "completed");
     assert_eq!(v["summary"]["dry_run"], serde_json::Value::Bool(true));
     assert_eq!(v["summary"]["operation"], "zen.apply-config");
     assert!(v["summary"]["details"]["lua"].as_str().unwrap().contains("server = {"));

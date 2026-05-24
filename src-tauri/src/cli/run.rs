@@ -178,11 +178,17 @@ pub fn run(cli: Cli) -> i32 {
             );
             Box::new(HumanEmitter::new(stdout.lock(), stderr.lock(), color))
         }
-        OutputFormat::Json | OutputFormat::Ndjson => Box::new(NdjsonEmitter::new(stdout.lock())),
+        OutputFormat::Ndjson => {
+            let env = crate::cli::output::EnvelopeCtx { operation_id: operation_id.to_string(), request_id: request_id.clone(), started };
+            Box::new(NdjsonEmitter::new(stdout.lock()).with_envelope(env))
+        }
+        OutputFormat::Json => {
+            let env = crate::cli::output::EnvelopeCtx { operation_id: operation_id.to_string(), request_id: request_id.clone(), started };
+            Box::new(crate::cli::output::JsonEmitter::new(stdout.lock(), env))
+        }
     };
 
     let mut ctx = Ctx { db, db_path, emitter, json_mode, operation_id, request_id: request_id.clone() };
-    let _ = started; // consumed by Task 5's envelope emitter
 
     let result = match cli.command {
         Domain::System { action } => domain_system::handle(&mut ctx, action),
@@ -209,13 +215,15 @@ pub fn run(cli: Cli) -> i32 {
         }
     };
 
-    match result {
-        Ok(()) => 0,
+    let code = match result {
+        Ok(()) => { let _ = ctx.emitter.finish(); 0 }
         Err(e) => {
             ctx.emitter.emit_error(&e);
+            let _ = ctx.emitter.finish();
             exit_code_for(&e)
         }
-    }
+    };
+    code
 }
 
 /// Whether startup-phase errors (db-path resolve / db open, before the emitter
