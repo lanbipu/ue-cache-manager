@@ -188,7 +188,7 @@ pub fn run(cli: Cli) -> i32 {
         }
     };
 
-    let mut ctx = Ctx { db, db_path, emitter, json_mode, operation_id, request_id: request_id.clone() };
+    let mut ctx = Ctx { db, db_path, emitter, json_mode, operation_id, request_id };
 
     let result = match cli.command {
         Domain::System { action } => domain_system::handle(&mut ctx, action),
@@ -215,15 +215,14 @@ pub fn run(cli: Cli) -> i32 {
         }
     };
 
-    let code = match result {
+    match result {
         Ok(()) => { let _ = ctx.emitter.finish(); 0 }
         Err(e) => {
             ctx.emitter.emit_error(&e);
             let _ = ctx.emitter.finish();
             exit_code_for(&e)
         }
-    };
-    code
+    }
 }
 
 /// Whether startup-phase errors (db-path resolve / db open, before the emitter

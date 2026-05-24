@@ -128,11 +128,11 @@ impl EnvelopeCtx {
         Meta { request_id: self.request_id.clone(), duration_ms: self.started.elapsed().as_millis(), timestamp: crate::cli::envelope::now_iso8601() }
     }
     fn success(&self, data: serde_json::Value) -> serde_json::Value {
-        serde_json::to_value(SuccessEnvelope { schema_version: SCHEMA_VERSION, status: "ok", operation_id: &self.operation_id, data, meta: self.meta() }).unwrap_or(serde_json::Value::Null)
+        serde_json::to_value(SuccessEnvelope { schema_version: SCHEMA_VERSION, status: "ok", operation_id: &self.operation_id, data, meta: self.meta() }).expect("EnvelopeCtx serialization is infallible")
     }
     fn error(&self, err: &UecmError) -> serde_json::Value {
         let body = ErrorBody { code: error_code(err).into(), exit_code: exit_code_for(err), message: err.to_string(), retryable: crate::cli::envelope::retryable_for(err), details: serde_json::Value::Null };
-        serde_json::to_value(ErrorEnvelope { schema_version: SCHEMA_VERSION, status: "error", operation_id: &self.operation_id, error: body, meta: self.meta() }).unwrap_or(serde_json::Value::Null)
+        serde_json::to_value(ErrorEnvelope { schema_version: SCHEMA_VERSION, status: "error", operation_id: &self.operation_id, error: body, meta: self.meta() }).expect("EnvelopeCtx serialization is infallible")
     }
 }
 fn is_terminal(event: &Event) -> bool {
@@ -265,15 +265,14 @@ impl<W: Write, E: Write> Emitter for NdjsonEmitter<W, E> {
         // not already terminated. One-shot JSON commands keep stdout empty;
         // batch commands that already emitted a `completed` summary before
         // returning Err must not double-terminate with `cancelled`.
+        // Route through `emit_event` so the terminator is decorated like every
+        // other stream event (sequence/timestamp/request_id/schema_version +
+        // final:true) and `stream_terminated` is set there — never write the
+        // synthetic event directly or it would land undecorated.
         if self.stream_started && !self.stream_terminated {
-            let cancelled = Event::Cancelled {
+            let _ = self.emit_event(&Event::Cancelled {
                 reason: err.to_string(),
-            };
-            if serde_json::to_writer(&mut self.writer, &cancelled).is_ok() {
-                let _ = self.writer.write_all(b"\n");
-                let _ = self.writer.flush();
-                self.stream_terminated = true;
-            }
+            });
         }
 
         // Full error envelope to stderr per spec §4 always.
@@ -413,7 +412,10 @@ impl<W: Write, E: Write> Emitter for JsonEmitter<W, E> {
         self.finished = true;
         if self.errored { return Ok(()); } // 错误已发 stderr，stdout 不发成功体
         let data = match self.data.take() {
-            Some(v) => v,
+            Some(v) => {
+                debug_assert!(self.events.is_empty(), "JsonEmitter: events silently dropped when data is also set");
+                v
+            }
             // 什么都没 emit（如 `system completion` 直写裸 shell 脚本到 stdout，
             // 绕过 emitter）-> finish no-op，避免在裸输出后再吐一个空 envelope 污染 stdout。
             None if self.events.is_empty() => return Ok(()),
@@ -452,6 +454,33 @@ mod tests {
         let l1: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
         assert_eq!(l1["type"], "completed");
         assert_eq!(l1["final"], true);
+    }
+
+    #[test]
+    fn ndjson_error_after_stream_started_emits_decorated_cancelled_terminator() {
+        // A stream that has started and then errors must emit a `cancelled`
+        // stdout terminator decorated like any other stream event (type +
+        // sequence + final), not a bare undecorated object.
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        {
+            let mut e = NdjsonEmitter::with_error_writer(&mut out, &mut err).with_envelope(env_ctx());
+            e.emit_event(&Event::Started { task_type: "scan".into(), task_id: None, metadata: serde_json::Value::Null }).unwrap();
+            e.emit_error(&UecmError::Timeout("boom".into()));
+        }
+        let s = String::from_utf8(out).unwrap();
+        let lines: Vec<&str> = s.trim_end().split('\n').collect();
+        // started (seq 0) then cancelled terminator (seq 1).
+        assert_eq!(lines.len(), 2, "stdout: {}", lines.join("|"));
+        let term: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(term["type"], "cancelled");
+        assert_eq!(term["sequence"], 1);
+        assert_eq!(term["request_id"], "rq");
+        assert_eq!(term["schema_version"], SCHEMA_VERSION);
+        assert_eq!(term["final"], true);
+        // ErrorEnvelope still goes to stderr.
+        let env: serde_json::Value = serde_json::from_str(String::from_utf8(err).unwrap().trim_end()).unwrap();
+        assert_eq!(env["status"], "error");
     }
 
     #[test]
