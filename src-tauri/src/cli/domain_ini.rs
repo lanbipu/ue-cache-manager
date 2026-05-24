@@ -226,8 +226,6 @@ pub fn handle(ctx: &mut Ctx<'_>, action: IniAction) -> UecmResult<()> {
                     serde_json::json!({"hosts": hosts, "project_id": project_id}));
                 return Ok(());
             }
-            let (u, p) = cred.resolve(db)?
-                .ok_or_else(|| crate::error::UecmError::InvalidInput("credentials required".into()))?;
             for host in &hosts {
                 let machine = data_machines::find_by_ip(db, host)?
                     .ok_or_else(|| crate::error::UecmError::InvalidInput(
@@ -238,9 +236,9 @@ pub fn handle(ctx: &mut Ctx<'_>, action: IniAction) -> UecmResult<()> {
                         format!("project {} not located on {}", project_id, host)))?;
                 let ini = format!("{}\\Config\\DefaultEngine.ini",
                     location.abs_path.trim_end_matches('\\'));
-                ini_editor::set_backend_field_with_credential(
+                ini_editor::set_backend_field(
                     host, &ini, "DerivedDataBackendGraph", "Shared",
-                    "DeleteUnused", "false", &u, &p,
+                    "DeleteUnused", "false",
                 )?;
             }
             Ok(())
@@ -259,8 +257,6 @@ pub fn handle(ctx: &mut Ctx<'_>, action: IniAction) -> UecmResult<()> {
                         "unused_file_age": unused_file_age}));
                 return Ok(());
             }
-            let (u, p) = cred.resolve(db)?
-                .ok_or_else(|| crate::error::UecmError::InvalidInput("credentials required".into()))?;
             let age_str = unused_file_age.to_string();
             for host in &hosts {
                 let machine = data_machines::find_by_ip(db, host)?
@@ -272,13 +268,13 @@ pub fn handle(ctx: &mut Ctx<'_>, action: IniAction) -> UecmResult<()> {
                         format!("project {} not located on {}", project_id, host)))?;
                 let ini = format!("{}\\Config\\DefaultEngine.ini",
                     location.abs_path.trim_end_matches('\\'));
-                ini_editor::set_backend_field_with_credential(
+                ini_editor::set_backend_field(
                     host, &ini, "DerivedDataBackendGraph", "Shared",
-                    "DeleteUnused", "true", &u, &p,
+                    "DeleteUnused", "true",
                 )?;
-                ini_editor::set_backend_field_with_credential(
+                ini_editor::set_backend_field(
                     host, &ini, "DerivedDataBackendGraph", "Shared",
-                    "UnusedFileAge", &age_str, &u, &p,
+                    "UnusedFileAge", &age_str,
                 )?;
             }
             Ok(())
@@ -286,13 +282,12 @@ pub fn handle(ctx: &mut Ctx<'_>, action: IniAction) -> UecmResult<()> {
         IniAction::BackendGraph { action } => match action {
             BackendGraphAction::Get { host, file_path, node, field, cred } => {
                 let db = ctx.require_db()?;
-                let creds = cred.resolve(db)?;
+                cred.preflight(db)?;
                 let target = ini_scanner::TargetFile {
                     path: file_path.clone(),
                     category: crate::core::ini_diagnostics::Category::Project,
                 };
-                let parsed = ini_scanner::read_file(
-                    &host, &target, creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str())))?;
+                let parsed = ini_scanner::read_file(&host, &target, None)?;
                 let value = parsed.as_ref()
                     .and_then(|pf| pf.sections.iter()
                         .flat_map(|s| s.backend_nodes.iter())
@@ -316,23 +311,20 @@ pub fn handle(ctx: &mut Ctx<'_>, action: IniAction) -> UecmResult<()> {
                         serde_json::json!({ "hosts": hosts, "file": file_path, "node": node, "field": field, "value": value }));
                     return Ok(());
                 }
-                let (u, p) = cred.resolve(db)?
-                    .ok_or_else(|| crate::error::UecmError::InvalidInput("credentials required".into()))?;
                 for host in &hosts {
-                    ini_editor::set_backend_field_with_credential(
-                        host, &file_path, "DerivedDataBackendGraph", &node, &field, &value, &u, &p)?;
+                    ini_editor::set_backend_field(
+                        host, &file_path, "DerivedDataBackendGraph", &node, &field, &value)?;
                 }
                 Ok(())
             }
             BackendGraphAction::Scan { host, file_path, cred } => {
                 let db = ctx.require_db()?;
-                let creds = cred.resolve(db)?;
+                cred.preflight(db)?;
                 let target = ini_scanner::TargetFile {
                     path: file_path.clone(),
                     category: crate::core::ini_diagnostics::Category::Project,
                 };
-                let parsed = ini_scanner::read_file(
-                    &host, &target, creds.as_ref().map(|(u, p)| (u.as_str(), p.as_str())))?;
+                let parsed = ini_scanner::read_file(&host, &target, None)?;
                 let nodes: Vec<_> = parsed.map(|pf| pf.sections.into_iter()
                     .flat_map(|s| s.backend_nodes.into_iter()).collect())
                     .unwrap_or_default();
@@ -351,11 +343,8 @@ fn read(
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
     let db = ctx.require_db()?;
-    let creds = cred.resolve(db)?;
-    let keys = match creds {
-        Some((u, p)) => ini_editor::read_section_with_credential(host, file, section, &u, &p)?,
-        None => ini_editor::read_section(host, file, section)?,
-    };
+    cred.preflight(db)?;
+    let keys = ini_editor::read_section(host, file, section)?;
     ctx.emitter
         .emit_result(&IniReadOut { host, file, section, keys })
         .ok();
@@ -372,11 +361,8 @@ fn set_single(
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
     let db = ctx.require_db()?;
-    let creds = cred.resolve(db)?;
-    let res = match creds {
-        Some((u, p)) => ini_editor::set_key_with_credential(host, file, section, key, value, &u, &p),
-        None => ini_editor::set_key(host, file, section, key, value),
-    };
+    cred.preflight(db)?;
+    let res = ini_editor::set_key(host, file, section, key, value);
     res.map_err(|e| redact_error(e, value))?;
     ctx.emitter
         .emit_event(&Event::Completed {
@@ -403,7 +389,7 @@ fn set_batch(
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
     let db = ctx.require_db()?;
-    let creds = cred.resolve(db)?;
+    cred.preflight(db)?;
     let total = hosts.len() as i64;
 
     ctx.emitter
@@ -431,10 +417,7 @@ fn set_batch(
                 total,
             })
             .ok();
-        let res = match &creds {
-            Some((u, p)) => ini_editor::set_key_with_credential(host, file, section, key, value, u, p),
-            None => ini_editor::set_key(host, file, section, key, value),
-        };
+        let res = ini_editor::set_key(host, file, section, key, value);
         match res {
             Ok(_) => {
                 ok_count += 1;
@@ -488,13 +471,8 @@ fn remove_single(
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
     let db = ctx.require_db()?;
-    let creds = cred.resolve(db)?;
-    let (u, p) = creds.ok_or_else(|| {
-        UecmError::InvalidInput(
-            "ini remove requires credentials (--cred-alias or --user --pass / --pass-stdin)".into(),
-        )
-    })?;
-    ini_editor::remove_key_with_credential(host, file, section, key, &u, &p)?;
+    cred.preflight(db)?;
+    ini_editor::remove_key(host, file, section, key)?;
     ctx.emitter
         .emit_event(&Event::Completed {
             summary: serde_json::json!({
@@ -518,12 +496,7 @@ fn remove_batch(
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
     let db = ctx.require_db()?;
-    let creds = cred.resolve(db)?;
-    let (u, p) = creds.ok_or_else(|| {
-        UecmError::InvalidInput(
-            "ini remove --hosts requires credentials (--cred-alias or --user --pass / --pass-stdin)".into(),
-        )
-    })?;
+    cred.preflight(db)?;
     let total = hosts.len() as i64;
 
     ctx.emitter
@@ -549,7 +522,7 @@ fn remove_batch(
                 total,
             })
             .ok();
-        match ini_editor::remove_key_with_credential(host, file, section, key, &u, &p) {
+        match ini_editor::remove_key(host, file, section, key) {
             Ok(_) => {
                 ok_count += 1;
                 ctx.emitter
@@ -615,11 +588,7 @@ fn scan_cluster(
     // Clone the Arc<Mutex<>> so we can hold a Db handle independently of the
     // ctx borrow, allowing interleaved db ops and ctx.emitter calls.
     let db = ctx.require_db()?.clone();
-    let (username, password) = cred.resolve(&db)?.ok_or_else(|| {
-        UecmError::InvalidInput(
-            "ini scan requires credentials (--cred-alias or --user --pass / --pass-stdin)".into(),
-        )
-    })?;
+    cred.preflight(&db)?;
 
     // Create the scan_runs row up front.
     let scan_run_id = scan_runs::insert(&db, "ini", machine_ids)?;
@@ -665,11 +634,11 @@ fn scan_cluster(
                 .collect();
 
             let mut env_state = EnvVarState::default();
-            env_state.shared_data_cache_path = env_vars::get_with_credential(
-                &machine.ip, "UE-SharedDataCachePath", &username, &password,
+            env_state.shared_data_cache_path = env_vars::get(
+                &machine.ip, "UE-SharedDataCachePath",
             ).ok().flatten();
-            env_state.local_data_cache_path = env_vars::get_with_credential(
-                &machine.ip, "UE-LocalDataCachePath", &username, &password,
+            env_state.local_data_cache_path = env_vars::get(
+                &machine.ip, "UE-LocalDataCachePath",
             ).ok().flatten();
 
             // Auto-enable zen rules when the machine has at least one
@@ -697,7 +666,7 @@ fn scan_cluster(
 
             let inputs = ScanInputs {
                 host: &machine.ip,
-                credential: Some((&username, &password)),
+                credential: None,
                 installs: &installs,
                 user_profile: "",
                 project_roots: &[],
@@ -833,21 +802,14 @@ fn apply_finding(
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
     let db = ctx.require_db()?;
-    let (username, password) = cred.resolve(db)?.ok_or_else(|| {
-        UecmError::InvalidInput(
-            "ini apply requires credentials (--cred-alias or --user --pass / --pass-stdin)".into(),
-        )
-    })?;
+    cred.preflight(db)?;
     let f = ini_findings::find_by_id(db, finding_id)?
         .ok_or_else(|| UecmError::InvalidInput(format!("finding {} not found", finding_id)))?;
     let machine = data_machines::find_by_id(db, f.machine_id)?
         .ok_or_else(|| {
             UecmError::InvalidInput(format!("machine {} not found", f.machine_id))
         })?;
-    let apply_ctx = ApplyContext {
-        host: &machine.ip,
-        credential: (&username, &password),
-    };
+    let apply_ctx = ApplyContext { host: &machine.ip };
     let backup = ini_apply::apply(&apply_ctx, &f)?;
     ini_findings::mark_fixed(db, finding_id)?;
     ctx.emitter
@@ -949,13 +911,8 @@ mod tests {
         assert!(!s.contains(secret), "value leaked: {}", s);
     }
 
-    #[test]
-    fn remove_single_without_creds_returns_invalid_input() {
-        let db = fresh_db();
-        let mut buf: Vec<u8> = Vec::new();
-        let mut ctx = make_ctx(&mut buf, &db);
-        let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false };
-        let r = remove_single(&mut ctx, "host", "C:\\test.ini", "S", "K", &cred);
-        assert!(matches!(r, Err(UecmError::InvalidInput(_))));
-    }
+    // (Removed `remove_single_without_creds_returns_invalid_input`: under SSH key
+    // auth `ini remove` no longer requires an operator credential — the
+    // require-creds gate it asserted was deleted in P4. The no-credential path is
+    // covered by the loopback set/read/remove tests in core::ini_editor.)
 }

@@ -6,7 +6,6 @@ use crate::error::{UecmError, UecmResult};
 
 pub struct ApplyContext<'a> {
     pub host: &'a str,
-    pub credential: (&'a str, &'a str),
 }
 
 pub fn apply(ctx: &ApplyContext, finding: &IniFinding) -> UecmResult<String> {
@@ -19,19 +18,12 @@ pub fn apply(ctx: &ApplyContext, finding: &IniFinding) -> UecmResult<String> {
             let value = finding.recommended_value.as_deref()
                 .ok_or_else(|| UecmError::InvalidInput("finding has no recommended_value".into()))?;
             if finding.rule_id == "R001" {
-                ini_editor::remove_key_with_credential(
-                    ctx.host, &finding.file_path, section, key,
-                    ctx.credential.0, ctx.credential.1,
-                )?;
-                return ini_editor::set_key_with_credential(
+                ini_editor::remove_key(ctx.host, &finding.file_path, section, key)?;
+                return ini_editor::set_key(
                     ctx.host, &finding.file_path, section, "EnvPathOverride", value,
-                    ctx.credential.0, ctx.credential.1,
                 );
             }
-            ini_editor::set_key_with_credential(
-                ctx.host, &finding.file_path, section, key, value,
-                ctx.credential.0, ctx.credential.1,
-            )
+            ini_editor::set_key(ctx.host, &finding.file_path, section, key, value)
         }
         "remove" => {
             if finding.rule_id == "R002" {
@@ -39,10 +31,7 @@ pub fn apply(ctx: &ApplyContext, finding: &IniFinding) -> UecmResult<String> {
                     if let Some(eq) = line.find('=') {
                         let key = line[..eq].trim();
                         if !key.is_empty() {
-                            ini_editor::remove_key_with_credential(
-                                ctx.host, &finding.file_path, section, key,
-                                ctx.credential.0, ctx.credential.1,
-                            )?;
+                            ini_editor::remove_key(ctx.host, &finding.file_path, section, key)?;
                         }
                     }
                 }
@@ -50,10 +39,7 @@ pub fn apply(ctx: &ApplyContext, finding: &IniFinding) -> UecmResult<String> {
             }
             let key = finding.key_name.as_deref()
                 .ok_or_else(|| UecmError::InvalidInput("remove needs key_name".into()))?;
-            ini_editor::remove_key_with_credential(
-                ctx.host, &finding.file_path, section, key,
-                ctx.credential.0, ctx.credential.1,
-            )
+            ini_editor::remove_key(ctx.host, &finding.file_path, section, key)
         }
         "manual" => Err(UecmError::InvalidInput(
             "manual findings cannot be auto-applied; open the file directly".into(),
@@ -84,14 +70,14 @@ mod tests {
 
     #[test]
     fn manual_action_returns_invalid_input() {
-        let ctx = ApplyContext { host: "X", credential: ("u", "p") };
+        let ctx = ApplyContext { host: "X" };
         let result = apply(&ctx, &finding("manual", "R004"));
         assert!(matches!(result, Err(UecmError::InvalidInput(_))));
     }
 
     #[test]
     fn unknown_action_returns_invalid_input() {
-        let ctx = ApplyContext { host: "X", credential: ("u", "p") };
+        let ctx = ApplyContext { host: "X" };
         let result = apply(&ctx, &finding("zzz", "R999"));
         assert!(matches!(result, Err(UecmError::InvalidInput(_))));
     }

@@ -256,13 +256,8 @@ fn execute_one(
             creds,
         )
         .map(Some),
-        SetLocalEnv => match creds {
-            Some((u, p)) => {
-                env_vars::set_with_credential(host, "UE-LocalDataCachePath", &plan.local_cache.path, u, p)
-            }
-            None => env_vars::set(host, "UE-LocalDataCachePath", &plan.local_cache.path),
-        }
-        .map(|_| None),
+        SetLocalEnv => env_vars::set(host, "UE-LocalDataCachePath", &plan.local_cache.path)
+            .map(|_| None),
         CreateSmbShare => {
             let op_user = creds.map(|(u, _)| u);
             let op_pass = creds.map(|(_, p)| p);
@@ -302,13 +297,8 @@ fn execute_one(
                     .unwrap_or_else(|_| "?".into());
                 format!("\\\\{}\\{}", server_host, plan.shared_cache.share_name)
             });
-            match creds {
-                Some((u, p)) => {
-                    env_vars::set_with_credential(host, "UE-SharedDataCachePath", &unc, u, p)
-                }
-                None => env_vars::set(host, "UE-SharedDataCachePath", &unc),
-            }
-            .map(|_| Some(format!("=> {}", unc)))
+            env_vars::set(host, "UE-SharedDataCachePath", &unc)
+                .map(|_| Some(format!("=> {}", unc)))
         }
         WriteBackendGraph => {
             let unc = plan.shared_cache.unc_path.clone().unwrap_or_else(|| {
@@ -321,20 +311,16 @@ fn execute_one(
                 "{}\\Config\\DefaultEngine.ini",
                 project_root.trim_end_matches('\\')
             );
-            let (u, p) = creds
-                .ok_or_else(|| UecmError::InvalidInput("credentials required".into()))?;
-            ini_editor::set_backend_field_with_credential(
-                host, &ini_path, "DerivedDataBackendGraph", "Shared", "Path", &unc, u, p,
+            ini_editor::set_backend_field(
+                host, &ini_path, "DerivedDataBackendGraph", "Shared", "Path", &unc,
             )?;
-            ini_editor::set_backend_field_with_credential(
+            ini_editor::set_backend_field(
                 host,
                 &ini_path,
                 "DerivedDataBackendGraph",
                 "Shared",
                 "EnvPathOverride",
                 "UE-SharedDataCachePath",
-                u,
-                p,
             )?;
             Ok(Some("Shared.Path + EnvPathOverride".into()))
         }
@@ -397,14 +383,13 @@ fn execute_one(
                 "{}\\Config\\ConsoleVariables.ini",
                 project_root.trim_end_matches('\\')
             );
-            let (u, p) = creds.ok_or_else(|| UecmError::InvalidInput("creds required".into()))?;
             for key in [
                 "r.ShaderPipelineCache.Enabled",
                 "r.PSOPrecaching",
                 "r.PSOPrecache.Compile",
                 "r.PSOPrecache.GlobalShaders",
             ] {
-                ini_editor::set_key_with_credential(host, &ini, "ConsoleVariables", key, "1", u, p)?;
+                ini_editor::set_key(host, &ini, "ConsoleVariables", key, "1")?;
             }
             Ok(Some("4 CVars set".into()))
         }

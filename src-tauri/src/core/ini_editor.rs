@@ -83,47 +83,18 @@ pub fn set_key(
     Ok(result.backup_path)
 }
 
-/// SSH key auth: explicit-credential variants delegate to the base fns (which
-/// handle loopback + SSH). Per-call WinRM creds ignored; signatures kept until A5.
-pub fn read_section_with_credential(
-    host: &str,
-    file_path: &str,
-    section: &str,
-    _username: &str,
-    _password: &str,
-) -> UecmResult<Vec<IniKey>> {
-    read_section(host, file_path, section)
-}
-
-pub fn set_key_with_credential(
+/// Removes a key from an INI section on a remote host (or locally for a loopback
+/// target). Returns the backup path created by the PS sidecar.
+pub fn remove_key(
     host: &str,
     file_path: &str,
     section: &str,
     name: &str,
-    value: &str,
-    _username: &str,
-    _password: &str,
-) -> UecmResult<String> {
-    set_key(host, file_path, section, name, value)
-}
-
-/// Removes a key from an INI section on a remote host. Authenticates with
-/// explicit `username` + `password`. Returns the backup path created by the
-/// PS sidecar.
-pub fn remove_key_with_credential(
-    host: &str,
-    file_path: &str,
-    section: &str,
-    name: &str,
-    username: &str,
-    password: &str,
 ) -> UecmResult<String> {
     if loopback::is_loopback_target(host) {
-        let _ = (username, password);
         return write_key_local(file_path, section, name, None);
     }
 
-    let _ = (username, password); // SSH key auth; per-call WinRM cred ignored (kept until A5).
     let exec = SshExecutor::from_config()?;
     let result: WriteResult = run_json(
         &exec,
@@ -309,16 +280,14 @@ fn write_backend_field_local(
 #[derive(Debug, serde::Deserialize)]
 struct BackendFieldResult { ok: bool, message: String }
 
-pub fn set_backend_field_with_credential(
+pub fn set_backend_field(
     host: &str, file_path: &str, section: &str, node_name: &str,
-    field: &str, value: &str, username: &str, password: &str,
+    field: &str, value: &str,
 ) -> UecmResult<String> {
     if loopback::is_loopback_target(host) {
-        let _ = (username, password);
         write_backend_field_local(file_path, section, node_name, field, value)?;
         return Ok(format!("wrote {}.{} locally", node_name, field));
     }
-    let _ = (username, password); // SSH key auth; per-call WinRM cred ignored (kept until A5).
     let exec = SshExecutor::from_config()?;
     let r: BackendFieldResult = run_json(
         &exec,
@@ -346,19 +315,17 @@ mod tests {
     // below; remote behavior is validated on a real node.)
 
     #[test]
-    fn set_key_with_credential_writes_directly_for_loopback_target() {
+    fn set_key_writes_directly_for_loopback_target() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("DefaultEngine.ini");
         std::fs::write(&path, "[DDC]\nPath=Old\n").unwrap();
 
-        let backup = set_key_with_credential(
+        let backup = set_key(
             "localhost",
             &path.to_string_lossy(),
             "DDC",
             "Path",
             "New",
-            "ignored",
-            "ignored",
         )
         .unwrap();
 
@@ -381,15 +348,14 @@ mod tests {
     }
 
     #[test]
-    fn set_key_with_credential_section_match_is_case_insensitive() {
+    fn set_key_section_match_is_case_insensitive() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("DefaultEngine.ini");
         std::fs::write(&path, "[DDC]\nPath=Old\n").unwrap();
 
-        set_key_with_credential(
+        set_key(
             "localhost", &path.to_string_lossy(),
             "ddc", "Path", "New",
-            "ignored", "ignored",
         ).unwrap();
 
         let updated = std::fs::read_to_string(&path).unwrap();
@@ -399,18 +365,16 @@ mod tests {
     }
 
     #[test]
-    fn remove_key_with_credential_writes_directly_for_loopback_target() {
+    fn remove_key_writes_directly_for_loopback_target() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("DefaultEngine.ini");
         std::fs::write(&path, "[DDC]\nPath=Old\nKeep=1\n").unwrap();
 
-        remove_key_with_credential(
+        remove_key(
             "localhost",
             &path.to_string_lossy(),
             "DDC",
             "Path",
-            "ignored",
-            "ignored",
         )
         .unwrap();
 
@@ -425,7 +389,7 @@ mod tests {
     // survive a `remove ZenShared` call while `changed=true` was
     // reported.
     #[test]
-    fn remove_key_with_credential_loopback_matches_existing_case_variant() {
+    fn remove_key_loopback_matches_existing_case_variant() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("DefaultEngine.ini");
         // Existing row uses lowercase key; canonical caller asks to
@@ -436,13 +400,11 @@ mod tests {
         )
         .unwrap();
 
-        remove_key_with_credential(
+        remove_key(
             "localhost",
             &path.to_string_lossy(),
             "InstalledDerivedDataBackendGraph",
             "ZenShared",
-            "ignored",
-            "ignored",
         )
         .unwrap();
 
@@ -456,19 +418,17 @@ mod tests {
     }
 
     #[test]
-    fn set_key_with_credential_loopback_overwrites_existing_case_variant() {
+    fn set_key_loopback_overwrites_existing_case_variant() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("DefaultEngine.ini");
         std::fs::write(&path, "[DDC]\npath=old\n").unwrap();
 
-        set_key_with_credential(
+        set_key(
             "localhost",
             &path.to_string_lossy(),
             "DDC",
             "Path",
             "new",
-            "ignored",
-            "ignored",
         )
         .unwrap();
 

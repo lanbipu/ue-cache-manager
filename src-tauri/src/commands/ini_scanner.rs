@@ -275,12 +275,11 @@ pub fn apply_finding(
         .ok_or_else(|| UecmError::InvalidInput(format!("finding {} not found", finding_id)))?;
     let machine = data_machines::find_by_id(&db, f.machine_id)?
         .ok_or_else(|| UecmError::InvalidInput(format!("machine {} not found", f.machine_id)))?;
-    // SSH key auth: ini_apply routes through ini_editor::*_with_credential which
-    // ignore the credential, so pass empties instead of resolving DPAPI. The
-    // credential_alias param stays as an accepted-ignored shim (Vue compat);
-    // ApplyContext.credential itself is removed in P4.
+    // SSH key auth: ini_apply uses the no-credential ini_editor fns, so there's
+    // nothing to resolve. The credential_alias param stays as an accepted-ignored
+    // shim (Vue compat).
     let _ = &credential_alias;
-    let ctx = ApplyContext { host: &machine.ip, credential: ("", "") };
+    let ctx = ApplyContext { host: &machine.ip };
     let backup = ini_apply::apply(&ctx, &f)?;
     ini_findings::mark_fixed(&db, finding_id)?;
     Ok(backup)

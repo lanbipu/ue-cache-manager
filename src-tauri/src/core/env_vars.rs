@@ -57,27 +57,6 @@ pub fn get(host: &str, name: &str) -> UecmResult<Option<String>> {
     Ok(result.value)
 }
 
-/// SSH key auth: the explicit-credential variants now delegate to `set`/`get`
-/// (per-call WinRM creds are ignored; signatures kept for callers until A5 cleanup).
-pub fn set_with_credential(
-    host: &str,
-    name: &str,
-    value: &str,
-    _username: &str,
-    _password: &str,
-) -> UecmResult<()> {
-    set(host, name, value)
-}
-
-pub fn get_with_credential(
-    host: &str,
-    name: &str,
-    _username: &str,
-    _password: &str,
-) -> UecmResult<Option<String>> {
-    get(host, name)
-}
-
 // (Old `#[cfg(not(windows))]` "returns PowerShell error" tests removed: set/get now
 // go over SSH — on a dev box they error at ssh connect, and from_config would touch
 // the real config dir. Remote behavior is validated on a real node.)

@@ -2435,21 +2435,10 @@ fn project_enable(
         return Ok(());
     }
 
-    // Real apply path. Resolve credentials once (potentially consuming stdin
-    // for --pass-stdin); subsequent helpers reuse the resulting tuple.
-    let creds = cred.resolve(&db)?;
-    let (user, pass) = match creds.as_ref() {
-        Some((u, p)) => (u.clone(), p.clone()),
-        None => {
-            // Without credentials we can't drive the per-key sidecars
-            // (`set_key_with_credential` / `remove_key_with_credential` both
-            // require user/pass). Fail loudly so operators don't think a
-            // silent no-op succeeded.
-            return Err(UecmError::InvalidInput(
-                "zen.enable requires credentials (pass --cred-alias or --user / --pass)".into(),
-            ));
-        }
-    };
+    // SSH key auth: zen enable drives the node-pure ini sidecars over SSH, so no
+    // operator credential is needed. preflight validates --cred-alias existence /
+    // flag combo without reading DPAPI or stdin for a credential we'd discard.
+    cred.preflight(&db)?;
 
     let total = targets.len() as i64;
     ctx.emitter
@@ -2478,7 +2467,7 @@ fn project_enable(
     for (idx, (machine, ini_path)) in targets.iter().enumerate() {
         let machine_id = machine.id.expect("machine in inventory always has id");
         let host = machine.ip.as_str();
-        let leg = zen_enable::enable_project(host, &user, &pass, ini_path, &resolved, &master);
+        let leg = zen_enable::enable_project(host, ini_path, &resolved, &master);
         match leg {
             Ok(out) => {
                 if out.changed {
@@ -2502,7 +2491,7 @@ fn project_enable(
                         // fan out one call per scope so a per-scope failure
                         // (e.g. non-admin session) is captured precisely.
                         for scope in &req.scopes {
-                            match invoke_env_cleanup(host, &req.var, scope, creds.as_ref()) {
+                            match invoke_env_cleanup(host, &req.var, scope, None) {
                                 Ok(remote) => {
                                     env_results.push(EnvCleanupResultView {
                                         var: req.var.clone(),
@@ -2693,15 +2682,8 @@ fn project_disable(
         return Ok(());
     }
 
-    let creds = cred.resolve(&db)?;
-    let (user, pass) = match creds.as_ref() {
-        Some((u, p)) => (u.clone(), p.clone()),
-        None => {
-            return Err(UecmError::InvalidInput(
-                "zen.disable requires credentials (pass --cred-alias or --user / --pass)".into(),
-            ));
-        }
-    };
+    // SSH key auth: zen disable needs no operator credential (see zen enable).
+    cred.preflight(&db)?;
 
     let total = targets.len() as i64;
     ctx.emitter
@@ -2729,7 +2711,7 @@ fn project_disable(
     for (idx, (machine, ini_path)) in targets.iter().enumerate() {
         let machine_id = machine.id.expect("machine in inventory always has id");
         let host = machine.ip.as_str();
-        match zen_enable::disable_project(host, &user, &pass, ini_path, &resolved) {
+        match zen_enable::disable_project(host, ini_path, &resolved) {
             Ok(out) => {
                 if out.changed {
                     any_changed = true;

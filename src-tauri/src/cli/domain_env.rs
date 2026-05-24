@@ -69,11 +69,11 @@ pub fn handle(ctx: &mut Ctx<'_>, action: EnvAction) -> UecmResult<()> {
 
 fn get(ctx: &mut Ctx<'_>, host: &str, name: &str, cred: &CredentialArgs) -> UecmResult<()> {
     let db = ctx.require_db()?;
-    let creds = cred.resolve(db)?;
-    let value = match creds {
-        Some((u, p)) => env_vars::get_with_credential(host, name, &u, &p)?,
-        None => env_vars::get(host, name)?,
-    };
+    // SSH key auth: env get takes no operator credential. preflight (not resolve)
+    // validates --cred-alias existence / flag combo without reading DPAPI or stdin
+    // for a credential that would only be discarded.
+    cred.preflight(db)?;
+    let value = env_vars::get(host, name)?;
     // env get is the ONE place value can surface — that's the whole point.
     ctx.emitter
         .emit_result(&EnvGetOut { host, name, value })
@@ -89,11 +89,8 @@ fn set_single(
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
     let db = ctx.require_db()?;
-    let creds = cred.resolve(db)?;
-    let res = match creds {
-        Some((u, p)) => env_vars::set_with_credential(host, name, value, &u, &p),
-        None => env_vars::set(host, name, value),
-    };
+    cred.preflight(db)?;
+    let res = env_vars::set(host, name, value);
     res.map_err(|e| redact_error(e, value))?;
     // Redaction contract: never echo raw value.
     ctx.emitter
@@ -117,7 +114,7 @@ fn set_batch(
     cred: &CredentialArgs,
 ) -> UecmResult<()> {
     let db = ctx.require_db()?;
-    let creds = cred.resolve(db)?;
+    cred.preflight(db)?;
     let total = hosts.len() as i64;
 
     ctx.emitter
@@ -135,9 +132,8 @@ fn set_batch(
 
     let mut ok_count: i64 = 0;
     let mut fail_count: i64 = 0;
-    // Sequential — env_vars::set_with_credential is blocking PowerShell;
-    // there's no real concurrency win and pushing 8 PowerShell.exe processes
-    // can hammer the local machine.
+    // Sequential — env_vars::set is blocking (SSH/PowerShell); there's no real
+    // concurrency win and fanning out many ssh processes can hammer the operator.
     for (idx, host) in hosts.iter().enumerate() {
         ctx.emitter
             .emit_event(&Event::ItemStarted {
@@ -147,10 +143,7 @@ fn set_batch(
             })
             .ok();
 
-        let res = match &creds {
-            Some((u, p)) => env_vars::set_with_credential(host, name, value, u, p),
-            None => env_vars::set(host, name, value),
-        };
+        let res = env_vars::set(host, name, value);
 
         match res {
             Ok(()) => {

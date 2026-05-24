@@ -36,9 +36,7 @@
 //! really want the prior config back. A warning is attached to the outcome
 //! explaining this.
 
-use crate::core::ini_editor::{
-    read_section_with_credential, remove_key_with_credential, set_key_with_credential, IniKey,
-};
+use crate::core::ini_editor::{read_section, remove_key, set_key, IniKey};
 use crate::core::zen::rules_loader::ResolvedRules;
 use crate::error::{UecmError, UecmResult};
 
@@ -139,8 +137,6 @@ impl EnableDiff {
 /// I/O, which is what the test suite relies on.
 pub fn enable_project(
     host: &str,
-    username: &str,
-    password: &str,
     ini_path: &str,
     rules: &ResolvedRules,
     master: &ClusterMaster,
@@ -174,7 +170,7 @@ pub fn enable_project(
         if section_cache.contains_key(sec) {
             continue;
         }
-        let rows = read_section_with_credential(host, ini_path, sec, username, password)?;
+        let rows = read_section(host, ini_path, sec)?;
         section_cache.insert(sec.to_string(), rows);
     }
     let zen_section_keys = section_cache.get(section.as_str()).cloned().unwrap_or_default();
@@ -227,14 +223,12 @@ pub fn enable_project(
     let mut keys_removed = Vec::new();
 
     if let Some(rec) = diff.set_zen_shared.clone() {
-        let backup = set_key_with_credential(
+        let backup = set_key(
             host,
             ini_path,
             section,
             &enable_rule.key,
             &desired_value,
-            username,
-            password,
         )
         .map_err(|e| {
             UecmError::OperationFailed(format!(
@@ -249,13 +243,11 @@ pub fn enable_project(
     // SMB-shared rule lives in `smb_rule.section` (same as `section` in
     // practice, but we honor what the rule says).
     for rec in diff.remove_legacy.iter().cloned() {
-        let backup = remove_key_with_credential(
+        let backup = remove_key(
             host,
             ini_path,
             &rec.section,
             &rec.key,
-            username,
-            password,
         )
         .map_err(|e| {
             UecmError::OperationFailed(format!(
@@ -300,8 +292,6 @@ pub fn enable_project(
 /// `changed: false` without invoking any write helper.
 pub fn disable_project(
     host: &str,
-    username: &str,
-    password: &str,
     ini_path: &str,
     rules: &ResolvedRules,
 ) -> UecmResult<DisableOutcome> {
@@ -316,7 +306,7 @@ pub fn disable_project(
             .to_string(),
     );
 
-    let current = read_section_with_credential(host, ini_path, section, username, password)?;
+    let current = read_section(host, ini_path, section)?;
 
     // Case-insensitive INI key match per codex P2 — UE / write-ini-key.ps1
     // both treat key names case-insensitively. Using `==` would let a
@@ -340,7 +330,7 @@ pub fn disable_project(
         new_value: None,
     };
 
-    let backup = remove_key_with_credential(host, ini_path, section, key, username, password)
+    let backup = remove_key(host, ini_path, section, key)
         .map_err(|e| {
             UecmError::OperationFailed(format!(
                 "disable_project: remove {} from [{}] failed: {}",
@@ -935,8 +925,6 @@ mod tests {
         std::fs::write(&path, contents).unwrap();
         let outcome = enable_project(
             "127.0.0.1",
-            "ignored",
-            "ignored",
             path.to_str().unwrap(),
             &sample_rules(),
             &sample_master(),
@@ -1017,8 +1005,6 @@ mod tests {
         std::fs::write(&path, "[InstalledDerivedDataBackendGraph]\n").unwrap();
         let outcome = enable_project(
             "127.0.0.1",
-            "ignored",
-            "ignored",
             path.to_str().unwrap(),
             &rules,
             &sample_master(),
@@ -1046,8 +1032,6 @@ mod tests {
         std::fs::write(&path, &initial).unwrap();
         let outcome = disable_project(
             "127.0.0.1",
-            "ignored",
-            "ignored",
             path.to_str().unwrap(),
             &sample_rules(),
         )
@@ -1078,8 +1062,6 @@ mod tests {
         std::fs::write(&path, initial).unwrap();
         let outcome = disable_project(
             "127.0.0.1",
-            "ignored",
-            "ignored",
             path.to_str().unwrap(),
             &sample_rules(),
         )
@@ -1113,8 +1095,6 @@ mod tests {
         std::fs::write(&path, &initial).unwrap();
         let outcome = disable_project(
             "127.0.0.1",
-            "ignored",
-            "ignored",
             path.to_str().unwrap(),
             &sample_rules(),
         )
