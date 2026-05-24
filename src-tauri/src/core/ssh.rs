@@ -339,12 +339,14 @@ impl SshExecutor {
 
 impl RemoteExecutor for SshExecutor {
     fn run(&self, host: &str, script: &NodeScript) -> UecmResult<ScriptOutput> {
-        // Loopback target (operator running a node script on its own box): run the
-        // script locally rather than SSH-to-self — the operator host then needn't
-        // onboard its own OpenSSH/uecm-svc. This keeps `probe`'s loopback bypass
-        // honest: probe reports reachable, and `run` actually executes here (the
-        // node scripts read their JSON args from stdin, same contract as remote).
-        if crate::core::loopback::is_loopback_target(host) {
+        // Loopback target (operator running a node script on its own box): on
+        // Windows run the script locally rather than SSH-to-self — the operator
+        // host then needn't onboard its own OpenSSH/uecm-svc, and it keeps probe's
+        // loopback bypass honest (probe reports reachable, run executes here). The
+        // node scripts read their JSON args from stdin, same contract as remote.
+        // Off Windows there is no local sidecar, so loopback falls through to real
+        // SSH (matching probe, which only bypasses on Windows).
+        if cfg!(target_os = "windows") && crate::core::loopback::is_loopback_target(host) {
             let result = crate::core::powershell::run_script_stdin(
                 &crate::core::powershell::script_path(script.name),
                 &serde_json::to_string(&script.args)
@@ -393,10 +395,13 @@ impl RemoteExecutor for SshExecutor {
     }
 
     fn probe(&self, host: &str, ssh_user: Option<&str>) -> UecmResult<ProbeResult> {
-        // Loopback target (operator probing its own box): no point SSHing to
-        // self, and a real ssh-to-self can hit host-key/loopback quirks. Mirror
-        // winrm::probe's bypass (returns Ok without spawning ssh).
-        if crate::core::loopback::is_loopback_target(host) {
+        // Loopback target (operator probing its own box): no point SSHing to self,
+        // and a real ssh-to-self can hit host-key/loopback quirks. Only bypass on
+        // Windows, where `run()` can actually execute the node scripts locally
+        // (via powershell). On a non-Windows operator the local sidecar isn't
+        // available, so reporting ok here would be a false positive — fall through
+        // to the real SSH probe instead.
+        if cfg!(target_os = "windows") && crate::core::loopback::is_loopback_target(host) {
             return Ok(ProbeResult {
                 ok: true,
                 message: "loopback target; ssh bypassed".to_string(),
@@ -527,6 +532,10 @@ mod tests {
         assert!(exec.key_path.ends_with("uecm_ed25519"));
     }
 
+    // Windows-only: the loopback bypass is gated on cfg(windows) (off Windows the
+    // local sidecar can't run, so probe falls through to a real SSH probe and this
+    // bypass assertion doesn't hold — and we don't want to spawn ssh in a unit test).
+    #[cfg(target_os = "windows")]
     #[test]
     fn probe_bypasses_loopback_without_spawning_ssh() {
         // Nonexistent key/known_hosts: if probe tried to spawn ssh it would fail,

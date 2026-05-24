@@ -1,4 +1,3 @@
-use crate::core::credentials as core_credentials;
 use crate::core::deploy_workflow::{self, DeployEvent, DeployPlan, DeployStep, RunOptions};
 use crate::data::{credentials as data_credentials, Db};
 use crate::error::UecmError;
@@ -17,18 +16,20 @@ pub async fn deploy_ddc_run(
     credential_alias: Option<String>,
     stop_on_failure: bool,
 ) -> Result<(), String> {
-    // Resolve credentials BEFORE entering spawn_blocking.
-    let creds: Option<(String, String)> = match credential_alias.as_deref() {
-        Some(a) if !a.is_empty() => {
-            let cred = data_credentials::find_by_alias(&db, a)
+    // SSH key auth: run_plan no longer consumes an operator credential (the
+    // distribute steps resolve the source SMB credential from the share's
+    // SecretStore alias). Keep credential_alias as an accepted-ignored shim (Vue
+    // compat) — validate it exists so a typo errors early, but don't read a
+    // password that would be discarded (which used to fail on a non-Windows
+    // operator or a SecretStore-only alias).
+    if let Some(a) = credential_alias.as_deref() {
+        if !a.is_empty() {
+            data_credentials::find_by_alias(&db, a)
                 .map_err(|e: UecmError| e.to_string())?
                 .ok_or_else(|| format!("credential '{}' not found", a))?;
-            let password = core_credentials::resolve_password(a)
-                .map_err(|e: UecmError| e.to_string())?;
-            Some((cred.username, password))
         }
-        _ => None,
-    };
+    }
+    let creds: Option<(String, String)> = None;
 
     // Clone the Db handle for the blocking task. Db is Arc-backed and cheap to clone.
     let db_clone = (*db).clone();

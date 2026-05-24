@@ -384,7 +384,11 @@ fn execute_one(
             // registered Mode B share (SecretStore), not the operator credential
             // (which is gone). resolve_source_smb errors clearly if the source has
             // no usable share rather than mounting anonymously and failing robocopy.
-            let smb = pak_distribute::resolve_source_smb(db, plan.source_machine_id, None, true)?;
+            // The SMB credential is for the shared-cache share (created by
+            // CreateSmbShare on shared_cache.server_machine_id), which is the share
+            // the targets mount — resolve it from THAT host, not the pak source
+            // (the UI lets them differ).
+            let smb = pak_distribute::resolve_source_smb(db, plan.shared_cache.server_machine_id, None, true)?;
             let profile = pak_distribute::DistributeProfile::ddc_pak();
             let items = pak_distribute::plan(
                 &profile,
@@ -470,7 +474,11 @@ fn execute_one(
             // SSH key auth: source SMB credential from the source's registered
             // Mode B share (SecretStore), not the operator credential. See
             // DistributeDdcPak.
-            let smb = pak_distribute::resolve_source_smb(db, plan.source_machine_id, None, true)?;
+            // The SMB credential is for the shared-cache share (created by
+            // CreateSmbShare on shared_cache.server_machine_id), which is the share
+            // the targets mount — resolve it from THAT host, not the pak source
+            // (the UI lets them differ).
+            let smb = pak_distribute::resolve_source_smb(db, plan.shared_cache.server_machine_id, None, true)?;
             let mut total_bytes: i64 = 0;
             for file in &files {
                 let items = pso_distribute::plan(

@@ -72,26 +72,16 @@ pub(crate) fn save_resolved(
 
     let username = core_creds::normalize_username_for_storage(user);
 
-    // Validate --kind BEFORE any side effects (cmdkey / DPAPI). A typo here
-    // used to silently fall back to Winrm and persist under the wrong type.
+    // Validate --kind BEFORE any side effects. A typo here used to silently fall
+    // back to Winrm and persist under the wrong type.
     let _validated_kind = parse_credential_kind(kind)?;
 
-    // Step 2: cmdkey first. If this fails, nothing else gets written.
-    core_creds::store(alias, &username, password)?;
+    // Store the secret in the cross-platform SecretStore (replaces cmdkey + DPAPI),
+    // so `cred save` works off Windows and the saved alias is usable as
+    // `--cred-alias` (CredentialArgs::resolve reads the SecretStore first).
+    crate::core::secrets::SecretStore::from_config()?.put(alias, password)?;
 
-    // Step 3: DPAPI. If it fails, roll back cmdkey before propagating.
-    if let Err(dpapi_err) = core_creds::store_password(alias, password) {
-        if let Err(rollback_err) = core_creds::delete(alias) {
-            tracing::warn!(
-                alias = %alias,
-                error = %rollback_err,
-                "cmdkey rollback after DPAPI failure also failed"
-            );
-        }
-        return Err(dpapi_err);
-    }
-
-    // Step 4+5: SQLite. Replace if alias already exists, else insert.
+    // SQLite metadata. Replace if alias already exists, else insert.
     let db = ctx.require_db()?;
     if data_creds::find_by_alias(db, alias)?.is_some() {
         data_creds::delete_by_alias(db, alias)?;
@@ -220,16 +210,8 @@ mod tests {
         }
     }
 
-    #[cfg(not(windows))]
-    #[test]
-    fn save_returns_powershell_error_when_cmdkey_unavailable() {
-        let db = fresh_db();
-        let mut buf: Vec<u8> = Vec::new();
-        let mut ctx = make_ctx(&mut buf, &db);
-        let result = save(&mut ctx, "alias", "u", Some("p"), false, "winrm");
-        // cmdkey is the first remote step; on non-Windows it fails as PowerShell.
-        assert!(matches!(result, Err(UecmError::PowerShell(_))));
-        // SQLite must remain empty: no metadata written when cmdkey fails.
-        assert_eq!(data_creds::list_all(&db).unwrap().len(), 0);
-    }
+    // (Removed `save_returns_powershell_error_when_cmdkey_unavailable`: `cred save`
+    // is now SecretStore-backed and cross-platform — it no longer fails without
+    // cmdkey, so the old non-Windows assertion is obsolete. A hermetic test would
+    // also have to avoid writing the real SecretStore via from_config.)
 }
