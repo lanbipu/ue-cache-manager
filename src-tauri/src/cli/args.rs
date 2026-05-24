@@ -57,7 +57,7 @@ pub enum Domain {
         #[command(subcommand)]
         action: SshAction,
     },
-    /// Credential storage (DPAPI + cmdkey + SQLite metadata).
+    /// Credential alias storage (SecretStore + SQLite metadata).
     Cred {
         #[command(subcommand)]
         action: CredAction,
@@ -284,7 +284,7 @@ pub enum SecretAction {
 pub enum CredAction {
     /// List saved credential aliases.
     List,
-    /// Save a credential (cmdkey + DPAPI + SQLite metadata).
+    /// Save a credential (SecretStore + SQLite metadata).
     Save {
         #[arg(long)]
         alias: String,

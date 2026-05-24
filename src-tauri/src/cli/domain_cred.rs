@@ -58,9 +58,8 @@ fn save(
 }
 
 /// Persist an already-resolved `(user, password)` credential under `alias`
-/// (cmdkey + DPAPI + SQLite metadata). Shared by `cred save` and by
-/// `machine authorize --save-as` — the latter has the password in hand already
-/// and must not re-read stdin.
+/// (SecretStore for the secret + SQLite for the alias metadata). Used by
+/// `cred save`.
 pub(crate) fn save_resolved(
     ctx: &mut Ctx<'_>,
     alias: &str,
