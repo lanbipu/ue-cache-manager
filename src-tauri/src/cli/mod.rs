@@ -2,6 +2,7 @@
 
 pub mod args;
 pub mod config_file;
+pub mod stdin_input;
 pub mod credential_args;
 pub mod destructive;
 pub mod host_args;
