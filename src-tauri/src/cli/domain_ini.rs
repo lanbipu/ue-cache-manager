@@ -605,6 +605,60 @@ fn scan_dispatch(
     }
 }
 
+/// Render an INI scan's aggregate result as a readable two-line summary for
+/// human (text) mode. Pure function — no IO. JSON/NDJSON consumers get the same
+/// numbers in the `completed` event's structured summary instead.
+fn render_ini_scan_summary(
+    scan_run_id: i64,
+    scan_type: &str,
+    machine_count: usize,
+    read: usize,
+    not_found: usize,
+    errors: usize,
+    critical: i64,
+    warning: i64,
+    healthy: i64,
+    info: i64,
+) -> String {
+    let machines_word = if machine_count == 1 { "machine" } else { "machines" };
+    format!(
+        "  scan_run #{}  ({}, {} {})\n  \
+         files read={} not_found={} errors={}  ·  \
+         findings: critical={} warning={} healthy={} info={}",
+        scan_run_id, scan_type, machine_count, machines_word,
+        read, not_found, errors,
+        critical, warning, healthy, info,
+    )
+}
+
+/// Render INI findings as an aligned human-mode table. Pure function — no IO.
+/// Mirrors the compact `rule file :: section :: key` shape of the streaming
+/// `Finding` event, plus the DB id + machine id so the operator can target a
+/// row with `ini get` / `ini apply`.
+fn render_findings_table(findings: &[IniFinding]) -> String {
+    if findings.is_empty() {
+        return "  (no findings)".to_string();
+    }
+    let mut out = format!(
+        "  {:<6} {:<9} {:<6} {:<7}  {}\n",
+        "ID", "SEV", "RULE", "MACHINE", "FILE :: SECTION :: KEY"
+    );
+    for f in findings {
+        let id = f.id.map(|i| i.to_string()).unwrap_or_else(|| "-".to_string());
+        out.push_str(&format!(
+            "  {:<6} {:<9} {:<6} {:<7}  {} :: {} :: {}\n",
+            id,
+            f.severity,
+            f.rule_id,
+            f.machine_id,
+            f.file_path,
+            f.section.as_deref().unwrap_or("-"),
+            f.key_name.as_deref().unwrap_or("-"),
+        ));
+    }
+    out.trim_end().to_string()
+}
+
 /// Run a full INI scan across a set of machines identified by DB id.
 ///
 /// Flow mirrors `commands::ini_scanner::scan_inis_summary`:
@@ -819,6 +873,25 @@ fn scan_cluster(
     });
     scan_runs::finish(&db, scan_run_id, &summary)?;
 
+    // Human-mode: a readable roll-up before the `done` summary line, mirroring
+    // `machine refresh`. JSON/NDJSON consumers read the same numbers from the
+    // `completed` event's structured summary.
+    if !ctx.json_mode {
+        let text = render_ini_scan_summary(
+            scan_run_id,
+            scan_type,
+            machine_ids.len(),
+            total_read,
+            all_not_found.len(),
+            all_errors.len(),
+            total_critical,
+            total_warning,
+            total_healthy,
+            total_info,
+        );
+        ctx.emitter.emit_text(&text).ok();
+    }
+
     ctx.emitter
         .emit_event(&Event::Completed { summary })
         .ok();
@@ -869,7 +942,11 @@ fn list_findings(
     if let Some(sev) = severity {
         findings.retain(|f| f.severity.eq_ignore_ascii_case(sev));
     }
-    ctx.emitter.emit_result(&findings).ok();
+    if ctx.json_mode {
+        ctx.emitter.emit_result(&findings).ok();
+    } else {
+        ctx.emitter.emit_text(&render_findings_table(&findings)).ok();
+    }
     Ok(())
 }
 
@@ -1265,5 +1342,101 @@ mod tests {
                 .map(|s| (s.domain.as_str(), s.key_name.as_str()))
                 .collect::<Vec<_>>()
         );
+    }
+
+    fn sample_finding(id: i64) -> IniFinding {
+        IniFinding {
+            id: Some(id),
+            scan_run_id: 39,
+            machine_id: 12,
+            rule_id: "R003".into(),
+            severity: "critical".into(),
+            category: "ddc".into(),
+            file_path: "D:\\Proj\\Config\\DefaultEngine.ini".into(),
+            section: Some("Core.System".into()),
+            key_name: Some("DerivedDataCache.Path".into()),
+            line_number: Some(12),
+            snippet_before: String::new(),
+            snippet_after: None,
+            recommended_action: "rewrite".into(),
+            recommended_value: Some("X".into()),
+            symptom: "hardcoded path".into(),
+            rationale: "r".into(),
+            fixed_at: None,
+            skipped_at: None,
+        }
+    }
+
+    #[test]
+    fn render_findings_table_handles_empty() {
+        let out = render_findings_table(&[]);
+        assert_eq!(out, "  (no findings)");
+        assert!(!out.contains('{'));
+    }
+
+    #[test]
+    fn render_findings_table_shows_id_machine_rule_and_is_not_json() {
+        let out = render_findings_table(&[sample_finding(41)]);
+        assert!(out.contains("ID") && out.contains("RULE") && out.contains("MACHINE"));
+        assert!(out.contains("41"), "missing finding id; got:\n{}", out);
+        assert!(out.contains("R003"));
+        assert!(out.contains("12"), "missing machine id; got:\n{}", out);
+        assert!(out.contains("DefaultEngine.ini"));
+        assert!(out.contains("Core.System"));
+        assert!(!out.contains('{'), "human table must not be JSON: {}", out);
+    }
+
+    #[test]
+    fn render_ini_scan_summary_is_readable_not_json() {
+        let out = render_ini_scan_summary(39, "ini", 1, 6, 6, 0, 0, 0, 0, 0);
+        assert!(out.contains("scan_run #39"));
+        assert!(out.contains("1 machine"));
+        assert!(out.contains("read=6"));
+        assert!(out.contains("not_found=6"));
+        assert!(out.contains("critical=0"));
+        assert!(!out.contains('{'), "summary must not be JSON: {}", out);
+    }
+
+    #[test]
+    fn render_ini_scan_summary_pluralizes_machines() {
+        let out = render_ini_scan_summary(7, "ini_project", 3, 9, 0, 0, 2, 1, 5, 0);
+        assert!(out.contains("3 machines"));
+        assert!(out.contains("ini_project"));
+    }
+
+    #[test]
+    fn list_findings_human_mode_renders_table_not_json() {
+        use crate::cli::output::HumanEmitter;
+        use crate::data::{machines as data_machines, scan_runs};
+        let db = fresh_db();
+        let mid = data_machines::insert(&db, &data_machines::Machine::new("R01", "10.0.0.9"))
+            .unwrap();
+        let run = scan_runs::insert(&db, "ini", &[mid]).unwrap();
+        let mut f = sample_finding(0);
+        f.id = None;
+        f.scan_run_id = run;
+        f.machine_id = mid;
+        ini_findings::insert(&db, &f).unwrap();
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        {
+            let emitter: Box<dyn Emitter> =
+                Box::new(HumanEmitter::new(&mut stdout, &mut stderr, false));
+            let mut ctx = Ctx {
+                db: Some(db.clone()),
+                db_path: std::path::PathBuf::from(":memory:"),
+                emitter,
+                json_mode: false,
+                operation_id: "ini.findings",
+                request_id: "test-req".into(),
+                no_input: false,
+            };
+            list_findings(&mut ctx, run, None).unwrap();
+        }
+        let s = String::from_utf8(stdout).unwrap();
+        assert!(s.contains("R003"), "should contain rule id; got:\n{}", s);
+        assert!(s.contains("DefaultEngine.ini"), "should contain file path; got:\n{}", s);
+        assert!(!s.contains('{'), "human mode must not emit JSON; got:\n{}", s);
     }
 }
