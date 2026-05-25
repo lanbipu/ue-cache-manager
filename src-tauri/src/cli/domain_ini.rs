@@ -659,6 +659,26 @@ fn render_findings_table(findings: &[IniFinding]) -> String {
     out.trim_end().to_string()
 }
 
+/// Resolve the UE version to stamp on a config snapshot. Engine-category files
+/// (`<install>\Engine\Config\BaseEngine.ini`) belong to one specific install,
+/// so map the snapshot's `file_path` back to that install's version instead of
+/// stamping the machine's highest-version hint on every file. Reuses
+/// `enumerate_engine_paths` (1:1 with `installs`, same order) so the path
+/// formula can't drift. Files that match no install engine path (e.g. a
+/// project's `DefaultEngine.ini`) fall back to `hint`.
+fn resolve_snapshot_ue_version(
+    file_path: &str,
+    installs: &[(String, String)],
+    hint: Option<&str>,
+) -> Option<String> {
+    ini_scanner::enumerate_engine_paths(installs)
+        .iter()
+        .zip(installs.iter())
+        .find(|(tf, _)| tf.path == file_path)
+        .map(|(_, (ver, _root))| ver.clone())
+        .or_else(|| hint.map(str::to_string))
+}
+
 /// Run a full INI scan across a set of machines identified by DB id.
 ///
 /// Flow mirrors `commands::ini_scanner::scan_inis_summary`:
@@ -808,14 +828,21 @@ fn scan_cluster(
                 }
                 ini_findings::insert(&db, &row)?;
             }
-            // Persist config snapshots (DDC/PSO/Zen actual values).
+            // Persist config snapshots (DDC/PSO/Zen actual values). Stamp each
+            // snapshot with the version of the install that owns its file (not
+            // the machine-wide highest-version hint) so a UE_5.0 BaseEngine.ini
+            // isn't labeled "5.8".
             for entry in &outcome.config_snapshots {
                 ini_config_snapshots::insert(&db, &ini_config_snapshots::ConfigSnapshot {
                     id: None,
                     scan_run_id,
                     machine_id: mid,
                     file_path: entry.file_path.clone(),
-                    ue_version: ue_version_hint.clone(),
+                    ue_version: resolve_snapshot_ue_version(
+                        &entry.file_path,
+                        &installs,
+                        ue_version_hint.as_deref(),
+                    ),
                     domain: entry.domain.to_string(),
                     section: entry.section.clone(),
                     key_name: entry.key_name.clone(),
@@ -1438,5 +1465,96 @@ mod tests {
         assert!(s.contains("R003"), "should contain rule id; got:\n{}", s);
         assert!(s.contains("DefaultEngine.ini"), "should contain file path; got:\n{}", s);
         assert!(!s.contains('{'), "human mode must not emit JSON; got:\n{}", s);
+    }
+
+    #[test]
+    fn resolve_snapshot_ue_version_maps_engine_file_to_its_install() {
+        let installs = vec![
+            ("5.0".to_string(), "C:\\Epic\\UE_5.0".to_string()),
+            ("5.4".to_string(), "C:\\Epic\\UE_5.4".to_string()),
+        ];
+        let p50 = "C:\\Epic\\UE_5.0\\Engine\\Config\\BaseEngine.ini";
+        let p54 = "C:\\Epic\\UE_5.4\\Engine\\Config\\BaseEngine.ini";
+        // Engine file → its own install's version, regardless of the hint.
+        assert_eq!(resolve_snapshot_ue_version(p50, &installs, Some("5.4")), Some("5.0".to_string()));
+        assert_eq!(resolve_snapshot_ue_version(p54, &installs, Some("5.0")), Some("5.4".to_string()));
+        // Project file matches no engine path → falls back to hint.
+        let proj = "D:\\Proj\\Config\\DefaultEngine.ini";
+        assert_eq!(resolve_snapshot_ue_version(proj, &installs, Some("5.4")), Some("5.4".to_string()));
+        // No match + no hint → None.
+        assert_eq!(resolve_snapshot_ue_version(proj, &installs, None), None);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn scan_stamps_each_snapshot_with_its_files_ue_version() {
+        use crate::data::{
+            ini_config_snapshots, machine_ue_installs, machines as data_machines, scan_runs,
+        };
+        let db = fresh_db();
+        let mid = data_machines::insert(
+            &db,
+            &data_machines::Machine::new("NODE", "localhost"),
+        )
+        .unwrap();
+
+        // Two installs of different versions, each with its own BaseEngine.ini.
+        // On non-Windows the backslashes are literal filename chars; write/read
+        // round-trip on the same string (mirrors scan_persists_config_snapshots).
+        let dir50 = tempfile::tempdir().unwrap();
+        let dir54 = tempfile::tempdir().unwrap();
+        let path50 = dir50.path().to_string_lossy().to_string();
+        let path54 = dir54.path().to_string_lossy().to_string();
+        let ini50 = format!("{}\\Engine\\Config\\BaseEngine.ini", path50);
+        let ini54 = format!("{}\\Engine\\Config\\BaseEngine.ini", path54);
+        std::fs::write(&ini50, "[DerivedDataBackendGraph]\nRoot=(Type=KeyLength)\n").unwrap();
+        std::fs::write(&ini54, "[DerivedDataBackendGraph]\nRoot=(Type=KeyLength)\n").unwrap();
+
+        for (ver, path) in [("5.0", &path50), ("5.4", &path54)] {
+            machine_ue_installs::upsert(
+                &db,
+                &machine_ue_installs::UeInstall {
+                    id: None,
+                    machine_id: mid,
+                    version: ver.to_string(),
+                    install_path: path.to_string(),
+                    is_primary: ver == "5.4",
+                    zen_cli_intree_path: None,
+                    zen_cli_intree_version: None,
+                    zen_cli_intree_sha256: None,
+                    zenserver_intree_path: None,
+                    zenserver_intree_version: None,
+                    zenserver_intree_sha256: None,
+                },
+            )
+            .unwrap();
+        }
+
+        let mut buf: Vec<u8> = Vec::new();
+        let mut ctx = make_ctx(&mut buf, &db);
+        let cred = CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false };
+        scan_cluster(&mut ctx, &[mid], HashMap::new(), "ini", None, &cred).unwrap();
+
+        let run = scan_runs::list_recent(&db, "ini", 1).unwrap()[0].id.unwrap();
+        let snaps = ini_config_snapshots::list_for_run(&db, run).unwrap();
+        // pick_highest_ue_version → "5.4"; without the per-file fix every
+        // snapshot would be stamped "5.4". Assert the 5.0 file keeps "5.0".
+        let v50: Vec<_> = snaps.iter().filter(|s| s.file_path == ini50).collect();
+        let v54: Vec<_> = snaps.iter().filter(|s| s.file_path == ini54).collect();
+        assert!(
+            !v50.is_empty() && !v54.is_empty(),
+            "expected snapshots from both files; got: {:?}",
+            snaps.iter().map(|s| (s.file_path.clone(), s.ue_version.clone())).collect::<Vec<_>>()
+        );
+        assert!(
+            v50.iter().all(|s| s.ue_version.as_deref() == Some("5.0")),
+            "5.0 file mislabeled: {:?}",
+            v50.iter().map(|s| s.ue_version.clone()).collect::<Vec<_>>()
+        );
+        assert!(
+            v54.iter().all(|s| s.ue_version.as_deref() == Some("5.4")),
+            "5.4 file mislabeled: {:?}",
+            v54.iter().map(|s| s.ue_version.clone()).collect::<Vec<_>>()
+        );
     }
 }
