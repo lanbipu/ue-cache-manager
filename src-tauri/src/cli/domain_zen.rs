@@ -1168,8 +1168,8 @@ fn apply_config(
                 "endpoint_id": endpoint_id,
                 "machine_id": ep.machine_id,
                 "host": machine.ip,
-                // PLACEHOLDER: T2.9 will lock down the real path. Until then
-                // operator supplies / accepts the C:\Tools\UECM\zen.lua default.
+                // dest_path is operator-supplied, or (F6) derived from the
+                // detected install-dir zen.exe → …\Zen\Install\zen.lua.
                 "dest_path": dest_path,
                 "lua": lua,
             }),

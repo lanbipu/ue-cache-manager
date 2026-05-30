@@ -26,7 +26,7 @@
 
 ## 3. F5 — detect-binary 跨用户发现 install-dir binary
 
-- [ ] `uecm-cli zen detect-binary --machine 13` → **`install_record_written: true`**（F5 生效，之前恒为 false）。
+- [ ] `uecm-cli zen detect-binary --machine 13` → **`install_record_written: true`**（F5 生效，之前恒为 false）。**关键**：lanPC 上 uecm-svc 自己的 LOCALAPPDATA 是空的，这个 true 必须来自 **UE 用户（lanPC）profile** 下的 install 目录——确认 install 记录的路径是 `C:\Users\lanPC\AppData\Local\...` 而非 `C:\Users\uecm-svc\...`。
 - [ ] 同时 `intree_records_written > 0`（5.2~5.8 已 refresh）。
 - [ ] 记录：install_record_written = ___，intree_records_written = ___。
 
@@ -58,7 +58,7 @@
 
 - [ ] 确保 ZenServer 服务 **正在运行** 且占用 8558。
 - [ ] `uecm-cli zen sponsor-down --endpoint-id <EP> --dry-run` → **期望 refuse**：`refused: true, is_installed_service: true`，消息提示「该用 `zen service stop`」。输出含 `listener_pid`。
-- [ ] （可选 fail-closed 验证）若有办法让监听进程 path 读不出（受保护进程 / 非 admin 上下文），验 `path_unresolved: true` 的 refuse 分支。
+- [ ] （fail-closed 验证）若有办法让监听进程 path 读不出（受保护进程 / 非 admin 上下文），验 `path_unresolved: true` 的 refuse 分支；现场难复现就 code-read 核对 `zen-sponsor-down.ps1` 的 `$null -eq $listenerPath` 分支，**不要从清单里悄悄漏掉**。
 
 ## 7b. F4 正例 — sponsor 占端口时优雅关停
 
