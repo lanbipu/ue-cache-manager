@@ -39,7 +39,7 @@ zen service status / zen probe / zen cache-stats / health run
 |---|---|---|---|---|
 | **F1** | service install/uninstall 加 intree fallback | ZEN-DEPLOY-1 | `cli/domain_zen.rs:1257,1429` + `commands/zen.rs:1046,1160`（**4 处各加，不抽共享函数**） | install-dir binary 查不到时 `.or_else` 取 `machine_ue_installs` 最高版本的 `zen_cli_intree_path` |
 | **F2** | `--port`/`--http` 持久化进 SCM ImagePath（含**已存在服务的就地修复**） | G2 | `ps-scripts/zen-service-install.ps1` + 两条 Rust service-install 路径 | Rust 传 `Port`/`HttpServerClass`；PS 全新安装时注册表直写 ImagePath 注入 `--port`/`--http`；**且对已存在服务做 port/http drift 检测 + 就地 repair**（见 §3 F2，修 Codex review #1） |
-| **F3** | detect-binary 写不出 intree 记录时 fail-fast | GAP-ZEN-DETECT-02 | `core/zen/binary.rs` + `cli/domain_zen.rs` detect 路径 | 检测到 intree 候选却因 `machine_ue_installs` 空全部 skip、且 install record 也没写时，返回带指引的 Err（先跑 `machine refresh`） |
+| **F3** | detect-binary 写不出 intree 记录时 fail-fast | GAP-ZEN-DETECT-02 | `core/zen/binary.rs`（纯 helper）+ `cli/domain_zen.rs` & `commands/zen.rs` detect 路径 | 检测到 intree 候选却因 `machine_ue_installs` 空全部 skip、且 install record 也没写时，把该机记为失败 + 提示先跑 `machine refresh`（命令层判定，persist 契约不变） |
 | **F4** | sponsor 模式 zenserver 占端口的优雅关停（含**进程身份守卫**） | ZEN-DEPLOY-2 / G3 | 新 `zen sponsor-down` 命令 + 新 PS 脚本 | 从 endpoint 推 port/machine；**先解析监听该端口的 PID 并比对是否为 `ZenServer` SCM 服务进程——是则 refuse**，否则用该机最高版本 intree zen.exe 跑 `zen.exe down --port`；destructive 需 `--yes`，dry-run/apply 输出被停进程身份（修 Codex review #2） |
 
 ### 🟡 B 组 · 增强（A 组落地后非阻断）
@@ -87,13 +87,23 @@ zen service status / zen probe / zen cache-stats / health run
   - exe / data / account 不同 → 维持现有 refuse（指向 `zen-service-uninstall.ps1`）。
   就地 repair 不强制 uninstall：exe/data/account 都没变，只补 runtime flag，是良性原地修。
 
+> rev2（写计划阶段）把 F3 从"`persist` 返回 Err"精炼为"命令层用纯 helper `detect_yielded_nothing` 判定"——避免 `persist` 写了 ref 行又报错的部分写入，且 `persist` 契约 + `binary.rs:709` 测试都不动。详见 §3 F3 + §7 rev2。
+
 ### F3 — detect-binary fail-fast
 
-- **位置**：`core/zen/binary.rs::persist`。当前在 `machine_ue_installs::find` 返回 `None` 时 push 一句 warning 后继续，最终 `Ok(report)`，`intree_records_written` 留 0。
-- **改法**：跟踪「检测到 intree 候选（`detection` 含 intree）但因 `machine_ue_installs` 行缺失全部 skip」这一条件。当**该条件成立且 install record 也没写**（即这次 detect 实际产出为空）时，返回带可操作信息的 `UecmError`（提示先 `machine refresh <id>`）。
-- **不触发场景**：真正无 UE 安装的空机器（detection 无 intree 候选）仍正常 `Ok`，不报错。
-- **`--all` 语义**：保持按机器粒度 —— 单机 fail-fast 不阻断其余机器，整体退出码反映 partial failure（沿用现有 OperationFailed 模式）。
-- ⚠️ **测试债**：`binary.rs:709` 现有那条断言 no-row 情况下 `intree_records_written == 0` 的测试要改成断言新的 Err 行为。
+- **判定放在 detect 命令层、不改 `persist` 契约**（计划阶段精炼，见 §7 rev2）：`persist` 写了 `zen_binary_intree` ref 行后才查 `machine_ue_installs`，若让 `persist` 直接返回 Err 会变成"写了 ref 行又报错"的部分写入。改为保持 `persist` 不变（仍 `Ok(report)`），在 `core/zen/binary.rs` 加一个**纯判定 helper**：
+  ```rust
+  pub fn detect_yielded_nothing(detection: &BinaryDetection, report: &PersistReport) -> bool {
+      !report.install_record_written
+          && !detection.intree.is_empty()
+          && report.intree_records_written == 0
+  }
+  ```
+  含义：检测到 intree 候选、但因 `machine_ue_installs` 空全部 skip、且 install record 也没写 → 这次 detect 实际产出为空。
+- **接线**：两条 detect 处理器（`cli/domain_zen.rs::detect_binary` ~550、`commands/zen.rs::zen_detect_binary` ~374）在 `persist` 之后调该 helper；为 true 时把这台机器记为**失败**（CLI：`failed += 1` + emit 带「先跑 `machine refresh <id>`」的 ItemCompleted，不计 ok；GUI：该机 `ok:false` + `error_message`）。
+- **不触发场景**：真正无 UE 安装的空机器（`detection.intree` 空）仍正常 ok，不报错。
+- **`--all` 语义**：按机器粒度 —— 单机 fail-fast 不阻断其余，整体退出码沿用现有 `failed>0` → OperationFailed / 全失败 → PowerShell 的逻辑。
+- **测试**：新增 `detect_yielded_nothing` 纯函数单测（true/false 各分支）。**`binary.rs:709` 既有测试保持不变**（`persist` 行为没变，仍 `Ok` + `intree_records_written==0`）。
 
 ### F4 — `zen sponsor-down` 新命令（含进程身份守卫）
 
@@ -129,7 +139,7 @@ zen service status / zen probe / zen cache-stats / health run
 
 - **F1**：机器无 `machine_zen_install` 行、`machine_ue_installs` 有 5.2 / 5.8 两行带 intree path → 断言 resolver 选 **5.8** 的 `zen_cli_intree_path`；两者皆无 → 断言仍报 `has no zen.exe`。覆盖 install + uninstall 两类入口。
 - **F2**：断言传给 PS sidecar 的 JSON args 含 `Port`（= `ep.declared_port`）+ `HttpServerClass`（= `ep.httpserverclass`）。ImagePath 注册表注入 + 已存在服务 drift 修复本身是 PS 行为，归 lanPC 验（见 runbook 6/6b）；PS 层若可在 mac 用 pwsh 跑纯函数（token-parse + 三分支判定）则补 Pester/单元断言，否则纯 lanPC。
-- **F3**：`persist()` 在「有 intree 候选 + `machine_ue_installs` 空」时返回 Err（信息含 `machine refresh`）；无 UE 的空机器仍 `Ok`。改 `binary.rs:709` 既有测试。
+- **F3**：`detect_yielded_nothing` 纯函数单测——`install:None + intree 非空 + intree_records_written==0` → true；有 install record / intree 空 / 有 intree 记录任一 → false。`binary.rs:709` 既有测试不变（persist 契约没动）。
 - **F4**：`sponsor-down` 参数解析；endpoint→port/machine 推导；解析出最高版本 intree zen.exe；组装 `zen.exe down --port <P>`；`--yes`/`--dry-run` destructive 守卫。**身份守卫判定**（监听 PID == 服务 PID → refuse；非 zenserver → refuse；standalone sponsor → proceed）尽量抽成可在 mac 单测的纯决策函数（喂入 listener PID / service PID / process path），SCM/NetTCP 取数留 lanPC。
 - **F6**：dest-path 自动推导逻辑。
 - 全量回归：`cargo test --lib` 全绿（基线 ~997–1014 pass）。
@@ -178,3 +188,7 @@ A 组（F1–F4）跑通 lanPC E2E 后即可合 main；B 组可后续追加。
 
 - **#1（采纳，扩大 F2）**：原 F2 只在「全新安装」末尾 patch ImagePath，但 `zen-service-install.ps1:237-378` 对已存在服务只比 exe+data+account、匹配即 no-op exit 0 提前返回——旧 CLI 装的"有 data-dir 没 port"坏服务在真实升级路径上会被静默放过，修了等于没修。→ F2 扩展为对已存在服务做 port/http drift 检测 + 就地 repair（exe/data/account 同、仅 port/http 缺失/不同时原地补 ImagePath 而非强制 uninstall）。补 runbook 步骤 6b。
 - **#2（采纳，裁剪版，加固 F4）**：原 F4 裸跑 `zen.exe down --port` 不分辨端口上是 sponsor 还是已装的 `ZenServer` 服务/别的 upstream，可能误停生产进程。→ F4 加进程身份守卫：解析监听 PID，命中 `ZenServer` 服务 PID 则 refuse（该用 `zen service stop`），非 zenserver 进程也 refuse，并在 dry-run/apply 输出被停进程身份。**裁剪**：只做「listener PID vs 服务 PID」+ 进程 path 报告这类廉价高价值判定，不做 Codex 建议的完整 owner/lockfile 取证（YAGNI）。补 runbook 步骤 7（守卫反例）。
+
+### rev2 — 写计划阶段精炼（2026-05-30）
+
+- **F3 判定位置**：从"`persist` 返回 Err"改为"detect 命令层用纯 helper `detect_yielded_nothing(detection, report)` 判定"。理由：`persist` 在查 `machine_ue_installs` 前已写 `zen_binary_intree` ref 行，让它返回 Err = 部分写入又报错；改用命令层判定后 `persist` 契约不变、`binary.rs:709` 既有测试不动，且 helper 是可在 mac 单测的纯函数（与 §4 验证策略一致）。行为不变：detect 仍在"产出为空"时把该机记为失败 + 提示先 `machine refresh`。
