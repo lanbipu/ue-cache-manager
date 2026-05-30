@@ -1598,13 +1598,66 @@ fn service_simple(
 }
 
 fn sponsor_down(
-    _ctx: &mut Ctx<'_>,
-    _endpoint_id: i64,
-    _yes: bool,
-    _dry_run: bool,
-    _cred: &CredentialArgs,
+    ctx: &mut Ctx<'_>,
+    endpoint_id: i64,
+    yes: bool,
+    dry_run: bool,
+    cred: &CredentialArgs,
 ) -> UecmResult<()> {
-    Err(UecmError::InvalidInput("zen sponsor-down not yet implemented".into()))
+    let outcome = destructive::check(yes, dry_run, "zen.sponsor_down")?;
+    let db = ctx.require_db()?.clone();
+    cred.preflight(&db)?;
+    let ep = require_endpoint(&db, endpoint_id)?;
+    let machine = require_machine(&db, ep.machine_id)?;
+
+    // Reuse the F1 resolution: install-dir zen.exe, else highest-version intree.
+    let install = machine_zen_install::find(&db, ep.machine_id)?;
+    let zen_exe = install
+        .as_ref()
+        .and_then(|m| m.zen_cli_path.clone())
+        .or_else(|| {
+            crate::data::machine_ue_installs::list_for_machine(&db, ep.machine_id)
+                .ok()
+                .and_then(|v| v.into_iter().find_map(|i| i.zen_cli_intree_path))
+        })
+        .ok_or_else(|| {
+            UecmError::InvalidInput(format!(
+                "machine id={} has no zen.exe (zen_cli) recorded — run \
+                 `uecm-cli zen detect-binary --machine {}` first",
+                ep.machine_id, ep.machine_id,
+            ))
+        })?;
+
+    let invocation = format!(
+        "zen-sponsor-down.ps1 -ZenExePath {zen_exe} -Port {} -ServiceName {DEFAULT_SERVICE_NAME} -DryRun {}",
+        ep.declared_port,
+        outcome == Outcome::DryRun
+    );
+    let op_id = operations::start(&db, "zen.sponsor_down", &[ep.machine_id])?;
+    let result = run_node(
+        &machine.ip,
+        "zen-sponsor-down.ps1",
+        serde_json::json!({
+            "ZenExePath": zen_exe,
+            "Port": ep.declared_port,
+            "ServiceName": DEFAULT_SERVICE_NAME,
+            "DryRun": outcome == Outcome::DryRun,
+        }),
+    )
+    .and_then(|raw| parse_envelope(&raw, "zen-sponsor-down"));
+    finalize_op(&db, op_id, &result, &invocation);
+    let response = result?;
+    let summary = serde_json::json!({
+        "ok": true,
+        "endpoint_id": endpoint_id,
+        "machine_id": ep.machine_id,
+        "host": machine.ip,
+        "port": ep.declared_port,
+        "dry_run": outcome == Outcome::DryRun,
+        "remote": response,
+    });
+    ctx.emitter.emit_event(&Event::Completed { summary }).ok();
+    Ok(())
 }
 
 fn service_status(
