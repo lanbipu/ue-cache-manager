@@ -843,6 +843,36 @@ mod tests {
     }
 
     #[test]
+    fn intree_fallback_picks_highest_version_zen_cli() {
+        use crate::data::machine_ue_installs::{self, UeInstall};
+        let (db, machine_id) = db_with_machine();
+        for (ver, path) in [
+            ("5.2", r"D:\Epic\UE_5.2\Engine\Binaries\Win64\zen.exe"),
+            ("5.8", r"D:\Epic\UE_5.8\Engine\Binaries\Win64\zen.exe"),
+        ] {
+            machine_ue_installs::upsert(&db, &UeInstall {
+                id: None, machine_id, version: ver.into(),
+                install_path: format!(r"D:\Epic\UE_{ver}"), is_primary: false,
+                zen_cli_intree_path: Some(path.into()),
+                zen_cli_intree_version: Some(format!("{ver}.0")),
+                zen_cli_intree_sha256: Some("deadbeef".into()),
+                zenserver_intree_path: None, zenserver_intree_version: None, zenserver_intree_sha256: None,
+            }).unwrap();
+        }
+        let picked = machine_ue_installs::list_for_machine(&db, machine_id).unwrap()
+            .into_iter().find_map(|i| i.zen_cli_intree_path);
+        assert_eq!(picked.as_deref(), Some(r"D:\Epic\UE_5.8\Engine\Binaries\Win64\zen.exe"));
+    }
+
+    #[test]
+    fn intree_fallback_none_when_no_intree_rows() {
+        let (db, machine_id) = db_with_machine();
+        let picked = crate::data::machine_ue_installs::list_for_machine(&db, machine_id).unwrap()
+            .into_iter().find_map(|i| i.zen_cli_intree_path);
+        assert!(picked.is_none());
+    }
+
+    #[test]
     fn persist_clears_stale_install_row_when_detection_install_is_none() {
         // Plan §1.1 R016/R018 read the install row to check binary integrity.
         // If a machine that had a Zen install (someone opened UE 5.4+ once)
