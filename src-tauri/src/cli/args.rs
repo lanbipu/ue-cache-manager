@@ -1152,8 +1152,14 @@ pub enum ZenAction {
     Enable {
         /// Project row id whose `DefaultEngine.ini` to mutate. The project's
         /// `ue_version_major.minor` selects the rule overrides.
+        /// Required unless `--global` is set.
         #[arg(long, value_name = "ID")]
-        project_id: i64,
+        project_id: Option<i64>,
+        /// Write ZenShared to `UserEngine.ini` (all-project global config) for
+        /// every target machine. Uses each machine's `ue_runtime_user` to
+        /// compute the path. Mutually exclusive with `--project-id`.
+        #[arg(long, conflicts_with = "project_id")]
+        global: bool,
         /// Comma-separated machine row ids to act on. Each machine MUST have a
         /// `project_locations` row for this project so we know where the INI is.
         #[arg(long, value_name = "M1,M2,...", value_delimiter = ',')]
@@ -1180,8 +1186,14 @@ pub enum ZenAction {
     ///
     /// Destructive: requires `--yes` or `--dry-run`.
     Disable {
+        /// Project row id whose `DefaultEngine.ini` to mutate.
+        /// Required unless `--global` is set.
         #[arg(long, value_name = "ID")]
-        project_id: i64,
+        project_id: Option<i64>,
+        /// Remove ZenShared from `UserEngine.ini` (all-project global config).
+        /// Mutually exclusive with `--project-id`.
+        #[arg(long, conflicts_with = "project_id")]
+        global: bool,
         #[arg(long, value_name = "M1,M2,...", value_delimiter = ',')]
         machines: Vec<i64>,
         #[arg(long)]

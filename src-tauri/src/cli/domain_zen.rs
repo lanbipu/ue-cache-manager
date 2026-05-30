@@ -202,24 +202,36 @@ pub fn handle(ctx: &mut Ctx<'_>, action: ZenAction) -> UecmResult<()> {
         },
         ZenAction::Enable {
             project_id,
+            global,
             machines,
             upstream_endpoint_id,
             namespace,
             yes,
             dry_run,
             cred,
-        } => project_enable(
-            ctx,
-            project_id,
-            &machines,
-            upstream_endpoint_id,
-            &namespace,
-            yes,
-            dry_run,
-            &cred,
-        ),
-        ZenAction::Disable { project_id, machines, yes, dry_run, cred } => {
-            project_disable(ctx, project_id, &machines, yes, dry_run, &cred)
+        } => {
+            if global {
+                global_enable(ctx, &machines, upstream_endpoint_id, &namespace, yes, dry_run, &cred)
+            } else {
+                let pid = project_id.ok_or_else(|| {
+                    UecmError::InvalidInput(
+                        "must supply --project-id or --global".to_string(),
+                    )
+                })?;
+                project_enable(ctx, pid, &machines, upstream_endpoint_id, &namespace, yes, dry_run, &cred)
+            }
+        }
+        ZenAction::Disable { project_id, global, machines, yes, dry_run, cred } => {
+            if global {
+                global_disable(ctx, &machines, yes, dry_run, &cred)
+            } else {
+                let pid = project_id.ok_or_else(|| {
+                    UecmError::InvalidInput(
+                        "must supply --project-id or --global".to_string(),
+                    )
+                })?;
+                project_disable(ctx, pid, &machines, yes, dry_run, &cred)
+            }
         }
         ZenAction::VerifyRules {
             ue_version,
@@ -1258,6 +1270,14 @@ fn service_install(
     let zen_exe = install
         .as_ref()
         .and_then(|m| m.zen_cli_path.clone())
+        .or_else(|| {
+            // Fallback to highest-version UE intree binary when the install-path
+            // binary is not recorded (e.g. it lives under a different user's
+            // %LOCALAPPDATA% and uecm-svc cannot read it).
+            crate::data::machine_ue_installs::list_for_machine(&db, ep.machine_id)
+                .ok()
+                .and_then(|installs| installs.into_iter().find_map(|i| i.zen_cli_intree_path))
+        })
         .ok_or_else(|| {
             UecmError::InvalidInput(format!(
                 "machine id={} has no zen.exe (zen_cli) recorded — run \
@@ -1364,8 +1384,8 @@ fn service_install(
         .map(|u| format!(" -ServiceUser {u}"))
         .unwrap_or_default();
     let invocation = redact(&format!(
-        "zen-service-install.ps1 -ZenExePath {zen_exe} -ServiceName {DEFAULT_SERVICE_NAME} -DataDir {}{user_marker}{pass_marker}",
-        ep.data_dir
+        "zen-service-install.ps1 -ZenExePath {zen_exe} -ServiceName {DEFAULT_SERVICE_NAME} -DataDir {} -Port {} -HttpServerClass {}{user_marker}{pass_marker}",
+        ep.data_dir, ep.declared_port, ep.httpserverclass,
     ));
     let op_id = operations::start(&db, "zen.service_install", &[ep.machine_id])?;
 
@@ -1376,6 +1396,8 @@ fn service_install(
         "ZenExePath": zen_exe,
         "ServiceName": DEFAULT_SERVICE_NAME,
         "DataDir": ep.data_dir,
+        "Port": ep.declared_port,
+        "HttpServerClass": ep.httpserverclass,
     });
     if let Some(obj) = args.as_object_mut() {
         if let Some(u) = service_user {
@@ -1430,6 +1452,11 @@ fn service_uninstall(
     let zen_exe = install
         .as_ref()
         .and_then(|m| m.zen_cli_path.clone())
+        .or_else(|| {
+            crate::data::machine_ue_installs::list_for_machine(&db, ep.machine_id)
+                .ok()
+                .and_then(|installs| installs.into_iter().find_map(|i| i.zen_cli_intree_path))
+        })
         .ok_or_else(|| {
             UecmError::InvalidInput(format!(
                 "machine id={} has no zen.exe (zen_cli) recorded — run \
@@ -2338,6 +2365,252 @@ fn invoke_env_cleanup(
         }
     }
     Ok(envelope)
+}
+
+/// Load + resolve rules for global-mode operations (no project version
+/// available). Uses `resolve_for_diagnostics` which downgrades the
+/// `unverified_policy` from `refuse` → `warn`, so the base rule set applies
+/// on all UE ≥ 5.4 machines regardless of which UE version each machine runs.
+/// The namespace is embedded in `ClusterMaster` at call time, not here.
+fn build_global_rules() -> UecmResult<zen_rules::ResolvedRules> {
+    // 5.4 is the minimum version `applies_to: >=5.4` accepts; using it here
+    // picks up the base rules without any per-version overrides.  This is
+    // intentional: global UserEngine.ini should use the conservative defaults.
+    let rules_raw = zen_rules::load_default()?;
+    zen_rules::resolve_for_diagnostics(&rules_raw, "5.4")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn global_enable(
+    ctx: &mut Ctx<'_>,
+    machine_ids: &[i64],
+    upstream_endpoint_id: i64,
+    namespace: &str,
+    yes: bool,
+    dry_run: bool,
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
+    let outcome_gate = destructive::check(yes, dry_run, "zen.enable_global")?;
+    if machine_ids.is_empty() {
+        return Err(UecmError::InvalidInput(
+            "--machines must list at least one machine id".into(),
+        ));
+    }
+    let db = ctx.require_db()?.clone();
+
+    // Pre-flight: every machine must have ue_runtime_user set.
+    let mut targets: Vec<(Machine, String)> = Vec::with_capacity(machine_ids.len());
+    for &mid in machine_ids {
+        let m = machines::find_by_id(&db, mid)?
+            .ok_or_else(|| UecmError::InvalidInput(format!("machine id={mid} not found")))?;
+        let ue_user = machines::get_ue_runtime_user(&db, mid)?.ok_or_else(|| {
+            UecmError::InvalidInput(format!(
+                "machine id={mid} has no ue_runtime_user set — run \
+                 `machine set-ue-user --machine {mid} --ue-user <USERNAME>` first"
+            ))
+        })?;
+        let ini_path = format!(
+            r"C:\Users\{ue_user}\AppData\Roaming\Unreal Engine\Engine\Config\UserEngine.ini"
+        );
+        targets.push((m, ini_path));
+    }
+
+    let master = resolve_cluster_master(&db, upstream_endpoint_id, namespace)?;
+    let resolved = build_global_rules()?;
+
+    if outcome_gate == Outcome::DryRun {
+        let planned: Vec<serde_json::Value> = targets
+            .iter()
+            .map(|(m, p)| {
+                serde_json::json!({
+                    "machine_id": m.id,
+                    "host": m.ip,
+                    "hostname": m.hostname,
+                    "ini_file": p,
+                })
+            })
+            .collect();
+        destructive::emit_plan(
+            ctx.emitter.as_mut(),
+            "zen.enable_global",
+            serde_json::json!({
+                "master_host": master.host,
+                "master_port": master.port,
+                "namespace": namespace,
+                "rule_section": resolved.rules.enable_zen_shared.section,
+                "rule_key": resolved.rules.enable_zen_shared.key,
+                "machines": planned,
+                "rule_warnings": resolved.warnings,
+            }),
+        );
+        return Ok(());
+    }
+
+    cred.preflight(&db)?;
+
+    let total = targets.len() as i64;
+    ctx.emitter
+        .emit_event(&Event::Started {
+            task_type: "zen_enable_global".into(),
+            task_id: None,
+            metadata: serde_json::json!({ "machines": total }),
+        })
+        .ok();
+
+    let mut results: Vec<serde_json::Value> = Vec::with_capacity(targets.len());
+    let mut fail_count = 0i64;
+
+    for (machine, ini_path) in &targets {
+        let machine_id = machine.id.expect("machine in inventory always has id");
+        let host = machine.ip.as_str();
+        match zen_enable::enable_global(host, ini_path, &resolved, &master) {
+            Ok(out) => {
+                results.push(serde_json::json!({
+                    "machine_id": machine_id,
+                    "hostname": machine.hostname,
+                    "ok": true,
+                    "changed": out.changed,
+                    "ini_file": ini_path,
+                    "warnings": out.warnings,
+                }));
+            }
+            Err(e) => {
+                fail_count += 1;
+                results.push(serde_json::json!({
+                    "machine_id": machine_id,
+                    "hostname": machine.hostname,
+                    "ok": false,
+                    "error": e.to_string(),
+                }));
+            }
+        }
+    }
+
+    let all_ok = fail_count == 0;
+    ctx.emitter
+        .emit_result(&serde_json::json!({ "ok": all_ok, "results": results }))
+        .ok();
+
+    if all_ok {
+        Ok(())
+    } else {
+        Err(UecmError::OperationFailed(format!(
+            "zen.enable_global: {}/{} machine(s) failed",
+            fail_count, total
+        )))
+    }
+}
+
+fn global_disable(
+    ctx: &mut Ctx<'_>,
+    machine_ids: &[i64],
+    yes: bool,
+    dry_run: bool,
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
+    let outcome_gate = destructive::check(yes, dry_run, "zen.disable_global")?;
+    if machine_ids.is_empty() {
+        return Err(UecmError::InvalidInput(
+            "--machines must list at least one machine id".into(),
+        ));
+    }
+    let db = ctx.require_db()?.clone();
+
+    let mut targets: Vec<(Machine, String)> = Vec::with_capacity(machine_ids.len());
+    for &mid in machine_ids {
+        let m = machines::find_by_id(&db, mid)?
+            .ok_or_else(|| UecmError::InvalidInput(format!("machine id={mid} not found")))?;
+        let ue_user = machines::get_ue_runtime_user(&db, mid)?.ok_or_else(|| {
+            UecmError::InvalidInput(format!(
+                "machine id={mid} has no ue_runtime_user set — run \
+                 `machine set-ue-user --machine {mid} --ue-user <USERNAME>` first"
+            ))
+        })?;
+        let ini_path = format!(
+            r"C:\Users\{ue_user}\AppData\Roaming\Unreal Engine\Engine\Config\UserEngine.ini"
+        );
+        targets.push((m, ini_path));
+    }
+
+    let resolved = build_global_rules()?;
+
+    if outcome_gate == Outcome::DryRun {
+        let planned: Vec<serde_json::Value> = targets
+            .iter()
+            .map(|(m, p)| {
+                serde_json::json!({
+                    "machine_id": m.id,
+                    "host": m.ip,
+                    "hostname": m.hostname,
+                    "ini_file": p,
+                })
+            })
+            .collect();
+        destructive::emit_plan(
+            ctx.emitter.as_mut(),
+            "zen.disable_global",
+            serde_json::json!({
+                "rule_section": resolved.rules.enable_zen_shared.section,
+                "rule_key": resolved.rules.enable_zen_shared.key,
+                "machines": planned,
+            }),
+        );
+        return Ok(());
+    }
+
+    cred.preflight(&db)?;
+
+    let total = targets.len() as i64;
+    ctx.emitter
+        .emit_event(&Event::Started {
+            task_type: "zen_disable_global".into(),
+            task_id: None,
+            metadata: serde_json::json!({ "machines": total }),
+        })
+        .ok();
+
+    let mut results: Vec<serde_json::Value> = Vec::with_capacity(targets.len());
+    let mut fail_count = 0i64;
+
+    for (machine, ini_path) in &targets {
+        let machine_id = machine.id.expect("machine in inventory always has id");
+        let host = machine.ip.as_str();
+        match zen_enable::disable_global(host, ini_path, &resolved) {
+            Ok(out) => {
+                results.push(serde_json::json!({
+                    "machine_id": machine_id,
+                    "hostname": machine.hostname,
+                    "ok": true,
+                    "changed": out.changed,
+                    "ini_file": ini_path,
+                    "warnings": out.warnings,
+                }));
+            }
+            Err(e) => {
+                fail_count += 1;
+                results.push(serde_json::json!({
+                    "machine_id": machine_id,
+                    "hostname": machine.hostname,
+                    "ok": false,
+                    "error": e.to_string(),
+                }));
+            }
+        }
+    }
+
+    let all_ok = fail_count == 0;
+    ctx.emitter
+        .emit_result(&serde_json::json!({ "ok": all_ok, "results": results }))
+        .ok();
+
+    if all_ok {
+        Ok(())
+    } else {
+        Err(UecmError::OperationFailed(format!(
+            "zen.disable_global: {}/{} machine(s) failed",
+            fail_count, total
+        )))
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
