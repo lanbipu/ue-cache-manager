@@ -227,10 +227,11 @@ fn set_ue_user(ctx: &mut Ctx<'_>, machine_id: i64, ue_user: &str) -> UecmResult<
     let db = ctx.require_db()?;
     let user_opt: Option<&str> = if ue_user.is_empty() { None } else { Some(ue_user) };
     machines::set_ue_runtime_user(db, machine_id, user_opt)?;
+    let stored = machines::get_ue_runtime_user(db, machine_id)?;
     let doc = serde_json::json!({
         "ok": true,
         "machine_id": machine_id,
-        "ue_runtime_user": ue_user,
+        "ue_runtime_user": stored,
     });
     ctx.emitter.emit_result(&doc).ok();
     Ok(())
