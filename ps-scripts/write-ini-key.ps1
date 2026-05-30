@@ -8,7 +8,20 @@ try {
     $FilePath = $p.FilePath; $Section = $p.Section; $Name = $p.Name
     $Value = if ($null -ne $p.Value) { "$($p.Value)" } else { "" }
     $Remove = [bool]$p.Remove
-        if (-not (Test-Path $FilePath)) { throw "file not found: $FilePath" }
+    $CreateIfMissing = if ($null -ne $p.CreateIfMissing) { [bool]$p.CreateIfMissing } else { $false }
+    if (-not (Test-Path $FilePath)) {
+        if ($CreateIfMissing -and (-not $Remove)) {
+            $dir = Split-Path -Parent $FilePath
+            if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+            New-Item -ItemType File -Path $FilePath -Force | Out-Null
+        } elseif ($Remove) {
+            # Nothing to remove — file absent is success for a remove op.
+            @{ ok = $true; backup_path = ""; message = "file absent, nothing to remove" } | ConvertTo-Json -Compress
+            exit 0
+        } else {
+            throw "file not found: $FilePath"
+        }
+    }
         $backup = "$FilePath.bak.$(Get-Date -UFormat '%Y%m%d-%H%M%S')"
         Copy-Item -Path $FilePath -Destination $backup -Force
         $lines = Get-Content -Path $FilePath -Encoding UTF8
