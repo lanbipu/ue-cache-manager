@@ -67,6 +67,8 @@ $ServiceName = if ($p.ServiceName) { $p.ServiceName } else { 'ZenServer' }
 $DataDir = $p.DataDir
 $ServiceUser = if ($p.ServiceUser) { $p.ServiceUser } else { '' }
 $ServicePassword = if ($p.ServicePassword) { $p.ServicePassword } else { '' }
+$Port = if ($p.Port) { [string]$p.Port } else { '' }
+$HttpServerClass = if ($p.HttpServerClass) { $p.HttpServerClass } else { '' }
 
 # ----------------------------------------------------------------------------
 # Helpers (script scope so both the idempotency path and the post-install
@@ -324,9 +326,32 @@ try {
                 }
             }
 
+            # Codex P2: also extract --port and --http so a re-install with
+            # the same exe/data-dir but different port or HTTP server class is
+            # detected as drift instead of a silent no-op.
+            $existingPort = $null
+            $existingHttp = $null
+            for ($i = 0; $i -lt $tokens.Count; $i++) {
+                $t = $tokens[$i].ToString()
+                if ($t -ieq '--port' -and ($i + 1) -lt $tokens.Count) {
+                    $existingPort = $tokens[$i + 1].ToString()
+                }
+                if ($t -ieq '--http' -and ($i + 1) -lt $tokens.Count) {
+                    $existingHttp = $tokens[$i + 1].ToString()
+                }
+            }
+
+            # Requested port/http — treat empty/unset as absent (no constraint).
+            $requestedPort = if ([string]::IsNullOrWhiteSpace($Port)) { $null } else { $Port.Trim() }
+            $requestedHttp = if ([string]::IsNullOrWhiteSpace($HttpServerClass)) { $null } else { $HttpServerClass.Trim() }
+
+            $portMatches = ($null -eq $requestedPort) -or ($existingPort -ieq $requestedPort)
+            $httpMatches = ($null -eq $requestedHttp) -or ($existingHttp -ieq $requestedHttp)
+
             $matchesExpected = ($existingExe -eq $expectedExe) -and
                                ($null -ne $existingDir) -and
-                               ($existingDir -eq $expectedDir)
+                               ($existingDir -eq $expectedDir) -and
+                               $portMatches -and $httpMatches
         }
 
         # Codex P2: ServiceUser must match too. Without this an
@@ -407,6 +432,14 @@ try {
     [void]$installArgs.Add('--')
     [void]$installArgs.Add('--data-dir')
     [void]$installArgs.Add($normalizedDataDir)
+    if (-not [string]::IsNullOrWhiteSpace($Port)) {
+        [void]$installArgs.Add('--port')
+        [void]$installArgs.Add($Port)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($HttpServerClass)) {
+        [void]$installArgs.Add('--http')
+        [void]$installArgs.Add($HttpServerClass)
+    }
     $combined = (& $ZenExePath @installArgs 2>&1 | Out-String)
     $exitCode = [int]$LASTEXITCODE
     if ($null -eq $combined) { $combined = '' }
@@ -527,6 +560,36 @@ try {
         $scAccount = $actualStartName
     }
 
+    # --- Patch binpath to add runtime flags (--port, --http) -----------------
+    # zen.exe service install writes only "--data-dir" into the SCM PathName;
+    # the extra runtime flags we pass via "--" are not persisted. Patch the
+    # service's ImagePath registry value so the correct port and HTTP server
+    # class survive across machine reboots and service reinstalls.
+    $binpathPatched = $false
+    if ((-not [string]::IsNullOrWhiteSpace($Port)) -or `
+        (-not [string]::IsNullOrWhiteSpace($HttpServerClass))) {
+        try {
+            $regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
+            $existingBinpath = (Get-ItemProperty -LiteralPath $regPath -Name 'ImagePath' -ErrorAction Stop).ImagePath
+            # Build the patched binpath: quote the exe, then runtime args.
+            $exePart = '"' + ([System.IO.Path]::GetFullPath($existingBinpath.TrimStart('"').Split('"')[0]).TrimEnd('\')) + '"'
+            # Codex P2: quote the data-dir path so SCM does not split it on
+            # spaces (e.g. "D:\UE Cache\Zen" must survive as one token).
+            $runtimeArgs = "--data-dir ""$normalizedDataDir"""
+            if (-not [string]::IsNullOrWhiteSpace($Port)) {
+                $runtimeArgs += " --port $Port"
+            }
+            if (-not [string]::IsNullOrWhiteSpace($HttpServerClass)) {
+                $runtimeArgs += " --http $HttpServerClass"
+            }
+            $newBinpath = "$exePart $runtimeArgs"
+            Set-ItemProperty -LiteralPath $regPath -Name 'ImagePath' -Value $newBinpath -ErrorAction Stop
+            $binpathPatched = $true
+        } catch {
+            # Non-fatal: service will still start with zen's default port/http.
+        }
+    }
+
     $payload = @{
         ok = $true
         service_name = $ServiceName
@@ -534,6 +597,7 @@ try {
         service_account_applied = $scApplied
         service_account = $scAccount
         sc_exit_code = $scExit
+        binpath_patched = $binpathPatched
         message = $combined.Trim()
     }
     $payload | ConvertTo-Json -Compress -Depth 4
