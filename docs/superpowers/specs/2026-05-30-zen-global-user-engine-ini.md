@@ -89,11 +89,11 @@ Same mutual exclusion and pre-flight as `zen enable --global`. Removes only the 
 
 **Fix — `core::ini_editor`**: add `pub fn set_key_create(host, file_path, section, name, value)` that passes `CreateIfMissing: true` to the sidecar. Existing `set_key` is unchanged. `enable_global` in `core::zen::enable` calls `set_key_create`; all project-level callers continue to use `set_key`.
 
-### 2.4 INI Scanner Rule R019
+### 2.4 INI Scanner Rule R026
 
 | Attribute | Value |
 |---|---|
-| Rule ID | R019 |
+| Rule ID | R026 |
 | Severity | `warning` |
 | Trigger | `UserEngine.ini` on machine M contains a `ZenShared` key **and** at least one project on M also has `ZenShared` in its `DefaultEngine.ini` |
 | Symptom | "Global ZenShared (UserEngine.ini) and project-level ZenShared both present — project-level config takes precedence and may shadow the global setting" |
@@ -101,11 +101,11 @@ Same mutual exclusion and pre-flight as `zen enable --global`. Removes only the 
 | Recommended action | `manual` (UECM does not auto-remove either; operator decides which to keep) |
 
 **Scanner implementation details:**
-- R019 is only emitted when the machine has `ue_runtime_user` set (path is known).
+- R026 is only emitted when the machine has `ue_runtime_user` set (path is known).
 - `UserEngine.ini` path absence → R019 silently skipped for that machine.
 - Scanning `UserEngine.ini` is a new read pass inside the existing `ini scan` flow; no new scan type needed.
-- Section and key matching **must** use `eq_ignore_ascii_case` (reuse `find_section` / `find_key` helpers from `core::ini_diagnostics_zen`). UE INI parsing is case-insensitive in practice; a lowercase `[installedderiveddatabackendgraph]` must still trigger R019.
-- R019 is a **check-only** rule: it reads `UserEngine.ini` for key presence but does **not** persist its values in `ini_config_snapshots`. No raw INI values from `UserEngine.ini` are stored in the DB or returned in structured output.
+- Section and key matching **must** use `eq_ignore_ascii_case` (reuse `find_section` / `find_key` helpers from `core::ini_diagnostics_zen`). UE INI parsing is case-insensitive in practice; a lowercase `[installedderiveddatabackendgraph]` must still trigger R026.
+- R026 is a **check-only** rule: it reads `UserEngine.ini` for key presence but does **not** persist its values in `ini_config_snapshots`. No raw INI values from `UserEngine.ini` are stored in the DB or returned in structured output.
 
 ---
 
@@ -122,8 +122,8 @@ Same mutual exclusion and pre-flight as `zen enable --global`. Removes only the 
 | `src-tauri/src/core/ini_editor.rs` | Add `set_key_create` variant (passes `CreateIfMissing: true`) |
 | `ps-scripts/write-ini-key.ps1` | Add `CreateIfMissing` parameter |
 | `src-tauri/src/core/ini_scanner/rules/r019.rs` | New rule file |
-| `src-tauri/src/core/ini_scanner/rules/mod.rs` | Register R019 |
-| `docs/zen-integration.md` | Document `machine set-ue-user`, `zen enable --global`, R019 |
+| `src-tauri/src/core/ini_scanner/rules/mod.rs` | Register R026 |
+| `docs/zen-integration.md` | Document machine set-ue-user, zen enable --global, R026 |
 
 ---
 
@@ -134,7 +134,7 @@ Same mutual exclusion and pre-flight as `zen enable --global`. Removes only the 
 | `--global` + `--project-id` supplied together | Error before any I/O: `"--global and --project-id are mutually exclusive"` |
 | Target machine has `ue_runtime_user = NULL` | Pre-flight abort (all machines checked before any write) |
 | `UserEngine.ini` parent dir missing | PS sidecar with `CreateIfMissing=$true` uses `New-Item -Force` to create directory + file |
-| R019: `ue_runtime_user` not set on machine | R019 skipped silently for that machine |
+| R026: ue_runtime_user not set on machine | R026 skipped silently for that machine |
 
 ---
 
@@ -142,7 +142,7 @@ Same mutual exclusion and pre-flight as `zen enable --global`. Removes only the 
 
 `/codex:adversarial-review` run against working-tree diff. Two findings:
 
-**#1 [high] Raw snapshot values expose sensitive INI fields** — **Not applicable to this spec.** R019 is check-only: it reads `UserEngine.ini` for key *presence* but stores nothing in `ini_config_snapshots`. No raw INI values from `UserEngine.ini` enter the DB or structured output. The broader snapshot-redaction question is a deliberate design decision documented in spec `2026-05-24-cli-scan-display-project-design.md §9/§11` (consciously rejected with home-lab threat-model rationale).
+**#1 [high] Raw snapshot values expose sensitive INI fields** — **Not applicable to this spec.** R026 is check-only: it reads `UserEngine.ini` for key *presence* but stores nothing in `ini_config_snapshots`. No raw INI values from `UserEngine.ini` enter the DB or structured output. The broader snapshot-redaction question is a deliberate design decision documented in spec `2026-05-24-cli-scan-display-project-design.md §9/§11` (consciously rejected with home-lab threat-model rationale).
 
 **#2 [medium] `ini_config_extract.rs` uses case-sensitive section/key matching** — **Adopted.** Finding is correct: `DDC_SECTIONS.contains(&sname)` and `sname == INSTALLED_DDBG` are case-sensitive, while `ini_diagnostics_zen.rs`'s `find_section` / `find_key` are already `eq_ignore_ascii_case`. Fix: replaced all comparisons in `ini_config_extract.rs` with case-insensitive equivalents; added 3 regression tests (`extracts_ddc_section_case_insensitive`, `extracts_installed_ddbg_case_insensitive`, `pso_cvar_extraction_case_insensitive`). All 11 `ini_config` tests pass. R019 spec updated to explicitly require `eq_ignore_ascii_case`.
 
