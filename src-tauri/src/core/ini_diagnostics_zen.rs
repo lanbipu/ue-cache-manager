@@ -831,19 +831,19 @@ fn path_matches_target_ini(file_path: &str, target: &str) -> bool {
         || path_lower.ends_with(&format!("/{}", target_lower))
 }
 
-/// R019 — warns when both `UserEngine.ini` (global) and at least one project's
+/// R026 — warns when both `UserEngine.ini` (global) and at least one project's
 /// `DefaultEngine.ini` contain a `ZenShared` key on the same machine.
 ///
 /// UE INI merge order: project `DefaultEngine.ini` overrides user `UserEngine.ini`.
 /// Having ZenShared in both files is redundant and can cause confusion when the
 /// global setting is updated but the project-level override shadows it.
-pub fn evaluate_r019(
+pub fn evaluate_r026(
     host: &str,
     user_engine_ini_path: &str,
     config_snapshots: &[crate::core::ini_config_extract::ConfigEntry],
     _machine_id: i64,
 ) -> Vec<Finding> {
-    // R019 only fires when a project DefaultEngine.ini also has ZenShared.
+    // R026 only fires when a project DefaultEngine.ini also has ZenShared.
     let project_has_zen_shared = config_snapshots.iter().any(|e| {
         e.domain == "zen" && e.key_name.eq_ignore_ascii_case("ZenShared")
     });
@@ -863,7 +863,7 @@ pub fn evaluate_r019(
     }
 
     vec![Finding {
-        rule_id: "R019".to_string(),
+        rule_id: "R026".to_string(),
         severity: Severity::Warning,
         category: crate::core::ini_diagnostics::Category::User,
         file_path: user_engine_ini_path.to_string(),

@@ -228,9 +228,9 @@ pub struct ScanInputs<'a> {
     pub zen_ctx: Option<&'a ZenRuleContext<'a>>,
     /// Absolute path to `UserEngine.ini` on the remote host (from
     /// `machines.ue_runtime_user`). When `Some`, `scan_machine` evaluates
-    /// R019 after the per-file loop. When `None`, R019 is skipped.
+    /// R026 after the per-file loop. When `None`, R026 is skipped.
     pub user_engine_ini_path: Option<&'a str>,
-    /// Machine row id for R019 finding attribution. Use 0 when unknown.
+    /// Machine row id for R026 finding attribution. Use 0 when unknown.
     pub machine_id: i64,
 }
 
@@ -286,10 +286,10 @@ pub fn scan_machine(inputs: &ScanInputs) -> UecmResult<ScanOutcome> {
     if let Some(ctx) = inputs.zen_ctx {
         outcome.findings.extend(evaluate_machine_zen(ctx));
     }
-    // R019: global (UserEngine.ini) + project-level ZenShared coexistence warning.
+    // R026: global (UserEngine.ini) + project-level ZenShared coexistence warning.
     if let Some(user_ini) = inputs.user_engine_ini_path {
         outcome.findings.extend(
-            crate::core::ini_diagnostics_zen::evaluate_r019(
+            crate::core::ini_diagnostics_zen::evaluate_r026(
                 inputs.host,
                 user_ini,
                 &outcome.config_snapshots,
@@ -945,14 +945,14 @@ mod tests {
 
         let outcome = scan_machine(&inputs).unwrap();
         assert!(
-            outcome.findings.iter().any(|f| f.rule_id == "R019"),
-            "expected R019, got: {:?}",
+            outcome.findings.iter().any(|f| f.rule_id == "R026"),
+            "expected R026, got: {:?}",
             outcome.findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
         );
     }
 
     #[test]
-    fn scan_machine_does_not_emit_r019_when_only_project_has_zen_shared() {
+    fn scan_machine_does_not_emit_r026_when_only_project_has_zen_shared() {
         use tempfile::tempdir;
         let dir = tempdir().unwrap();
 
@@ -979,8 +979,8 @@ mod tests {
         };
         let outcome = scan_machine(&inputs).unwrap();
         assert!(
-            !outcome.findings.iter().any(|f| f.rule_id == "R019"),
-            "R019 must not fire when user_engine_ini_path is None"
+            !outcome.findings.iter().any(|f| f.rule_id == "R026"),
+            "R026 must not fire when user_engine_ini_path is None"
         );
     }
 }
