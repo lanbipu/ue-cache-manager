@@ -83,6 +83,50 @@ pub fn set_key(
     Ok(result.backup_path)
 }
 
+/// Same as [`set_key`] but passes `CreateIfMissing: true` to the PS sidecar,
+/// so the file (and its parent directory) are created when absent.
+/// Used by `zen enable --global` to write `UserEngine.ini` on machines where
+/// the user has never opened UE Engine Settings.
+pub fn set_key_create(
+    host: &str,
+    file_path: &str,
+    section: &str,
+    name: &str,
+    value: &str,
+) -> UecmResult<String> {
+    if loopback::is_loopback_target(host) {
+        // Local path: create parent dir + empty file if missing, then write.
+        if let Some(parent) = std::path::Path::new(file_path).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        if !std::path::Path::new(file_path).exists() {
+            std::fs::write(file_path, "")?;
+        }
+        return write_key_local(file_path, section, name, Some(value));
+    }
+
+    let exec = SshExecutor::from_config()?;
+    let result: WriteResult = run_json(
+        &exec,
+        host,
+        &NodeScript {
+            name: "write-ini-key.ps1",
+            args: serde_json::json!({
+                "FilePath": file_path, "Section": section, "Name": name,
+                "Value": value, "Remove": false, "CreateIfMissing": true
+            }),
+            ssh_user: None,
+        },
+    )?;
+    if !result.ok {
+        return Err(UecmError::OperationFailed(format!(
+            "write INI (create) failed: {}",
+            result.message
+        )));
+    }
+    Ok(result.backup_path)
+}
+
 /// Removes a key from an INI section on a remote host (or locally for a loopback
 /// target). Returns the backup path created by the PS sidecar.
 pub fn remove_key(
@@ -313,6 +357,19 @@ mod tests {
     // read/write paths now go over SSH — they error at ssh connect and from_config
     // would touch the real config dir. Loopback behavior is covered by the tests
     // below; remote behavior is validated on a real node.)
+
+    #[test]
+    fn set_key_create_creates_missing_file_and_writes_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("subdir").join("UserEngine.ini");
+        let path_str = path.to_str().unwrap();
+        // File and parent dir do not exist yet.
+        assert!(!path.exists());
+        set_key_create("127.0.0.1", path_str, "InstalledDerivedDataBackendGraph", "ZenShared", "(Type=Zen)")
+            .expect("set_key_create should create file and write key");
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("ZenShared=(Type=Zen)"));
+    }
 
     #[test]
     fn set_key_writes_directly_for_loopback_target() {
