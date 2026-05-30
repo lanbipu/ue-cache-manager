@@ -326,27 +326,35 @@ try {
                 }
             }
 
-            # Codex P2: also extract --port and --http so a re-install with
-            # the same exe/data-dir but different port or HTTP server class is
-            # detected as drift instead of a silent no-op.
+            # Find `--port <value>` or `--port=<value>`.
             $existingPort = $null
-            $existingHttp = $null
             for ($i = 0; $i -lt $tokens.Count; $i++) {
                 $t = $tokens[$i].ToString()
                 if ($t -ieq '--port' -and ($i + 1) -lt $tokens.Count) {
-                    $existingPort = $tokens[$i + 1].ToString()
+                    $existingPort = $tokens[$i + 1].ToString(); break
                 }
-                if ($t -ieq '--http' -and ($i + 1) -lt $tokens.Count) {
-                    $existingHttp = $tokens[$i + 1].ToString()
+                if ($t -match '^--port=(.*)$') {
+                    $existingPort = $Matches[1]; break
                 }
             }
 
-            # Requested port/http — treat empty/unset as absent (no constraint).
-            $requestedPort = if ([string]::IsNullOrWhiteSpace($Port)) { $null } else { $Port.Trim() }
-            $requestedHttp = if ([string]::IsNullOrWhiteSpace($HttpServerClass)) { $null } else { $HttpServerClass.Trim() }
+            # Find `--http <value>` or `--http=<value>`.
+            $existingHttp = $null
+            for ($i = 0; $i -lt $tokens.Count; $i++) {
+                $t = $tokens[$i].ToString()
+                if ($t -ieq '--http' -and ($i + 1) -lt $tokens.Count) {
+                    $existingHttp = $tokens[$i + 1].ToString(); break
+                }
+                if ($t -match '^--http=(.*)$') {
+                    $existingHttp = $Matches[1]; break
+                }
+            }
 
-            $portMatches = ($null -eq $requestedPort) -or ($existingPort -ieq $requestedPort)
-            $httpMatches = ($null -eq $requestedHttp) -or ($existingHttp -ieq $requestedHttp)
+            # Port: only compare when caller requested a specific port.
+            $portMatches = [string]::IsNullOrWhiteSpace($Port) -or ($existingPort -eq $Port)
+            # Http: case-insensitive (asio / httpsys are lowercase conventions).
+            $httpMatches = [string]::IsNullOrWhiteSpace($HttpServerClass) -or
+                           ($existingHttp -ieq $HttpServerClass)
 
             $matchesExpected = ($existingExe -eq $expectedExe) -and
                                ($null -ne $existingDir) -and
@@ -382,10 +390,14 @@ try {
             exit 0
         }
 
-        $reason = if (-not $matchesExpected) {
-            'different ZenExePath / DataDir'
-        } elseif (-not $userMatches) {
+        $reason = if (-not $userMatches) {
             "different service account (existing: '$existingStartName', requested: '$ServiceUser')"
+        } elseif (($existingExe -ne $expectedExe) -or ($existingDir -ne $expectedDir)) {
+            'different ZenExePath / DataDir'
+        } elseif (-not $portMatches) {
+            "different --port (existing: '$existingPort', requested: '$Port')"
+        } elseif (-not $httpMatches) {
+            "different --http (existing: '$existingHttp', requested: '$HttpServerClass')"
         } else {
             'unknown drift'
         }
@@ -573,9 +585,7 @@ try {
             $existingBinpath = (Get-ItemProperty -LiteralPath $regPath -Name 'ImagePath' -ErrorAction Stop).ImagePath
             # Build the patched binpath: quote the exe, then runtime args.
             $exePart = '"' + ([System.IO.Path]::GetFullPath($existingBinpath.TrimStart('"').Split('"')[0]).TrimEnd('\')) + '"'
-            # Codex P2: quote the data-dir path so SCM does not split it on
-            # spaces (e.g. "D:\UE Cache\Zen" must survive as one token).
-            $runtimeArgs = "--data-dir ""$normalizedDataDir"""
+            $runtimeArgs = '--data-dir "' + $normalizedDataDir + '"'
             if (-not [string]::IsNullOrWhiteSpace($Port)) {
                 $runtimeArgs += " --port $Port"
             }
