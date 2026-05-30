@@ -1047,6 +1047,13 @@ pub fn zen_service_install(
     let zen_exe = install
         .as_ref()
         .and_then(|m| m.zen_cli_path.clone())
+        // F1: no install-dir copy recorded → fall back to the highest-version
+        // intree zen.exe from machine_ue_installs (list_for_machine is version DESC).
+        .or_else(|| {
+            crate::data::machine_ue_installs::list_for_machine(&db, ep.machine_id)
+                .ok()
+                .and_then(|v| v.into_iter().find_map(|i| i.zen_cli_intree_path))
+        })
         .ok_or_else(|| {
             UecmError::InvalidInput(format!(
                 "machine id={} has no zen.exe (zen_cli) recorded — run `zen detect-binary --machine {}` first",
@@ -1161,6 +1168,13 @@ pub fn zen_service_uninstall(
     let zen_exe = install
         .as_ref()
         .and_then(|m| m.zen_cli_path.clone())
+        // F1: no install-dir copy recorded → fall back to the highest-version
+        // intree zen.exe from machine_ue_installs (list_for_machine is version DESC).
+        .or_else(|| {
+            crate::data::machine_ue_installs::list_for_machine(&db, ep.machine_id)
+                .ok()
+                .and_then(|v| v.into_iter().find_map(|i| i.zen_cli_intree_path))
+        })
         .ok_or_else(|| {
             UecmError::InvalidInput(format!(
                 "machine id={} has no zen.exe (zen_cli) recorded — run `zen detect-binary --machine {}` first",
