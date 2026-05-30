@@ -94,8 +94,22 @@ function Build-BinaryRecord {
 try {
     $warnings = New-Object System.Collections.ArrayList
 
-    # --- (1) Install dir under %LOCALAPPDATA% ---------------------------------
-    $installDir = Join-Path -Path $env:LOCALAPPDATA -ChildPath 'UnrealEngine\Common\Zen\Install'
+    # --- (1) Install dir under any user's %LOCALAPPDATA% ----------------------
+    # F5: SSH logs in as uecm-svc, whose LOCALAPPDATA never holds the UE-user's
+    # zen install. Enumerate every profile (uecm-svc is a local admin) and pick
+    # the first that actually has the install binary.
+    $installDir = $null
+    $selfLocal = Join-Path -Path $env:LOCALAPPDATA -ChildPath 'UnrealEngine\Common\Zen\Install'
+    $candidates = @($selfLocal)
+    try {
+        $candidates += Get-ChildItem 'C:\Users' -Directory -ErrorAction SilentlyContinue |
+            ForEach-Object { Join-Path $_.FullName 'AppData\Local\UnrealEngine\Common\Zen\Install' }
+    } catch { }
+    foreach ($c in ($candidates | Select-Object -Unique)) {
+        if (Test-Path -LiteralPath (Join-Path $c 'zenserver.exe')) { $installDir = $c; break }
+        if (Test-Path -LiteralPath (Join-Path $c 'zen.exe'))       { $installDir = $c; break }
+    }
+    if ($null -eq $installDir) { $installDir = $selfLocal }  # keep old behavior when nothing found
     $installRecord = $null
     if (Test-Path -LiteralPath $installDir) {
         $cliExe = Join-Path -Path $installDir -ChildPath 'zen.exe'
