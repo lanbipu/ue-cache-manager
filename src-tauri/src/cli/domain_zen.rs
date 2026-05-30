@@ -1383,6 +1383,11 @@ fn service_install(
         "ZenExePath": zen_exe,
         "ServiceName": DEFAULT_SERVICE_NAME,
         "DataDir": ep.data_dir,
+        // F2: zen's `service install` does NOT persist these into the SCM
+        // ImagePath; the sidecar patches the registry so the service starts on
+        // the declared port instead of relocating to base+100.
+        "Port": ep.declared_port,
+        "HttpServerClass": ep.httpserverclass,
     });
     if let Some(obj) = args.as_object_mut() {
         if let Some(u) = service_user {

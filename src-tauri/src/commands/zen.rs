@@ -1130,6 +1130,8 @@ pub fn zen_service_install(
         "ZenExePath": zen_exe,
         "ServiceName": zen_cli_shared::DEFAULT_SERVICE_NAME,
         "DataDir": ep.data_dir,
+        "Port": ep.declared_port,
+        "HttpServerClass": ep.httpserverclass,
     });
     if let Some(obj) = args.as_object_mut() {
         if let Some(u) = service_user.as_deref() {
