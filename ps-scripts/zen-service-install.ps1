@@ -342,6 +342,18 @@ try {
                 }
             }
 
+            # F2: parse existing --port / --http so a port/http-only drift can
+            # be repaired in place instead of slipping through as a no-op.
+            $existingPort = $null
+            $existingHttp = $null
+            for ($j = 0; $j -lt $tokens.Count; $j++) {
+                $tk = $tokens[$j].ToString()
+                if ($tk -ieq '--port' -and ($j + 1) -lt $tokens.Count) { $existingPort = $tokens[$j + 1].ToString() }
+                elseif ($tk -match '^--port=(.*)$') { $existingPort = $Matches[1] }
+                elseif ($tk -ieq '--http' -and ($j + 1) -lt $tokens.Count) { $existingHttp = $tokens[$j + 1].ToString() }
+                elseif ($tk -match '^--http=(.*)$') { $existingHttp = $Matches[1] }
+            }
+
             $matchesExpected = ($existingExe -eq $expectedExe) -and
                                ($null -ne $existingDir) -and
                                ($existingDir -eq $expectedDir)
@@ -362,7 +374,14 @@ try {
         $existingAccount = Normalize-Account $existingStartName
         $userMatches = ($requestedAccount -eq $existingAccount)
 
-        if ($matchesExpected -and $userMatches) {
+        # F2: expected port/http from the caller (empty $Port means "don't manage port").
+        $portHttpMatches = $true
+        if (-not [string]::IsNullOrWhiteSpace($Port)) {
+            $portHttpMatches = ("$existingPort" -eq "$Port") -and
+                               ([string]::IsNullOrWhiteSpace($HttpServerClass) -or ("$existingHttp" -eq "$HttpServerClass"))
+        }
+
+        if ($matchesExpected -and $userMatches -and $portHttpMatches) {
             @{
                 ok = $true
                 service_name = $ServiceName
@@ -371,6 +390,29 @@ try {
                 existing_path_name = $existingPathName
                 existing_service_account = $existingStartName
                 message = "service '$ServiceName' already installed with matching config (no-op)"
+            } | ConvertTo-Json -Compress -Depth 4
+            exit 0
+        }
+
+        # F2: exe/data/account match but --port/--http drift (the old-CLI bad
+        # state) → repair ImagePath in place rather than forcing an uninstall.
+        if ($matchesExpected -and $userMatches -and (-not $portHttpMatches)) {
+            $repaired = Patch-ImagePath $ServiceName $ZenExePath $normalizedDataDir $Port $HttpServerClass
+            @{
+                ok = $repaired
+                service_name = $ServiceName
+                repaired = $repaired
+                existing_status = "$($existingSvc.Status)"
+                existing_path_name = $existingPathName
+                existing_port = "$existingPort"
+                requested_port = "$Port"
+                message = if ($repaired) {
+                    "service '$ServiceName' ImagePath repaired: pinned --port $Port" +
+                    (if ([string]::IsNullOrWhiteSpace($HttpServerClass)) { '' } else { " --http $HttpServerClass" }) +
+                    " (run `zen service stop` + `start` to take effect)"
+                } else {
+                    "ImagePath repair failed: --port did not persist for service '$ServiceName'"
+                }
             } | ConvertTo-Json -Compress -Depth 4
             exit 0
         }
