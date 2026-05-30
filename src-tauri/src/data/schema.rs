@@ -393,6 +393,12 @@ const MIGRATIONS: &[(&str, &str)] = &[
             ON ini_config_snapshots(machine_id);
         "#,
     ),
+    (
+        "024_machines_ue_runtime_user",
+        r#"
+        ALTER TABLE machines ADD COLUMN ue_runtime_user TEXT;
+        "#,
+    ),
 ];
 
 pub fn migrate(conn: &mut Connection) -> UecmResult<()> {

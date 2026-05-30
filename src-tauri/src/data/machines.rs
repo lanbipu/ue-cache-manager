@@ -171,6 +171,34 @@ pub fn set_ssh_user(db: &Db, id: i64, user: Option<&str>) -> UecmResult<()> {
     Ok(())
 }
 
+/// Returns the Windows username of the account that runs UE on this machine,
+/// or None when unset. Used by `zen enable --global` to construct the
+/// UserEngine.ini absolute path without relying on %APPDATA% expansion in the
+/// uecm-svc SSH session.
+pub fn get_ue_runtime_user(db: &Db, id: i64) -> UecmResult<Option<String>> {
+    let conn = db.lock().unwrap();
+    let user: Option<String> = conn.query_row(
+        "SELECT ue_runtime_user FROM machines WHERE id = ?",
+        params![id],
+        |row| row.get(0),
+    )?;
+    Ok(user)
+}
+
+/// Sets (or clears, with `None`) the per-machine UE runtime Windows username.
+/// Returns `InvalidInput` when no row matched.
+pub fn set_ue_runtime_user(db: &Db, id: i64, user: Option<&str>) -> UecmResult<()> {
+    let conn = db.lock().unwrap();
+    let updated = conn.execute(
+        "UPDATE machines SET ue_runtime_user = ? WHERE id = ?",
+        params![user, id],
+    )?;
+    if updated == 0 {
+        return Err(UecmError::InvalidInput(format!("machine {} not found", id)));
+    }
+    Ok(())
+}
+
 /// Stamps the machine row with `CURRENT_TIMESTAMP` and a fresh status.
 /// Called by `refresh_machine` so the UI online/offline badge reflects truth.
 pub fn mark_seen(db: &Db, id: i64, status: &str) -> UecmResult<()> {
@@ -318,5 +346,30 @@ mod tests {
         let second = find_by_id(&db, id).unwrap().unwrap();
         assert!(second.last_seen_at.is_some());
         assert_eq!(second.status, "offline");
+    }
+
+    #[test]
+    fn ue_runtime_user_defaults_none_and_round_trips() {
+        let db = setup();
+        let id = insert(&db, &Machine::new("R01", "10.0.0.1")).unwrap();
+        assert_eq!(get_ue_runtime_user(&db, id).unwrap(), None);
+        set_ue_runtime_user(&db, id, Some("lanbp")).unwrap();
+        assert_eq!(
+            get_ue_runtime_user(&db, id).unwrap(),
+            Some("lanbp".to_string())
+        );
+        set_ue_runtime_user(&db, id, None).unwrap();
+        assert_eq!(get_ue_runtime_user(&db, id).unwrap(), None);
+    }
+
+    #[test]
+    fn set_ue_runtime_user_returns_error_for_unknown_id() {
+        let db = setup();
+        let result = set_ue_runtime_user(&db, 9999, Some("x"));
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            UecmError::InvalidInput(msg) => assert!(msg.contains("9999")),
+            other => panic!("expected InvalidInput, got {:?}", other),
+        }
     }
 }
