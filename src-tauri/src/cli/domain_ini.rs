@@ -787,6 +787,8 @@ fn scan_cluster(
                 project_roots: &project_roots,
                 env_state,
                 zen_ctx: zen_ctx.as_ref(),
+                user_engine_ini_path: None,
+                machine_id: 0,
             };
             let outcome = ini_scanner::scan_machine(&inputs)?;
             let read_count = outcome.read_count;

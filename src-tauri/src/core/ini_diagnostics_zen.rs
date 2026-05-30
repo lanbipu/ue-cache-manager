@@ -831,6 +831,58 @@ fn path_matches_target_ini(file_path: &str, target: &str) -> bool {
         || path_lower.ends_with(&format!("/{}", target_lower))
 }
 
+/// R019 — warns when both `UserEngine.ini` (global) and at least one project's
+/// `DefaultEngine.ini` contain a `ZenShared` key on the same machine.
+///
+/// UE INI merge order: project `DefaultEngine.ini` overrides user `UserEngine.ini`.
+/// Having ZenShared in both files is redundant and can cause confusion when the
+/// global setting is updated but the project-level override shadows it.
+pub fn evaluate_r019(
+    host: &str,
+    user_engine_ini_path: &str,
+    config_snapshots: &[crate::core::ini_config_extract::ConfigEntry],
+    _machine_id: i64,
+) -> Vec<Finding> {
+    // R019 only fires when a project DefaultEngine.ini also has ZenShared.
+    let project_has_zen_shared = config_snapshots.iter().any(|e| {
+        e.domain == "zen" && e.key_name.eq_ignore_ascii_case("ZenShared")
+    });
+    if !project_has_zen_shared {
+        return vec![];
+    }
+
+    // Read UserEngine.ini for ZenShared (case-insensitive).
+    let section = "InstalledDerivedDataBackendGraph";
+    let user_keys = match crate::core::ini_editor::read_section(host, user_engine_ini_path, section) {
+        Ok(keys) => keys,
+        Err(_) => return vec![], // file absent or unreadable — not an error
+    };
+    let global_has_zen_shared = user_keys.iter().any(|k| k.name.eq_ignore_ascii_case("ZenShared"));
+    if !global_has_zen_shared {
+        return vec![];
+    }
+
+    vec![Finding {
+        rule_id: "R019".to_string(),
+        severity: Severity::Warning,
+        category: crate::core::ini_diagnostics::Category::User,
+        file_path: user_engine_ini_path.to_string(),
+        section: Some(section.to_string()),
+        key_name: Some("ZenShared".to_string()),
+        line_number: None,
+        snippet_before: String::new(),
+        snippet_after: None,
+        recommended_action: RecommendedAction::Manual,
+        recommended_value: None,
+        symptom: "Global ZenShared (UserEngine.ini) and project-level ZenShared both present \
+                  — project-level config takes precedence and may shadow the global setting"
+            .to_string(),
+        rationale: "UE INI merge order: project DefaultEngine.ini overrides user UserEngine.ini. \
+                    Remove one of the two ZenShared entries."
+            .to_string(),
+    }]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

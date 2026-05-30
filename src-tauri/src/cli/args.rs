@@ -1970,9 +1970,9 @@ mod tests {
         ]).unwrap();
         match cli.command {
             Domain::Zen { action: ZenAction::Enable {
-                project_id, machines, upstream_endpoint_id, namespace, yes, dry_run, cred,
+                project_id, machines, upstream_endpoint_id, namespace, yes, dry_run, cred, global: _,
             } } => {
-                assert_eq!(project_id, 7);
+                assert_eq!(project_id, Some(7));
                 assert_eq!(machines, vec![1, 2, 3]);
                 assert_eq!(upstream_endpoint_id, 9);
                 assert_eq!(namespace, "ue.ddc");
@@ -2017,7 +2017,7 @@ mod tests {
             Domain::Zen { action: ZenAction::Disable {
                 project_id, machines, yes, dry_run, ..
             } } => {
-                assert_eq!(project_id, 1);
+                assert_eq!(project_id, Some(1));
                 assert_eq!(machines, vec![1, 2]);
                 assert!(yes);
                 assert!(!dry_run);

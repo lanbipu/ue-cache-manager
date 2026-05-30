@@ -226,6 +226,12 @@ pub struct ScanInputs<'a> {
     /// preserving the original behavior for callers that have no endpoint
     /// state to seed the context.
     pub zen_ctx: Option<&'a ZenRuleContext<'a>>,
+    /// Absolute path to `UserEngine.ini` on the remote host (from
+    /// `machines.ue_runtime_user`). When `Some`, `scan_machine` evaluates
+    /// R019 after the per-file loop. When `None`, R019 is skipped.
+    pub user_engine_ini_path: Option<&'a str>,
+    /// Machine row id for R019 finding attribution. Use 0 when unknown.
+    pub machine_id: i64,
 }
 
 /// Per-file outcome of one scan pass for a single machine.
@@ -279,6 +285,17 @@ pub fn scan_machine(inputs: &ScanInputs) -> UecmResult<ScanOutcome> {
     // single INI file, so run them exactly once per machine.
     if let Some(ctx) = inputs.zen_ctx {
         outcome.findings.extend(evaluate_machine_zen(ctx));
+    }
+    // R019: global (UserEngine.ini) + project-level ZenShared coexistence warning.
+    if let Some(user_ini) = inputs.user_engine_ini_path {
+        outcome.findings.extend(
+            crate::core::ini_diagnostics_zen::evaluate_r019(
+                inputs.host,
+                user_ini,
+                &outcome.config_snapshots,
+                inputs.machine_id,
+            )
+        );
     }
     Ok(outcome)
 }
@@ -741,6 +758,7 @@ mod tests {
         // what `enumerate_project_paths` produces.
         let project_dir = tempfile::tempdir().unwrap();
         let project_root = project_dir.path().to_string_lossy().to_string();
+        std::fs::create_dir_all(project_dir.path().join("Config")).unwrap();
         let default_engine_path = format!("{}\\Config\\DefaultEngine.ini", project_root);
         std::fs::write(
             &default_engine_path,
@@ -760,6 +778,8 @@ mod tests {
             project_roots: &[project_root.clone()],
             env_state: EnvVarState::default(),
             zen_ctx: Some(&ctx),
+            user_engine_ini_path: None,
+            machine_id: 0,
         };
         let outcome = scan_machine(&inputs).unwrap();
         assert!(
@@ -780,6 +800,7 @@ mod tests {
         // accidental "always run zen rules" regression in `scan_machine`.
         let project_dir = tempfile::tempdir().unwrap();
         let project_root = project_dir.path().to_string_lossy().to_string();
+        std::fs::create_dir_all(project_dir.path().join("Config")).unwrap();
         let default_engine_path = format!("{}\\Config\\DefaultEngine.ini", project_root);
         std::fs::write(
             &default_engine_path,
@@ -795,6 +816,8 @@ mod tests {
             project_roots: &[project_root],
             env_state: EnvVarState::default(),
             zen_ctx: None,
+            user_engine_ini_path: None,
+            machine_id: 0,
         };
         let outcome = scan_machine(&inputs).unwrap();
         // None of R012-R018 should appear when zen_ctx is None.
@@ -834,6 +857,7 @@ mod tests {
         // produces, then assert config_snapshots is populated by extract().
         let project_dir = tempfile::tempdir().unwrap();
         let project_root = project_dir.path().to_string_lossy().to_string();
+        std::fs::create_dir_all(project_dir.path().join("Config")).unwrap();
         let default_engine_path = format!("{}\\Config\\DefaultEngine.ini", project_root);
         std::fs::write(
             &default_engine_path,
@@ -849,6 +873,8 @@ mod tests {
             project_roots: &[project_root],
             env_state: EnvVarState::default(),
             zen_ctx: None,
+            user_engine_ini_path: None,
+            machine_id: 0,
         };
         let outcome = scan_machine(&inputs).unwrap();
         assert!(
@@ -877,6 +903,85 @@ mod tests {
         let body = std::fs::read_to_string(&path).unwrap();
         let parsed = parse_ini_contents(&target, &body);
         assert!(parsed.sections.iter().all(|s| s.backend_nodes.is_empty()));
+    }
+
+    #[test]
+    fn scan_machine_emits_r019_when_global_and_project_both_have_zen_shared() {
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+
+        // UserEngine.ini at the root of the temp dir (used directly via path).
+        let user_ini = dir.path().join("UserEngine.ini");
+        std::fs::write(
+            &user_ini,
+            "[InstalledDerivedDataBackendGraph]\nZenShared=(Type=Zen, Host=\"192.168.10.20\", Port=8558, Namespace=\"ue.ddc\")\n",
+        )
+        .unwrap();
+
+        // DefaultEngine.ini at the backslash path enumerate_project_paths produces.
+        // Must create the Config subdirectory first because std::fs::write does
+        // not create intermediate directories.
+        let project_root = dir.path().to_str().unwrap().to_string();
+        let config_dir = dir.path().join("Config");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let default_engine_path = format!("{}\\Config\\DefaultEngine.ini", project_root);
+        std::fs::write(
+            &default_engine_path,
+            "[InstalledDerivedDataBackendGraph]\nZenShared=(Type=Zen, Host=\"192.168.10.20\", Port=8558, Namespace=\"ue.ddc\")\n",
+        )
+        .unwrap();
+
+        let inputs = ScanInputs {
+            host: "127.0.0.1",
+            credential: None,
+            installs: &[],
+            user_profile: "",
+            project_roots: &[project_root],
+            env_state: EnvVarState::default(),
+            zen_ctx: None,
+            user_engine_ini_path: Some(user_ini.to_str().unwrap()),
+            machine_id: 42,
+        };
+
+        let outcome = scan_machine(&inputs).unwrap();
+        assert!(
+            outcome.findings.iter().any(|f| f.rule_id == "R019"),
+            "expected R019, got: {:?}",
+            outcome.findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn scan_machine_does_not_emit_r019_when_only_project_has_zen_shared() {
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+
+        let project_root = dir.path().to_str().unwrap().to_string();
+        let config_dir = dir.path().join("Config");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let default_engine_path = format!("{}\\Config\\DefaultEngine.ini", project_root);
+        std::fs::write(
+            &default_engine_path,
+            "[InstalledDerivedDataBackendGraph]\nZenShared=(Type=Zen, Host=\"192.168.10.20\", Port=8558, Namespace=\"ue.ddc\")\n",
+        )
+        .unwrap();
+
+        let inputs = ScanInputs {
+            host: "127.0.0.1",
+            credential: None,
+            installs: &[],
+            user_profile: "",
+            project_roots: &[project_root],
+            env_state: EnvVarState::default(),
+            zen_ctx: None,
+            user_engine_ini_path: None,
+            machine_id: 42,
+        };
+        let outcome = scan_machine(&inputs).unwrap();
+        assert!(
+            !outcome.findings.iter().any(|f| f.rule_id == "R019"),
+            "R019 must not fire when user_engine_ini_path is None"
+        );
     }
 }
 
