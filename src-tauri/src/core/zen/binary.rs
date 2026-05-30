@@ -312,6 +312,17 @@ pub fn persist(
     Ok(report)
 }
 
+/// True when a detect-binary run produced nothing usable: it saw intree
+/// candidates but skipped them all (no `machine_ue_installs` row → operator
+/// forgot `machine refresh`) AND wrote no install-dir record either. Callers
+/// turn this into a per-machine failure so the empty result never looks like
+/// success and silently breaks the downstream service install.
+pub fn detect_yielded_nothing(detection: &BinaryDetection, report: &PersistReport) -> bool {
+    !report.install_record_written
+        && !detection.intree.is_empty()
+        && report.intree_records_written == 0
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -916,5 +927,42 @@ mod tests {
             !report.install_record_cleared,
             "second consecutive no-install run is idempotent — nothing to clear"
         );
+    }
+
+    #[test]
+    fn detect_yielded_nothing_true_when_intree_all_skipped_and_no_install() {
+        let det = BinaryDetection {
+            install: None,
+            intree: vec![IntreeBinaries {
+                ue_version_major: 5, ue_version_minor: 7,
+                ue_install_path: "D:\\UE_5.7".into(),
+                zen_cli_path: Some("D:\\UE_5.7\\Engine\\Binaries\\Win64\\zen.exe".into()),
+                zen_cli_version: Some("5.7.6".into()), zen_cli_sha256: Some("c0ffee".into()),
+                zenserver_path: None, zenserver_version: None, zenserver_sha256: None,
+            }],
+            warnings: vec![],
+        };
+        let report = PersistReport { install_record_written: false, intree_records_written: 0, ..Default::default() };
+        assert!(detect_yielded_nothing(&det, &report));
+    }
+
+    #[test]
+    fn detect_yielded_nothing_false_when_install_or_intree_written_or_empty() {
+        let intree = vec![IntreeBinaries {
+            ue_version_major: 5, ue_version_minor: 7, ue_install_path: "D:\\UE_5.7".into(),
+            zen_cli_path: None, zen_cli_version: None, zen_cli_sha256: None,
+            zenserver_path: None, zenserver_version: None, zenserver_sha256: None,
+        }];
+        // install record written → false
+        let d1 = BinaryDetection { install: None, intree: intree.clone(), warnings: vec![] };
+        let r1 = PersistReport { install_record_written: true, intree_records_written: 0, ..Default::default() };
+        assert!(!detect_yielded_nothing(&d1, &r1));
+        // some intree written → false
+        let r2 = PersistReport { install_record_written: false, intree_records_written: 1, ..Default::default() };
+        assert!(!detect_yielded_nothing(&d1, &r2));
+        // no intree candidates at all (empty machine) → false
+        let d3 = BinaryDetection { install: None, intree: vec![], warnings: vec![] };
+        let r3 = PersistReport { install_record_written: false, intree_records_written: 0, ..Default::default() };
+        assert!(!detect_yielded_nothing(&d3, &r3));
     }
 }
