@@ -38,9 +38,9 @@ zen service status / zen probe / zen cache-stats / health run
 | # | 修复 | gap | 改哪里 | 怎么改 |
 |---|---|---|---|---|
 | **F1** | service install/uninstall 加 intree fallback | ZEN-DEPLOY-1 | `cli/domain_zen.rs:1257,1429` + `commands/zen.rs:1046,1160`（**4 处各加，不抽共享函数**） | install-dir binary 查不到时 `.or_else` 取 `machine_ue_installs` 最高版本的 `zen_cli_intree_path` |
-| **F2** | `--port`/`--http` 持久化进 SCM ImagePath | G2 | `ps-scripts/zen-service-install.ps1` + 两条 Rust service-install 路径 | Rust 传 `Port`/`HttpServerClass`；PS 在 zen 装完 + sc 账户 patch 后，注册表直写 ImagePath 注入 `--port`/`--http` |
+| **F2** | `--port`/`--http` 持久化进 SCM ImagePath（含**已存在服务的就地修复**） | G2 | `ps-scripts/zen-service-install.ps1` + 两条 Rust service-install 路径 | Rust 传 `Port`/`HttpServerClass`；PS 全新安装时注册表直写 ImagePath 注入 `--port`/`--http`；**且对已存在服务做 port/http drift 检测 + 就地 repair**（见 §3 F2，修 Codex review #1） |
 | **F3** | detect-binary 写不出 intree 记录时 fail-fast | GAP-ZEN-DETECT-02 | `core/zen/binary.rs` + `cli/domain_zen.rs` detect 路径 | 检测到 intree 候选却因 `machine_ue_installs` 空全部 skip、且 install record 也没写时，返回带指引的 Err（先跑 `machine refresh`） |
-| **F4** | sponsor 模式 zenserver 占端口的优雅关停 | ZEN-DEPLOY-2 / G3 | 新 `zen sponsor-down` 命令 + 新 PS 脚本 | 从 endpoint 推 port/machine，用该机最高版本 intree zen.exe 跑 `zen.exe down --port`；destructive 需 `--yes` |
+| **F4** | sponsor 模式 zenserver 占端口的优雅关停（含**进程身份守卫**） | ZEN-DEPLOY-2 / G3 | 新 `zen sponsor-down` 命令 + 新 PS 脚本 | 从 endpoint 推 port/machine；**先解析监听该端口的 PID 并比对是否为 `ZenServer` SCM 服务进程——是则 refuse**，否则用该机最高版本 intree zen.exe 跑 `zen.exe down --port`；destructive 需 `--yes`，dry-run/apply 输出被停进程身份（修 Codex review #2） |
 
 ### 🟡 B 组 · 增强（A 组落地后非阻断）
 
@@ -70,14 +70,22 @@ zen service status / zen probe / zen cache-stats / health run
 
 仍找不到才报原 `has no zen.exe (zen_cli) recorded — run detect-binary first` 错。**不抽共享函数**（贴合现有重复风格 + surgical），但 4 处 fallback 表达式保持一字不差，便于将来一致修改。
 
-### F2 — port/http 持久化进 ImagePath
+### F2 — port/http 持久化进 ImagePath（含已存在服务的就地修复）
 
+- **原因**：zen 自身 `service install` 不持久化 `--port`/`--http`（只写 `--data-dir` 进 SCM PathName），导致服务启动时若 8558 处于 TIME_WAIT 就 relocate 到 base+100（8658）。注册表直写注入端口后，服务稳定起在 8558。
 - **Rust（两条 service-install 路径：`cli/domain_zen.rs` 的 install + `commands/zen.rs` 的 install）**：构建 PS sidecar JSON args 时加 `"Port": ep.declared_port, "HttpServerClass": ep.httpserverclass`。
 - **PS `zen-service-install.ps1`**：
   1. 参数段读取 `$Port` / `$HttpServerClass`（缺省空串）。
-  2. zen `service install` 完成 + `sc.exe config obj=`（账户 patch）之后，用 `Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Services\<ServiceName> ImagePath` 直写：`"<exePart>" --data-dir <normalizedDataDir> --port <Port> --http <HttpServerClass>`。
-  3. 保留空格路径的引号（`<exePart>` 带引号），与现有 `--data-dir` 引号处理一致。
-- **原因**：zen 自身 `service install` 不持久化 `--port`/`--http`（只写 `--data-dir` 进 SCM PathName），导致服务启动时若 8558 处于 TIME_WAIT 就 relocate 到 base+100（8658）。注册表直写注入端口后，服务稳定起在 8558。
+  2. 抽局部 helper `Patch-ImagePath`：把 ImagePath 直写为 `"<exePart>" --data-dir <normalizedDataDir> --port <Port> --http <HttpServerClass>`（保留空格路径引号，与现有 `--data-dir` 处理一致），写完**回读 verify** 含 `--port`。
+  3. **全新安装路径**：zen `service install` + `sc.exe config obj=`（账户 patch）之后调 `Patch-ImagePath`。
+
+- **⚠️ 已存在服务的 drift 修复（修 Codex adversarial review #1）**：
+  当前脚本 `zen-service-install.ps1:237-378` 对已存在服务只比对 **exe + data-dir + account**（`$matchesExpected`，347 行），三者匹配即 `ok=true, already_installed, exit 0` **提前返回**，底部 patch 永远到不了。这正是真实升级路径——旧 CLI 装的服务有 `--data-dir` 没 `--port`、exe/data/account 全同 → 修好的 CLI 会**报成功却不改注册表**，服务仍 relocate 到 8658。
+  改法：把现有 token-parse 扩展到解析 `--port` / `--http`，把已存在服务判定改成三分支：
+  - exe/data/account **且** port/http 都匹配 → 真 no-op（`already_installed=true`）。
+  - exe/data/account 匹配 **但** port/http 缺失或不同 → 调 `Patch-ImagePath` **就地修复 + verify**，返回 `ok=true, repaired=true`，message 注明「ImagePath 已补 `--port`/`--http`，需 `zen service stop && start` 重启生效」（ImagePath 只影响下次启动）。
+  - exe / data / account 不同 → 维持现有 refuse（指向 `zen-service-uninstall.ps1`）。
+  就地 repair 不强制 uninstall：exe/data/account 都没变，只补 runtime flag，是良性原地修。
 
 ### F3 — detect-binary fail-fast
 
@@ -87,14 +95,20 @@ zen service status / zen probe / zen cache-stats / health run
 - **`--all` 语义**：保持按机器粒度 —— 单机 fail-fast 不阻断其余机器，整体退出码反映 partial failure（沿用现有 OperationFailed 模式）。
 - ⚠️ **测试债**：`binary.rs:709` 现有那条断言 no-row 情况下 `intree_records_written == 0` 的测试要改成断言新的 Err 行为。
 
-### F4 — `zen sponsor-down` 新命令
+### F4 — `zen sponsor-down` 新命令（含进程身份守卫）
 
 - **CLI 形状**：`zen sponsor-down --endpoint-id <id> --yes`（destructive，支持 `--dry-run` 预览）。
-- **行为**：从 endpoint 行取 `declared_port` + `machine_id` → 用该机 `machine_ue_installs` 最高版本的 intree zen.exe → 跑 `zen.exe down --port <declared_port>`（关掉 editor sponsor 拉起、占用该端口的 zenserver）。
-- **新 PS 脚本 `ps-scripts/zen-sponsor-down.ps1`**：参数 `-ZenExePath`、`-Port`；调 `& $ZenExePath down --port $Port`；输出标准 envelope（`ok` / `message` / zen 输出）。幂等：端口上无 sponsor 时返回 ok + "nothing attached"。
-- **为何独立、不塞进 `service start`**：自动 kill 别人正在用的 editor zenserver 风险太大；显式命令可审计、可控。runbook 写明：`service start` 报端口占用 → `sponsor-down` → retry。
+- **行为**：从 endpoint 行取 `declared_port` + `machine_id` → 用该机 `machine_ue_installs` 最高版本的 intree zen.exe → （通过身份守卫后）跑 `zen.exe down --port <declared_port>`（关掉 editor sponsor 拉起、占用该端口的 zenserver）。
+- **新 PS 脚本 `ps-scripts/zen-sponsor-down.ps1`**：参数 `-ZenExePath`、`-Port`、`-ServiceName`（默认 `ZenServer`）、`-DryRun`。
+- **⚠️ 进程身份守卫（修 Codex adversarial review #2）**：`zen.exe down --port` 不区分端口上是 editor sponsor 还是已装的 `ZenServer` 服务/别的 upstream，裸跑会误停生产进程。脚本先做廉价但精确的判定：
+  1. `Get-NetTCPConnection -LocalPort $Port -State Listen` 取 `OwningProcess` PID；无监听 → 返回 `ok=true, nothing_attached=true`（幂等）。
+  2. 取 `ZenServer` SCM 服务的 `ProcessId`（`Get-CimInstance Win32_Service -Filter "Name='$ServiceName'"`，仅 Running 时有值）。**若监听 PID == 该服务 PID → refuse**（`ok=false`，message：「端口 $Port 由已安装的 `$ServiceName` 服务提供，不是 editor sponsor；请用 `zen service stop`」）。
+  3. 否则解析该 PID 的进程 path 用于报告（理应是某 UE install 下的 `zenserver.exe`）；非 zenserver 进程 → refuse 并报出实际进程，避免误杀无关程序。
+  4. 通过守卫后才 `& $ZenExePath down --port $Port`。
+- **dry-run / apply 输出都带身份**：`listener_pid` / `listener_path` / `is_installed_service`（bool），让操作员在动手前看清要停的是谁。
+- **为何独立、不塞进 `service start`**：自动 kill 别人正在用的 editor zenserver 风险太大；显式命令 + 身份守卫可审计、可控。runbook 写明：`service start` 报端口占用 → `sponsor-down`（守卫确认非服务后）→ retry。
 - **args.rs**：`ZenAction` 加 `SponsorDown { endpoint_id, yes, dry_run, #[command(flatten)] cred }` 变体。
-- **注意**：与现有 `zen service stop`（`zen-down.ps1`，按 `-ServiceName` 停 SCM 服务）是两回事 —— 后者停 UECM 装的服务，前者按端口关 editor sponsor 进程。
+- **注意**：与现有 `zen service stop`（`zen-down.ps1`，按 `-ServiceName` 停 SCM 服务）是两回事 —— 后者停 UECM 装的服务，前者按端口关 editor sponsor 进程；守卫第 2 步正是为了把这两者区分开。
 
 ### F5 — detect-binary 跨用户发现（B 组）
 
@@ -114,9 +128,9 @@ zen service status / zen probe / zen cache-stats / health run
 ### Rust 单测（mac：`cd src-tauri && cargo test --lib`）
 
 - **F1**：机器无 `machine_zen_install` 行、`machine_ue_installs` 有 5.2 / 5.8 两行带 intree path → 断言 resolver 选 **5.8** 的 `zen_cli_intree_path`；两者皆无 → 断言仍报 `has no zen.exe`。覆盖 install + uninstall 两类入口。
-- **F2**：断言传给 PS sidecar 的 JSON args 含 `Port`（= `ep.declared_port`）+ `HttpServerClass`（= `ep.httpserverclass`）。ImagePath 注册表注入本身归 lanPC 验。
+- **F2**：断言传给 PS sidecar 的 JSON args 含 `Port`（= `ep.declared_port`）+ `HttpServerClass`（= `ep.httpserverclass`）。ImagePath 注册表注入 + 已存在服务 drift 修复本身是 PS 行为，归 lanPC 验（见 runbook 6/6b）；PS 层若可在 mac 用 pwsh 跑纯函数（token-parse + 三分支判定）则补 Pester/单元断言，否则纯 lanPC。
 - **F3**：`persist()` 在「有 intree 候选 + `machine_ue_installs` 空」时返回 Err（信息含 `machine refresh`）；无 UE 的空机器仍 `Ok`。改 `binary.rs:709` 既有测试。
-- **F4**：`sponsor-down` 参数解析；endpoint→port/machine 推导；解析出最高版本 intree zen.exe；组装 `zen.exe down --port <P>`；`--yes`/`--dry-run` destructive 守卫。
+- **F4**：`sponsor-down` 参数解析；endpoint→port/machine 推导；解析出最高版本 intree zen.exe；组装 `zen.exe down --port <P>`；`--yes`/`--dry-run` destructive 守卫。**身份守卫判定**（监听 PID == 服务 PID → refuse；非 zenserver → refuse；standalone sponsor → proceed）尽量抽成可在 mac 单测的纯决策函数（喂入 listener PID / service PID / process path），SCM/NetTCP 取数留 lanPC。
 - **F6**：dest-path 自动推导逻辑。
 - 全量回归：`cargo test --lib` 全绿（基线 ~997–1014 pass）。
 
@@ -129,9 +143,11 @@ zen service status / zen probe / zen cache-stats / health run
 3. `zen detect-binary --machine 13` → intree 记录已写。
 4. `zen register --machine 13 --role shared_upstream --declared-port 8558 --data-dir F:\Epic\DDC\Zen`。
 5. `zen urlacl add --endpoint-id <id> --principal 'NT SERVICE\ZenServer' --yes`。
-6. `zen service install --endpoint-id <id> --yes` → `sc qc ZenServer` 验 ImagePath 含 `--port 8558 --http asio`（**F2**）。
-7. 若 `zen service start` 报端口被占 → `zen sponsor-down --endpoint-id <id> --yes`（**F4**）→ 再 start。
-8. `zen service start` → zenserver 日志 / `zen probe` 验 `effective_port: 8558`（**不是 8658**）。
+6. `zen service install --endpoint-id <id> --yes` → `sc qc ZenServer` 验 ImagePath 含 `--port 8558 --http asio`（**F2** 全新安装路径）。
+6b. **F2 真实升级反例**（关键）：先用一个只有 `--data-dir` 没 `--port` 的旧 ImagePath 造出"坏服务"（或直接拿 lanPC 现存旧服务），再跑 `zen service install --endpoint-id <id> --yes` → 期望返回 `repaired=true` 且 `sc qc` 显示 ImagePath **已补** `--port 8558 --http asio`（而不是 `already_installed` no-op 静默放过）。
+7. **F4 守卫反例**：在 `ZenServer` 服务正跑在 8558 时跑 `zen sponsor-down --endpoint-id <id> --dry-run` → 期望 **refuse**（提示这是已安装服务、该用 `zen service stop`），且输出含 `listener_pid` / `is_installed_service=true`。
+7b. 若 `zen service start` 报端口被占（sponsor 占用、服务未起）→ `zen sponsor-down --endpoint-id <id> --dry-run` 看清身份（`is_installed_service=false`）→ `--yes` 关停 → 再 start。
+8. `zen service start` → zenserver 日志 / `zen probe` 验 `effective_port: 8558`（**不是 8658**）；停服后重启再验端口稳定（F2 重启生效）。
 9. `zen cache-stats` / `health run --machine-ids 13` 收尾。
 
 ---
@@ -153,3 +169,12 @@ A 组（F1–F4）跑通 lanPC E2E 后即可合 main；B 组可后续追加。
 - 不碰 onboarding 域（假设目标节点已 SSH 纳管好）。
 - 不做 unrelated 重构（不抽共享 helper，不动相邻无关代码）。
 - PS sidecar 改动遵守仓库既有约定（envelope 输出格式、`Out-String`、空格路径引号处理）。
+
+## 7. 修订记录
+
+### rev1 — Codex adversarial review（2026-05-30）
+
+两条 high finding，均经读源码核实成立后采纳：
+
+- **#1（采纳，扩大 F2）**：原 F2 只在「全新安装」末尾 patch ImagePath，但 `zen-service-install.ps1:237-378` 对已存在服务只比 exe+data+account、匹配即 no-op exit 0 提前返回——旧 CLI 装的"有 data-dir 没 port"坏服务在真实升级路径上会被静默放过，修了等于没修。→ F2 扩展为对已存在服务做 port/http drift 检测 + 就地 repair（exe/data/account 同、仅 port/http 缺失/不同时原地补 ImagePath 而非强制 uninstall）。补 runbook 步骤 6b。
+- **#2（采纳，裁剪版，加固 F4）**：原 F4 裸跑 `zen.exe down --port` 不分辨端口上是 sponsor 还是已装的 `ZenServer` 服务/别的 upstream，可能误停生产进程。→ F4 加进程身份守卫：解析监听 PID，命中 `ZenServer` 服务 PID 则 refuse（该用 `zen service stop`），非 zenserver 进程也 refuse，并在 dry-run/apply 输出被停进程身份。**裁剪**：只做「listener PID vs 服务 PID」+ 进程 path 报告这类廉价高价值判定，不做 Codex 建议的完整 owner/lockfile 取证（YAGNI）。补 runbook 步骤 7（守卫反例）。
