@@ -52,8 +52,18 @@ try {
         exit 0
     }
 
-    # 3. Sanity: the listener should be a zenserver.exe.
-    if ($null -ne $listenerPath -and $listenerPath -notmatch 'zenserver\.exe$') {
+    # 3. Identity could not be confirmed (path unreadable / process gone) → fail-closed.
+    if ($null -eq $listenerPath) {
+        @{
+            ok=$false; refused=$true; path_unresolved=$true; is_installed_service=$false
+            listener_pid=$listenerPid
+            message="cannot verify process on port $Port (pid $listenerPid): path unresolved; refusing to shut down an unidentified listener"
+        } | ConvertTo-Json -Compress -Depth 4
+        exit 0
+    }
+
+    # 4. Sanity: the listener should be a zenserver.exe.
+    if ($listenerPath -notmatch 'zenserver\.exe$') {
         @{
             ok=$false; refused=$true; is_installed_service=$false
             listener_pid=$listenerPid; listener_path=$listenerPath
@@ -62,7 +72,7 @@ try {
         exit 0
     }
 
-    # 4. dry-run: report identity, do not stop.
+    # 5. dry-run: report identity, do not stop.
     if ($DryRun) {
         @{
             ok=$true; would_stop=$true; is_installed_service=$false
@@ -72,7 +82,7 @@ try {
         exit 0
     }
 
-    # 5. shut it down.
+    # 6. shut it down.
     $out = (& $ZenExePath down --port $Port 2>&1 | Out-String)
     $code = [int]$LASTEXITCODE
     @{
