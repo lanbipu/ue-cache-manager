@@ -67,6 +67,8 @@ $ServiceName = if ($p.ServiceName) { $p.ServiceName } else { 'ZenServer' }
 $DataDir = $p.DataDir
 $ServiceUser = if ($p.ServiceUser) { $p.ServiceUser } else { '' }
 $ServicePassword = if ($p.ServicePassword) { $p.ServicePassword } else { '' }
+$Port = if ($p.Port) { [string]$p.Port } else { '' }
+$HttpServerClass = if ($p.HttpServerClass) { [string]$p.HttpServerClass } else { '' }
 
 # ----------------------------------------------------------------------------
 # Helpers (script scope so both the idempotency path and the post-install
@@ -107,6 +109,22 @@ function Get-ServiceAccount([string]$Name) {
             -Name 'ObjectName' -ErrorAction Stop).ObjectName
     } catch { }
     return $null
+}
+
+# F2: zen `service install` records only `--data-dir` into the SCM PathName;
+# `--port` / `--http` are dropped, so the service relocates off the declared
+# port (8558 -> 8658) when the port is briefly in TIME_WAIT. Directly rewrite
+# ImagePath to pin the runtime flags. Returns $true when ImagePath now contains
+# `--port`. No-op (returns $true) when $Port is empty.
+function Patch-ImagePath([string]$Name, [string]$ExePath, [string]$DataDir, [string]$Port, [string]$Http) {
+    if ([string]::IsNullOrWhiteSpace($Port)) { return $true }
+    $exePart = '"' + $ExePath + '"'
+    $newBinpath = "$exePart --data-dir `"$DataDir`" --port $Port"
+    if (-not [string]::IsNullOrWhiteSpace($Http)) { $newBinpath += " --http $Http" }
+    $regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$Name"
+    Set-ItemProperty -LiteralPath $regPath -Name 'ImagePath' -Value $newBinpath -ErrorAction Stop
+    $after = (Get-ItemProperty -LiteralPath $regPath -Name 'ImagePath' -ErrorAction Stop).ImagePath
+    return ($after -match '(^|\s)--port\s')
 }
 
 # ----------------------------------------------------------------------------
@@ -527,6 +545,19 @@ try {
         $scAccount = $actualStartName
     }
 
+    # F2: pin --port/--http into ImagePath now that the fresh install + any
+    # sc.exe account patch have landed.
+    $portPatched = Patch-ImagePath $ServiceName $ZenExePath $normalizedDataDir $Port $HttpServerClass
+    if (-not $portPatched) {
+        @{
+            ok = $false
+            message = "ImagePath patch failed: --port did not persist for service '$ServiceName'"
+            service_name = $ServiceName
+            zen_exit_code = $exitCode
+        } | ConvertTo-Json -Compress -Depth 4
+        exit 0
+    }
+
     $payload = @{
         ok = $true
         service_name = $ServiceName
@@ -535,6 +566,7 @@ try {
         service_account = $scAccount
         sc_exit_code = $scExit
         message = $combined.Trim()
+        image_path_port_pinned = $portPatched
     }
     $payload | ConvertTo-Json -Compress -Depth 4
 }
