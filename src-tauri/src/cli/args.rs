@@ -297,6 +297,16 @@ pub enum MachineAction {
     },
     /// Rename a machine.
     Rename { id: i64, hostname: String },
+    /// Record the Windows username that runs UE on this machine.
+    /// Used by `zen enable --global` to resolve UserEngine.ini path.
+    /// Pass empty string to clear.
+    SetUeUser {
+        #[arg(long, value_name = "ID")]
+        machine: i64,
+        /// Windows username (e.g. `lanbp`). Empty string clears the value.
+        #[arg(long, value_name = "USERNAME")]
+        ue_user: String,
+    },
     /// Deep scan a set of machines: refresh (UE/GPU) + INI scan + health, per machine.
     /// SSH-unreachable machines are skipped (re-onboard via UECM-Bootstrap.cmd) and the
     /// batch continues.

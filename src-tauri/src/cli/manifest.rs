@@ -138,6 +138,7 @@ pub fn operation_id_for(cmd: &Domain) -> &'static str {
             MachineAction::Detail { .. } => "machine.detail",
             MachineAction::Delete { .. } => "machine.delete",
             MachineAction::Rename { .. } => "machine.rename",
+            MachineAction::SetUeUser { .. } => "machine.set_ue_user",
             MachineAction::DeepScan { .. } => "machine.deep_scan",
             MachineAction::Authorize { .. } => "machine.authorize",
             // 不加 `_ =>`：保持穷尽，新增变体编译器强制来补。

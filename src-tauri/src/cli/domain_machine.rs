@@ -25,6 +25,7 @@ pub fn handle(ctx: &mut Ctx<'_>, action: MachineAction) -> UecmResult<()> {
             delete(ctx, id, machine_ids, all, yes, dry_run)
         }
         MachineAction::Rename { id, hostname } => rename(ctx, id, hostname),
+        MachineAction::SetUeUser { machine, ue_user } => set_ue_user(ctx, machine, &ue_user),
         MachineAction::DeepScan { machine_ids, all, cred } => {
             let exec = SshExecutor::from_config()?;
             deep_scan(ctx, machine_ids, all, &cred, &exec)
@@ -219,6 +220,19 @@ fn rename(ctx: &mut Ctx<'_>, id: i64, hostname: String) -> UecmResult<()> {
         "hostname": hostname,
     });
     ctx.emitter.emit_event(&Event::Completed { summary }).ok();
+    Ok(())
+}
+
+fn set_ue_user(ctx: &mut Ctx<'_>, machine_id: i64, ue_user: &str) -> UecmResult<()> {
+    let db = ctx.require_db()?;
+    let user_opt: Option<&str> = if ue_user.is_empty() { None } else { Some(ue_user) };
+    machines::set_ue_runtime_user(db, machine_id, user_opt)?;
+    let doc = serde_json::json!({
+        "ok": true,
+        "machine_id": machine_id,
+        "ue_runtime_user": ue_user,
+    });
+    ctx.emitter.emit_result(&doc).ok();
     Ok(())
 }
 
