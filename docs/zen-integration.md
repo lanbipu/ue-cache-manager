@@ -55,6 +55,20 @@ Source-of-truth references:
 All commands are agent-friendly via `--json`. Destructive operations require
 `--yes` or `--dry-run`.
 
+### 2.0 Per-machine UE runtime user
+
+```
+uecm-cli machine set-ue-user --machine ID --ue-user USERNAME
+uecm-cli machine set-ue-user --machine ID --ue-user ""   # clear
+```
+
+Sets the Windows username that runs UE on the target machine. Required before
+`zen enable --global` can resolve the `UserEngine.ini` path. The username is
+stored in `machines.ue_runtime_user` (nullable TEXT) and is never used for
+authentication — it only affects INI path construction.
+
+Path resolved: `C:\Users\<ue_runtime_user>\AppData\Roaming\Unreal Engine\Engine\Config\UserEngine.ini`
+
 ### 2.1 Endpoint registry
 
 ```
@@ -127,6 +141,8 @@ plain re-register loops on the no-op path).
 
 ### 2.4 Project enable / disable
 
+**Project-level mode (per-project config via `DefaultEngine.ini`):**
+
 ```
 uecm-cli zen enable  --project-id ID --machines M1,M2,...
                      --upstream-endpoint-id E
@@ -154,6 +170,29 @@ fan-out. The exit code reflects whether all machines succeeded.
 `disable` is **narrow** — removes only the ZenShared key, does NOT
 auto-restore legacy SMB / Pak. The outcome always carries a warning to
 this effect.
+
+**Global mode (all-project config via `UserEngine.ini`):**
+
+```
+uecm-cli zen enable --global \
+  --machines M1,M2,... \
+  --upstream-endpoint-id E \
+  [--namespace ue.ddc] \
+  --cred-alias ALIAS [--yes] [--dry-run]
+
+uecm-cli zen disable --global \
+  --machines M1,M2,... \
+  --cred-alias ALIAS [--yes] [--dry-run]
+```
+
+`--global` writes `ZenShared` to each machine's `UserEngine.ini` instead of a
+specific project's `DefaultEngine.ini`. This applies to **all** UE 5.4+ projects
+for that Windows user without per-project configuration.
+
+Pre-flight: every `--machines` target must have `ue_runtime_user` set (see §2.0).
+`--global` and `--project-id` are mutually exclusive.
+
+`UserEngine.ini` is created if absent (`CreateIfMissing` transport flag).
 
 ### 2.5 Backend routing for ddc commands
 
@@ -216,6 +255,7 @@ least one zen endpoint registered. No flag needed.
 | R016 | warning  | Install-path `zenserver.exe` SHA256 differs from the locked baseline |
 | R017 | warning  | Legacy `Pak=` / `CompressedPak=` keys still present alongside ZenShared |
 | R018 | warning  | This machine's `zenserver_build_version` is the minority in a cluster (≥3 machines, strict >50% majority) |
+| R026 | warning  | Global ZenShared (UserEngine.ini) and project-level ZenShared both present on same machine — project config takes precedence and may shadow the global setting |
 
 InTree (per-UE-install) zenserver drift is logged via `tracing` but does NOT
 produce a finding — Plan §M4 T4.3 explicitly treats InTree as informational.
