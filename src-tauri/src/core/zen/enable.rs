@@ -522,6 +522,163 @@ fn compute_enable_diff(
     }
 }
 
+/// Apply ZenShared upstream config to a machine's global `UserEngine.ini`.
+///
+/// Identical to [`enable_project`] except:
+/// 1. A missing `UserEngine.ini` is treated as an empty file rather than an
+///    error — the file (and its parent directory) are created by `set_key_create`.
+/// 2. The ZenShared key is written via [`crate::core::ini_editor::set_key_create`]
+///    instead of [`crate::core::ini_editor::set_key`].
+pub fn enable_global(
+    host: &str,
+    ini_path: &str,
+    rules: &ResolvedRules,
+    master: &ClusterMaster,
+) -> UecmResult<EnableOutcome> {
+    let enable_rule = &rules.rules.enable_zen_shared;
+    let smb_rule = &rules.rules.disable_legacy_smb_shared;
+    let pak_rule = &rules.rules.disable_legacy_pak;
+
+    let section = &enable_rule.section;
+    let smb_section = smb_rule.section.as_str();
+    let pak_section = pak_rule.section.as_str();
+
+    let desired_value = apply_value_template(&enable_rule.value_template, master)?;
+
+    // For global enable, a missing file is not an error — treat it as empty.
+    let mut section_cache: std::collections::HashMap<String, Vec<IniKey>> =
+        std::collections::HashMap::new();
+    for sec in [section.as_str(), smb_section, pak_section] {
+        if section_cache.contains_key(sec) {
+            continue;
+        }
+        let rows = read_section(host, ini_path, sec).unwrap_or_default();
+        section_cache.insert(sec.to_string(), rows);
+    }
+    let zen_section_keys = section_cache.get(section.as_str()).cloned().unwrap_or_default();
+    let smb_section_keys = section_cache.get(smb_section).cloned().unwrap_or_default();
+    let pak_section_keys = section_cache.get(pak_section).cloned().unwrap_or_default();
+
+    let diff = compute_enable_diff(
+        &zen_section_keys,
+        section,
+        &enable_rule.key,
+        &desired_value,
+        &smb_section_keys,
+        &smb_rule.key,
+        smb_section,
+        &pak_section_keys,
+        &pak_rule.keys,
+        pak_section,
+    );
+
+    let env_cleanup_planned: Vec<EnvCleanupRequest> = smb_rule
+        .env_cleanup
+        .iter()
+        .map(|e| EnvCleanupRequest {
+            var: e.var.clone(),
+            scopes: e.scopes.clone(),
+        })
+        .collect();
+
+    let mut warnings = rules.warnings.clone();
+
+    if diff.is_noop() {
+        return Ok(EnableOutcome {
+            changed: false,
+            ini_file: ini_path.to_string(),
+            backups: Vec::new(),
+            env_cleanup_planned,
+            keys_set: Vec::new(),
+            keys_removed: Vec::new(),
+            warnings,
+        });
+    }
+
+    let mut backups = Vec::new();
+    let mut keys_set = Vec::new();
+    let mut keys_removed = Vec::new();
+
+    if let Some(rec) = diff.set_zen_shared.clone() {
+        let backup = crate::core::ini_editor::set_key_create(
+            host,
+            ini_path,
+            section,
+            &enable_rule.key,
+            &desired_value,
+        )
+        .map_err(|e| {
+            UecmError::OperationFailed(format!(
+                "enable_global: set {}={} in [{}] failed: {}",
+                enable_rule.key, desired_value, section, e
+            ))
+        })?;
+        backups.push(backup);
+        keys_set.push(rec);
+    }
+
+    for rec in diff.remove_legacy.iter().cloned() {
+        let backup = remove_key(host, ini_path, &rec.section, &rec.key)
+            .map_err(|e| {
+                UecmError::OperationFailed(format!(
+                    "enable_global: remove {} from [{}] failed: {}",
+                    rec.key, rec.section, e
+                ))
+            })?;
+        backups.push(backup);
+        keys_removed.push(rec);
+    }
+
+    if !env_cleanup_planned.is_empty() {
+        warnings.push(format!(
+            "{} env var(s) flagged for cleanup ({}); run the zen env-cleanup PS sidecar (T3.4) to apply",
+            env_cleanup_planned.len(),
+            env_cleanup_planned
+                .iter()
+                .map(|c| c.var.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
+    Ok(EnableOutcome {
+        changed: true,
+        ini_file: ini_path.to_string(),
+        backups,
+        env_cleanup_planned,
+        keys_set,
+        keys_removed,
+        warnings,
+    })
+}
+
+/// Reverse of [`enable_global`] — removes the ZenShared key from
+/// `UserEngine.ini`. If the file does not exist, returns a no-op outcome
+/// with a warning rather than an error.
+pub fn disable_global(
+    host: &str,
+    ini_path: &str,
+    rules: &ResolvedRules,
+) -> UecmResult<DisableOutcome> {
+    match disable_project(host, ini_path, rules) {
+        Ok(out) => Ok(out),
+        Err(UecmError::Io(ref io_err))
+            if io_err.kind() == std::io::ErrorKind::NotFound =>
+        {
+            Ok(DisableOutcome {
+                changed: false,
+                ini_file: ini_path.to_string(),
+                backups: vec![],
+                keys_removed: vec![],
+                warnings: vec![format!(
+                    "UserEngine.ini not found at {ini_path} — nothing to disable (not an error)"
+                )],
+            })
+        }
+        Err(e) => Err(e),
+    }
+}
+
 // --- Tests ----------------------------------------------------------------
 
 #[cfg(test)]
@@ -1079,6 +1236,36 @@ mod tests {
                 .iter()
                 .any(|w| w.contains("narrow disable"))
         );
+    }
+
+    // --- enable_global / disable_global ------------------------------------
+
+    #[test]
+    fn enable_global_creates_file_and_writes_zen_shared() {
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let ini = dir.path().join("UserEngine.ini");
+        let ini_str = ini.to_str().unwrap();
+        assert!(!ini.exists());
+
+        let rules = sample_rules();
+        let master = ClusterMaster {
+            host: "192.168.10.20".to_string(),
+            port: 8558,
+            namespace: "ue.ddc".to_string(),
+        };
+        let out = enable_global("127.0.0.1", ini_str, &rules, &master).unwrap();
+        assert!(out.changed);
+        let contents = std::fs::read_to_string(&ini).unwrap();
+        assert!(contents.contains("ZenShared"));
+    }
+
+    #[test]
+    fn disable_global_is_noop_when_file_absent() {
+        let rules = sample_rules();
+        let out = disable_global("127.0.0.1", "/nonexistent/path/UserEngine.ini", &rules).unwrap();
+        assert!(!out.changed);
+        assert!(out.warnings.iter().any(|w| w.contains("not found")));
     }
 
     #[test]
