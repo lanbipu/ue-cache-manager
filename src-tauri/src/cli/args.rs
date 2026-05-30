@@ -1123,6 +1123,19 @@ pub enum ZenAction {
         #[command(subcommand)]
         action: ZenServiceAction,
     },
+    /// Gracefully shut down an editor sponsor zenserver squatting the
+    /// endpoint's declared port (so `service install`/`start` can take it).
+    /// Refuses if the port is served by the installed ZenServer service.
+    SponsorDown {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
     /// URL ACL (`netsh http`) management for the endpoint.
     Urlacl {
         #[command(subcommand)]
@@ -2182,6 +2195,22 @@ mod tests {
                 assert_eq!(shell, clap_complete::Shell::Bash);
             }
             _ => panic!("expected system completion bash"),
+        }
+    }
+
+    #[test]
+    fn parses_zen_sponsor_down() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "zen", "sponsor-down", "--endpoint-id", "1", "--dry-run",
+        ])
+        .expect("sponsor-down should parse");
+        match cli.command {
+            Domain::Zen { action: ZenAction::SponsorDown { endpoint_id, dry_run, yes, .. } } => {
+                assert_eq!(endpoint_id, 1);
+                assert!(dry_run);
+                assert!(!yes);
+            }
+            _ => panic!("expected ZenAction::SponsorDown"),
         }
     }
 }

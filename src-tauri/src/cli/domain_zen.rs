@@ -189,6 +189,9 @@ pub fn handle(ctx: &mut Ctx<'_>, action: ZenAction) -> UecmResult<()> {
                 service_status(ctx, endpoint_id, &cred)
             }
         },
+        ZenAction::SponsorDown { endpoint_id, yes, dry_run, cred } => {
+            sponsor_down(ctx, endpoint_id, yes, dry_run, &cred)
+        }
         ZenAction::Urlacl { action } => match action {
             ZenUrlaclAction::Add { endpoint_id, principal, yes, dry_run, cred } => {
                 urlacl_add(ctx, endpoint_id, &principal, yes, dry_run, &cred)
@@ -1592,6 +1595,16 @@ fn service_simple(
     });
     ctx.emitter.emit_event(&Event::Completed { summary }).ok();
     Ok(())
+}
+
+fn sponsor_down(
+    _ctx: &mut Ctx<'_>,
+    _endpoint_id: i64,
+    _yes: bool,
+    _dry_run: bool,
+    _cred: &CredentialArgs,
+) -> UecmResult<()> {
+    Err(UecmError::InvalidInput("zen sponsor-down not yet implemented".into()))
 }
 
 fn service_status(

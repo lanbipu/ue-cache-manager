@@ -248,6 +248,7 @@ pub fn operation_id_for(cmd: &Domain) -> &'static str {
             crate::cli::args::ZenAction::ApplyConfig { .. } => "zen.apply_config",
             crate::cli::args::ZenAction::LuaPreview { .. } => "zen.lua_preview",
             crate::cli::args::ZenAction::Service { .. } => "zen.service",
+            crate::cli::args::ZenAction::SponsorDown { .. } => "zen.sponsor_down",
             crate::cli::args::ZenAction::Urlacl { .. } => "zen.urlacl",
             crate::cli::args::ZenAction::Enable { .. } => "zen.enable",
             crate::cli::args::ZenAction::Disable { .. } => "zen.disable",
