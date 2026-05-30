@@ -548,6 +548,24 @@ fn detect_binary(
         match detection_result {
             Ok(detection) => {
                 let report = zen_binary::persist(&db, machine_id, &detection)?;
+                // F3: intree candidates seen but all skipped (no machine_ue_installs
+                // row) and no install record → fail this machine with a fix hint
+                // instead of reporting a hollow success.
+                if zen_binary::detect_yielded_nothing(&detection, &report) {
+                    failed += 1;
+                    ctx.emitter
+                        .emit_event(&Event::ItemCompleted {
+                            item_id: format!("machine:{}", machine_id),
+                            index: idx as i64,
+                            ok: false,
+                            message: Some(format!(
+                                "detect-binary found intree zen.exe but machine_ue_installs is empty \
+                                 for machine id={machine_id}; run `uecm-cli machine refresh {machine_id}` first"
+                            )),
+                        })
+                        .ok();
+                    continue;
+                }
                 ok_count += 1;
                 let summary = serde_json::json!({
                     "machine_id": machine_id,
