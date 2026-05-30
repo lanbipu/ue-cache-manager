@@ -1098,13 +1098,10 @@ pub enum ZenAction {
     ApplyConfig {
         #[arg(long, value_name = "ID")]
         endpoint_id: i64,
-        /// Absolute destination on the remote host (e.g.
-        /// `C:\Users\<svc>\AppData\Local\UnrealEngine\Common\Zen\Install\zen.lua`).
-        /// REQUIRED: T2.9 will derive this from the binary install dir; until
-        /// then the caller must supply the real path so we never silently
-        /// write to a placeholder while zen continues using a different file.
+        /// Absolute zen.lua destination. Optional: when omitted, derived from
+        /// the detected zen install dir on the target (…\Zen\Install\zen.lua).
         #[arg(long, value_name = "PATH")]
-        dest_path: String,
+        dest_path: Option<String>,
         #[arg(long)]
         yes: bool,
         #[arg(long)]
