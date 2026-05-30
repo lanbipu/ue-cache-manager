@@ -100,10 +100,12 @@ Same mutual exclusion and pre-flight as `zen enable --global`. Removes only the 
 | Rationale | UE INI merge order: project `DefaultEngine.ini` overrides user `UserEngine.ini`. Operator likely wants one or the other, not both. |
 | Recommended action | `manual` (UECM does not auto-remove either; operator decides which to keep) |
 
-**Scanner changes:**
+**Scanner implementation details:**
 - R019 is only emitted when the machine has `ue_runtime_user` set (path is known).
 - `UserEngine.ini` path absence → R019 silently skipped for that machine.
 - Scanning `UserEngine.ini` is a new read pass inside the existing `ini scan` flow; no new scan type needed.
+- Section and key matching **must** use `eq_ignore_ascii_case` (reuse `find_section` / `find_key` helpers from `core::ini_diagnostics_zen`). UE INI parsing is case-insensitive in practice; a lowercase `[installedderiveddatabackendgraph]` must still trigger R019.
+- R019 is a **check-only** rule: it reads `UserEngine.ini` for key presence but does **not** persist its values in `ini_config_snapshots`. No raw INI values from `UserEngine.ini` are stored in the DB or returned in structured output.
 
 ---
 
@@ -136,7 +138,17 @@ Same mutual exclusion and pre-flight as `zen enable --global`. Removes only the 
 
 ---
 
-## 5. Out of Scope
+## 5. Codex Adversarial Review Disposition (2026-05-30)
+
+`/codex:adversarial-review` run against working-tree diff. Two findings:
+
+**#1 [high] Raw snapshot values expose sensitive INI fields** — **Not applicable to this spec.** R019 is check-only: it reads `UserEngine.ini` for key *presence* but stores nothing in `ini_config_snapshots`. No raw INI values from `UserEngine.ini` enter the DB or structured output. The broader snapshot-redaction question is a deliberate design decision documented in spec `2026-05-24-cli-scan-display-project-design.md §9/§11` (consciously rejected with home-lab threat-model rationale).
+
+**#2 [medium] `ini_config_extract.rs` uses case-sensitive section/key matching** — **Adopted.** Finding is correct: `DDC_SECTIONS.contains(&sname)` and `sname == INSTALLED_DDBG` are case-sensitive, while `ini_diagnostics_zen.rs`'s `find_section` / `find_key` are already `eq_ignore_ascii_case`. Fix: replaced all comparisons in `ini_config_extract.rs` with case-insensitive equivalents; added 3 regression tests (`extracts_ddc_section_case_insensitive`, `extracts_installed_ddbg_case_insensitive`, `pso_cvar_extraction_case_insensitive`). All 11 `ini_config` tests pass. R019 spec updated to explicitly require `eq_ignore_ascii_case`.
+
+---
+
+## 7. Out of Scope
 
 - Auto-detecting `ue_runtime_user` via SSH (who owns `%LOCALAPPDATA%\UnrealEngine`). Operator sets it manually with `machine set-ue-user`.
 - Writing to engine-level `BaseEngine.ini` (affects all users on the machine, not just one Windows user).
