@@ -1047,6 +1047,14 @@ pub fn zen_service_install(
     let zen_exe = install
         .as_ref()
         .and_then(|m| m.zen_cli_path.clone())
+        .or_else(|| {
+            // Fallback: use the highest-version UE intree binary. Covers machines
+            // where the install-path binary lives under a different user's
+            // %LOCALAPPDATA% (e.g. uecm-svc cannot see lanpc's AppData).
+            crate::data::machine_ue_installs::list_for_machine(&db, ep.machine_id)
+                .ok()
+                .and_then(|installs| installs.into_iter().find_map(|i| i.zen_cli_intree_path))
+        })
         .ok_or_else(|| {
             UecmError::InvalidInput(format!(
                 "machine id={} has no zen.exe (zen_cli) recorded — run `zen detect-binary --machine {}` first",
@@ -1112,9 +1120,11 @@ pub fn zen_service_install(
         ""
     };
     let invocation = redact(&format!(
-        "zen-service-install.ps1 -ZenExePath {zen_exe} -ServiceName {} -DataDir {}{user_marker}{pass_marker}",
+        "zen-service-install.ps1 -ZenExePath {zen_exe} -ServiceName {} -DataDir {} -Port {} -HttpServerClass {}{user_marker}{pass_marker}",
         zen_cli_shared::DEFAULT_SERVICE_NAME,
-        ep.data_dir
+        ep.data_dir,
+        ep.declared_port,
+        ep.httpserverclass,
     ));
     let op_id = operations::start(&db, "zen.service_install", &[ep.machine_id])?;
     // ServiceUser / ServicePassword only added when supplied — the node
@@ -1123,6 +1133,8 @@ pub fn zen_service_install(
         "ZenExePath": zen_exe,
         "ServiceName": zen_cli_shared::DEFAULT_SERVICE_NAME,
         "DataDir": ep.data_dir,
+        "Port": ep.declared_port,
+        "HttpServerClass": ep.httpserverclass,
     });
     if let Some(obj) = args.as_object_mut() {
         if let Some(u) = service_user.as_deref() {
@@ -1161,6 +1173,11 @@ pub fn zen_service_uninstall(
     let zen_exe = install
         .as_ref()
         .and_then(|m| m.zen_cli_path.clone())
+        .or_else(|| {
+            crate::data::machine_ue_installs::list_for_machine(&db, ep.machine_id)
+                .ok()
+                .and_then(|installs| installs.into_iter().find_map(|i| i.zen_cli_intree_path))
+        })
         .ok_or_else(|| {
             UecmError::InvalidInput(format!(
                 "machine id={} has no zen.exe (zen_cli) recorded — run `zen detect-binary --machine {}` first",
