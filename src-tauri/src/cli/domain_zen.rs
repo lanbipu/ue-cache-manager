@@ -125,8 +125,11 @@ pub fn handle(ctx: &mut Ctx<'_>, action: ZenAction) -> UecmResult<()> {
             yes,
             dry_run,
             cred,
-        } => apply_config(ctx, endpoint_id, &dest_path, yes, dry_run, &cred),
+        } => apply_config(ctx, endpoint_id, dest_path, yes, dry_run, &cred),
         ZenAction::LuaPreview { endpoint_id } => lua_preview(ctx, endpoint_id),
+        ZenAction::SponsorDown { endpoint_id, yes, dry_run, cred } => {
+            sponsor_down(ctx, endpoint_id, yes, dry_run, &cred)
+        }
         ZenAction::Service { action } => match action {
             ZenServiceAction::Install {
                 endpoint_id,
@@ -560,6 +563,24 @@ fn detect_binary(
         match detection_result {
             Ok(detection) => {
                 let report = zen_binary::persist(&db, machine_id, &detection)?;
+                // F3: intree candidates seen but all skipped (no machine_ue_installs
+                // row) and no install record → fail this machine with a fix hint
+                // instead of reporting a hollow success.
+                if zen_binary::detect_yielded_nothing(&detection, &report) {
+                    failed += 1;
+                    ctx.emitter
+                        .emit_event(&Event::ItemCompleted {
+                            item_id: format!("machine:{}", machine_id),
+                            index: idx as i64,
+                            ok: false,
+                            message: Some(format!(
+                                "detect-binary found intree zen.exe but machine_ue_installs is empty \
+                                 for machine id={machine_id}; run `uecm-cli machine refresh {machine_id}` first"
+                            )),
+                        })
+                        .ok();
+                    continue;
+                }
                 ok_count += 1;
                 let summary = serde_json::json!({
                     "machine_id": machine_id,
@@ -1090,10 +1111,23 @@ fn lua_preview(ctx: &mut Ctx<'_>, endpoint_id: i64) -> UecmResult<()> {
     Ok(())
 }
 
+/// Derive the zen.lua destination from an install-dir zen.exe path
+/// (`…\Zen\Install\zen.exe` → `…\Zen\Install\zen.lua`).
+/// Uses string-level backslash/forward-slash splitting so it works on both
+/// Windows (runtime) and macOS (unit tests).
+fn derive_lua_dest(zen_exe: &str) -> Option<String> {
+    // Find the last separator (backslash or forward-slash).
+    let last_sep = zen_exe.rfind(|c| c == '\\' || c == '/');
+    match last_sep {
+        Some(idx) => Some(format!("{}\\zen.lua", &zen_exe[..idx])),
+        None => Some("zen.lua".to_string()),
+    }
+}
+
 fn apply_config(
     ctx: &mut Ctx<'_>,
     endpoint_id: i64,
-    dest_path: &str,
+    dest_path: Option<String>,
     yes: bool,
     dry_run: bool,
     cred: &CredentialArgs,
@@ -1103,11 +1137,32 @@ fn apply_config(
     let (ep, lua) = render_lua_for(&db, endpoint_id)?;
     let machine = require_machine(&db, ep.machine_id)?;
 
+    // F6: resolve dest_path — explicit value wins; when omitted, derive from
+    // the recorded install-dir zen.exe (intree zen.exe lives in
+    // Engine\Binaries\Win64 — wrong place for zen.lua, so intree-only
+    // machines still require an explicit --dest-path).
+    let dest_path: String = match dest_path {
+        Some(p) => p,
+        None => {
+            let install = machine_zen_install::find(&db, ep.machine_id)?;
+            let zen_exe = install
+                .as_ref()
+                .and_then(|m| m.zen_cli_path.clone())
+                .ok_or_else(|| UecmError::InvalidInput(format!(
+                    "cannot derive --dest-path: machine id={} has no install-dir zen.exe \
+                     recorded; run `zen detect-binary` or pass --dest-path explicitly",
+                    ep.machine_id
+                )))?;
+            derive_lua_dest(&zen_exe).ok_or_else(|| UecmError::InvalidInput(
+                "recorded zen.exe path has no usable parent dir".into()))?
+        }
+    };
+
     // Codex P2 fix: mirror `zen-write-lua-config.ps1`'s destination-path
     // checks here so `--dry-run` doesn't approve a path the `--yes` apply
     // would deterministically reject. Catches relative paths, Win32 device
     // namespace, and forbidden system roots before any work happens.
-    validate_dest_path(dest_path)?;
+    validate_dest_path(&dest_path)?;
     // Same guard on the endpoint's recorded `data_dir`. Plan §8 T2.2 writes
     // `server.datadir` straight from this field — if it points at C:\Windows
     // the rendered zen.lua would steer zen into a system root the moment
@@ -1127,7 +1182,7 @@ fn apply_config(
                 "host": machine.ip,
                 // PLACEHOLDER: T2.9 will lock down the real path. Until then
                 // operator supplies / accepts the C:\Tools\UECM\zen.lua default.
-                "dest_path": dest_path,
+                "dest_path": &dest_path,
                 "lua": lua,
             }),
         );
@@ -1154,7 +1209,7 @@ fn apply_config(
     let op_id = operations::start(&db, "zen.apply_config", &[ep.machine_id])?;
 
     let expected_sha = sha256_hex_of(&lua);
-    let result = invoke_write_lua(&machine.ip, &lua, dest_path, None)
+    let result = invoke_write_lua(&machine.ip, &lua, &dest_path, None)
         .and_then(|response| verify_write_response(&response, &expected_sha, lua.len()));
     finalize_op(&db, op_id, &result, &invocation);
 
@@ -1164,7 +1219,7 @@ fn apply_config(
         "endpoint_id": endpoint_id,
         "machine_id": ep.machine_id,
         "host": machine.ip,
-        "dest_path": dest_path,
+        "dest_path": &dest_path,
         "sha256": expected_sha,
         "remote": response,
     });
@@ -1578,6 +1633,69 @@ fn service_simple(
         "machine_id": ep.machine_id,
         "host": machine.ip,
         "service_name": DEFAULT_SERVICE_NAME,
+        "remote": response,
+    });
+    ctx.emitter.emit_event(&Event::Completed { summary }).ok();
+    Ok(())
+}
+
+fn sponsor_down(
+    ctx: &mut Ctx<'_>,
+    endpoint_id: i64,
+    yes: bool,
+    dry_run: bool,
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
+    let outcome = destructive::check(yes, dry_run, "zen.sponsor_down")?;
+    let db = ctx.require_db()?.clone();
+    cred.preflight(&db)?;
+    let ep = require_endpoint(&db, endpoint_id)?;
+    let machine = require_machine(&db, ep.machine_id)?;
+
+    // Reuse the F1 resolution: install-dir zen.exe, else highest-version intree.
+    let install = machine_zen_install::find(&db, ep.machine_id)?;
+    let zen_exe = install
+        .as_ref()
+        .and_then(|m| m.zen_cli_path.clone())
+        .or_else(|| {
+            crate::data::machine_ue_installs::list_for_machine(&db, ep.machine_id)
+                .ok()
+                .and_then(|v| v.into_iter().find_map(|i| i.zen_cli_intree_path))
+        })
+        .ok_or_else(|| {
+            UecmError::InvalidInput(format!(
+                "machine id={} has no zen.exe (zen_cli) recorded — run \
+                 `uecm-cli zen detect-binary --machine {}` first",
+                ep.machine_id, ep.machine_id,
+            ))
+        })?;
+
+    let invocation = format!(
+        "zen-sponsor-down.ps1 -ZenExePath {zen_exe} -Port {} -ServiceName {DEFAULT_SERVICE_NAME} -DryRun {}",
+        ep.declared_port,
+        outcome == Outcome::DryRun
+    );
+    let op_id = operations::start(&db, "zen.sponsor_down", &[ep.machine_id])?;
+    let result = run_node(
+        &machine.ip,
+        "zen-sponsor-down.ps1",
+        serde_json::json!({
+            "ZenExePath": zen_exe,
+            "Port": ep.declared_port,
+            "ServiceName": DEFAULT_SERVICE_NAME,
+            "DryRun": outcome == Outcome::DryRun,
+        }),
+    )
+    .and_then(|raw| parse_envelope(&raw, "zen-sponsor-down"));
+    finalize_op(&db, op_id, &result, &invocation);
+    let response = result?;
+    let summary = serde_json::json!({
+        "ok": true,
+        "endpoint_id": endpoint_id,
+        "machine_id": ep.machine_id,
+        "host": machine.ip,
+        "port": ep.declared_port,
+        "dry_run": outcome == Outcome::DryRun,
         "remote": response,
     });
     ctx.emitter.emit_event(&Event::Completed { summary }).ok();
@@ -4982,5 +5100,14 @@ overrides: {}
             }
             assert!(log_text.contains("[REDACTED]"));
         }
+    }
+
+    #[test]
+    fn derive_lua_dest_from_install_zen_exe() {
+        assert_eq!(
+            super::derive_lua_dest(r"C:\Users\me\AppData\Local\UnrealEngine\Common\Zen\Install\zen.exe").as_deref(),
+            Some(r"C:\Users\me\AppData\Local\UnrealEngine\Common\Zen\Install\zen.lua")
+        );
+        assert_eq!(super::derive_lua_dest("zen.exe").as_deref(), Some("zen.lua"));
     }
 }

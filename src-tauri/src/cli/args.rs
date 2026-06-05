@@ -1108,13 +1108,10 @@ pub enum ZenAction {
     ApplyConfig {
         #[arg(long, value_name = "ID")]
         endpoint_id: i64,
-        /// Absolute destination on the remote host (e.g.
-        /// `C:\Users\<svc>\AppData\Local\UnrealEngine\Common\Zen\Install\zen.lua`).
-        /// REQUIRED: T2.9 will derive this from the binary install dir; until
-        /// then the caller must supply the real path so we never silently
-        /// write to a placeholder while zen continues using a different file.
+        /// Absolute zen.lua destination. Optional: when omitted, derived from
+        /// the detected zen install dir on the target (…\Zen\Install\zen.lua).
         #[arg(long, value_name = "PATH")]
-        dest_path: String,
+        dest_path: Option<String>,
         #[arg(long)]
         yes: bool,
         #[arg(long)]
@@ -1132,6 +1129,19 @@ pub enum ZenAction {
     Service {
         #[command(subcommand)]
         action: ZenServiceAction,
+    },
+    /// Gracefully shut down an editor sponsor zenserver squatting the
+    /// endpoint's declared port (so `service install`/`start` can take it).
+    /// Refuses if the port is served by the installed ZenServer service.
+    SponsorDown {
+        #[arg(long, value_name = "ID")]
+        endpoint_id: i64,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
     },
     /// URL ACL (`netsh http`) management for the endpoint.
     Urlacl {
@@ -2204,6 +2214,22 @@ mod tests {
                 assert_eq!(shell, clap_complete::Shell::Bash);
             }
             _ => panic!("expected system completion bash"),
+        }
+    }
+
+    #[test]
+    fn parses_zen_sponsor_down() {
+        let cli = Cli::try_parse_from([
+            "uecm-cli", "zen", "sponsor-down", "--endpoint-id", "1", "--dry-run",
+        ])
+        .expect("sponsor-down should parse");
+        match cli.command {
+            Domain::Zen { action: ZenAction::SponsorDown { endpoint_id, dry_run, yes, .. } } => {
+                assert_eq!(endpoint_id, 1);
+                assert!(dry_run);
+                assert!(!yes);
+            }
+            _ => panic!("expected ZenAction::SponsorDown"),
         }
     }
 }

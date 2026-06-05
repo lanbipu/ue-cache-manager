@@ -372,20 +372,41 @@ pub fn zen_detect_binary(
         match invoke_detect_binary(&m.ip) {
             Ok(detection) => {
                 let report = zen_binary::persist(&db, mid, &detection)?;
-                ok_count += 1;
-                results.push(ZenDetectBinaryMachineResult {
-                    machine_id: mid,
-                    hostname: m.hostname.clone(),
-                    ip: m.ip.clone(),
-                    ok: true,
-                    install_record_written: report.install_record_written,
-                    install_record_cleared: report.install_record_cleared,
-                    intree_records_written: report.intree_records_written,
-                    baseline_new_rows: report.baseline_new_rows,
-                    intree_ref_rows: report.intree_ref_rows,
-                    warnings: report.warnings,
-                    error_message: None,
-                });
+                // F3: hollow result (intree skipped, no install record) → mark failed.
+                if zen_binary::detect_yielded_nothing(&detection, &report) {
+                    failed += 1;
+                    results.push(ZenDetectBinaryMachineResult {
+                        machine_id: mid,
+                        hostname: m.hostname.clone(),
+                        ip: m.ip.clone(),
+                        ok: false,
+                        install_record_written: report.install_record_written,
+                        install_record_cleared: report.install_record_cleared,
+                        intree_records_written: report.intree_records_written,
+                        baseline_new_rows: report.baseline_new_rows,
+                        intree_ref_rows: report.intree_ref_rows,
+                        warnings: report.warnings,
+                        error_message: Some(format!(
+                            "found intree zen.exe but machine_ue_installs is empty for machine id={mid}; \
+                             run machine refresh first"
+                        )),
+                    });
+                } else {
+                    ok_count += 1;
+                    results.push(ZenDetectBinaryMachineResult {
+                        machine_id: mid,
+                        hostname: m.hostname.clone(),
+                        ip: m.ip.clone(),
+                        ok: true,
+                        install_record_written: report.install_record_written,
+                        install_record_cleared: report.install_record_cleared,
+                        intree_records_written: report.intree_records_written,
+                        baseline_new_rows: report.baseline_new_rows,
+                        intree_ref_rows: report.intree_ref_rows,
+                        warnings: report.warnings,
+                        error_message: None,
+                    });
+                }
             }
             Err(e) => {
                 failed += 1;
