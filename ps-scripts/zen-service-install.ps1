@@ -47,6 +47,59 @@ chcp 65001 | Out-Null
 
 $ErrorActionPreference = 'Stop'
 
+# Resolve the service binary (exe) from an SCM ImagePath / Win32_Service
+# PathName. The first token can take three shapes:
+#   - double-quoted:           "D:\Program Files\...\zenserver.exe" --data-dir ...
+#   - unquoted WITH spaces:    D:\Program Files\...\zenserver.exe --data-dir ...
+#   - unquoted without spaces: C:\Users\...\Install\zenserver.exe --data-dir ...
+# Bug A (2026-06-05 lanPC E2E): zen registers the service with the in-tree exe
+# path UNQUOTED, and once Bug 4 moved resolution to the in-tree copy that path
+# lives under `D:\Program Files\Epic Games\...` (spaces). A naive whitespace
+# split took token[0] = 'D:\Program', so Normalize-ZenExe produced
+# 'd:\zenserver.exe' and every idempotent re-install / drift-repair falsely
+# reported 'different ZenExePath'. Reconstruct up to the first '.exe' boundary
+# instead of splitting on whitespace.
+function Resolve-ServiceExe([string]$imagePath) {
+    if ([string]::IsNullOrWhiteSpace($imagePath)) { return $null }
+    $s = $imagePath.Trim()
+    if ($s.StartsWith('"')) {
+        $end = $s.IndexOf('"', 1)
+        if ($end -gt 1) { return $s.Substring(1, $end - 1) }
+        return $s.Substring(1)
+    }
+    # Unquoted: take everything up to and including the first '.exe' that is
+    # followed by whitespace or end-of-string, so a parent directory literally
+    # named '...\foo.exe\...' doesn't truncate the real binary.
+    $m = [regex]::Match($s, '^(.*?\.exe)(\s|$)',
+        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if ($m.Success) { return $m.Groups[1].Value }
+    # Fallback: first whitespace-delimited token.
+    return ($s -split '\s+', 2)[0]
+}
+
+# Rebuild a service ImagePath for the Bug 1 drift-repair path: re-quote the
+# existing exe and restore the runtime `--data-dir / --port / --http` args. The
+# exe is resolved with Resolve-ServiceExe so an unquoted spaced path
+# (`D:\Program Files\...`) is handled — the old inline
+# `$curBin.TrimStart('"').Split('"')[0]` returned the WHOLE string for an
+# unquoted ImagePath and made GetFullPath throw "path format not supported".
+function Build-PatchedImagePath([string]$curImagePath, [string]$dataDir, [string]$port, [string]$http) {
+    $exe = Resolve-ServiceExe $curImagePath
+    $exePart = '"' + ([System.IO.Path]::GetFullPath($exe).TrimEnd('\')) + '"'
+    $runtimeArgs = '--data-dir "' + $dataDir + '"'
+    if (-not [string]::IsNullOrWhiteSpace($port)) { $runtimeArgs += " --port $port" }
+    if (-not [string]::IsNullOrWhiteSpace($http)) { $runtimeArgs += " --http $http" }
+    return "$exePart $runtimeArgs"
+}
+
+# --- Test seam ---------------------------------------------------------------
+# When dot-sourced with UECM_PS_DEFINE_ONLY=1, the pure helper functions defined
+# ABOVE this line are made available and the script returns before reading stdin
+# or touching the SCM, so __tests__\zen-service-install.tests.ps1 can unit-test
+# them. Production (run via -File over the WinRM/SSH transport) never sets this
+# env var, so this is a no-op there.
+if ($env:UECM_PS_DEFINE_ONLY -eq '1') { return }
+
 # Read named parameters from stdin (JSON). Bound here BEFORE the pre-try
 # `--full` hard-block so that block still inspects the real values. The
 # mandatory ZenExePath / DataDir get a null-guard; ServiceName falls back to
@@ -312,13 +365,12 @@ try {
             }
             if ($current.Length -gt 0) { [void]$tokens.Add($current) }
 
-            # Token 0 is the service binary (zenserver.exe). Normalize both
-            # sides to "<dir>\zenserver.exe" (Bug 2) so the zen.exe we were
+            # The service binary is the FIRST element of the ImagePath, but it
+            # can be an unquoted path containing spaces (Bug A) — so reconstruct
+            # it with Resolve-ServiceExe rather than trusting token[0]. Normalize
+            # both sides to "<dir>\zenserver.exe" (Bug 2) so the zen.exe we were
             # handed compares equal to the registered zenserver.exe sibling.
-            $existingExe = $null
-            if ($tokens.Count -gt 0) {
-                $existingExe = Normalize-ZenExe $tokens[0].ToString()
-            }
+            $existingExe = Normalize-ZenExe (Resolve-ServiceExe $existingPathName)
 
             # Find `--data-dir <value>` or `--data-dir=<value>`.
             $existingDir = $null
@@ -416,11 +468,7 @@ try {
             try {
                 $regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
                 $curBin = (Get-ItemProperty -LiteralPath $regPath -Name 'ImagePath' -ErrorAction Stop).ImagePath
-                $exePart = '"' + ([System.IO.Path]::GetFullPath($curBin.TrimStart('"').Split('"')[0]).TrimEnd('\')) + '"'
-                $runtimeArgs = '--data-dir "' + $normalizedDataDir + '"'
-                if (-not [string]::IsNullOrWhiteSpace($Port)) { $runtimeArgs += " --port $Port" }
-                if (-not [string]::IsNullOrWhiteSpace($HttpServerClass)) { $runtimeArgs += " --http $HttpServerClass" }
-                $newBin = "$exePart $runtimeArgs"
+                $newBin = Build-PatchedImagePath $curBin $normalizedDataDir $Port $HttpServerClass
                 Set-ItemProperty -LiteralPath $regPath -Name 'ImagePath' -Value $newBin -ErrorAction Stop
                 @{
                     ok = $true

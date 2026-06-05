@@ -62,7 +62,14 @@ try {
         # is NOT silently swallowed — the post-start re-query below treats
         # any state that isn't `Running` as failure so the caller doesn't
         # mistake a crash / StartPending hang for a successful start.
-        Start-Service -Name $ServiceName -ErrorAction Stop
+        # -WarningAction SilentlyContinue: on a slow (cold-cache) start the
+        # service sits in START_PENDING and Start-Service emits a LOCALIZED
+        # "Waiting for service ... to start" warning. The transport merges the
+        # warning stream into stdout, so that non-JSON text corrupts the
+        # envelope the Rust side parses (Bug B, 2026-06-05 lanPC E2E). The
+        # post-start WaitForStatus + re-query below is the real success check,
+        # so suppressing the warning stream is safe.
+        Start-Service -Name $ServiceName -WarningAction SilentlyContinue -ErrorAction Stop
         try {
             $svc.WaitForStatus('Running', (New-TimeSpan -Seconds 30))
         } catch {
