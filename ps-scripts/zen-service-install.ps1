@@ -111,6 +111,23 @@ function Get-ServiceAccount([string]$Name) {
     return $null
 }
 
+# Bug 2 (2026-06-05 lanPC E2E): UECM hands `zen service install` the CLI
+# `zen.exe`, but zen registers the sibling `zenserver.exe` as the SCM service
+# binary (zen/cmds/service_cmd.cpp:431-437). So the requested ZenExePath
+# (zen.exe) and the existing service's ImagePath token0 (zenserver.exe) never
+# compare equal by raw path, and even a config-correct re-install was misjudged
+# as `different ZenExePath`. Normalize both to "<dir>\zenserver.exe" so the
+# idempotency / drift check treats them as the same install when co-located.
+function Normalize-ZenExe([string]$p) {
+    if ([string]::IsNullOrWhiteSpace($p)) { return $null }
+    $full = $p
+    try { $full = [System.IO.Path]::GetFullPath($p) } catch { }
+    $dir = $null
+    try { $dir = [System.IO.Path]::GetDirectoryName($full) } catch { }
+    if ([string]::IsNullOrEmpty($dir)) { return $full.TrimEnd('\').ToLowerInvariant() }
+    return (Join-Path $dir 'zenserver.exe').TrimEnd('\').ToLowerInvariant()
+}
+
 # ----------------------------------------------------------------------------
 # HARD-BLOCK --full BEFORE the try/catch. We want a deterministic refusal even
 # if a downstream code path throws.
@@ -269,8 +286,10 @@ try {
         # of `D:\ZenCache2`, which would falsely report idempotent no-op
         # while the SCM actually points at a different data dir.
         $matchesExpected = $false
+        $exeMatches = $false
+        $dirMatches = $false
         if ($null -ne $existingPathName -and $existingPathName.Length -gt 0) {
-            $expectedExe = [System.IO.Path]::GetFullPath($ZenExePath).TrimEnd('\').ToLowerInvariant()
+            $expectedExe = Normalize-ZenExe $ZenExePath
             $expectedDir = $normalizedDataDir.TrimEnd('\').ToLowerInvariant()
 
             # Naive token split honoring "..." quoted args.
@@ -293,15 +312,12 @@ try {
             }
             if ($current.Length -gt 0) { [void]$tokens.Add($current) }
 
-            # Token 0 should be the exe path (PathName form: "exe" args...).
+            # Token 0 is the service binary (zenserver.exe). Normalize both
+            # sides to "<dir>\zenserver.exe" (Bug 2) so the zen.exe we were
+            # handed compares equal to the registered zenserver.exe sibling.
             $existingExe = $null
             if ($tokens.Count -gt 0) {
-                try {
-                    $existingExe = [System.IO.Path]::GetFullPath(
-                        $tokens[0].ToString()).TrimEnd('\').ToLowerInvariant()
-                } catch {
-                    $existingExe = $tokens[0].ToString().TrimEnd('\').ToLowerInvariant()
-                }
+                $existingExe = Normalize-ZenExe $tokens[0].ToString()
             }
 
             # Find `--data-dir <value>` or `--data-dir=<value>`.
@@ -356,10 +372,9 @@ try {
             $httpMatches = [string]::IsNullOrWhiteSpace($HttpServerClass) -or
                            ($existingHttp -ieq $HttpServerClass)
 
-            $matchesExpected = ($existingExe -eq $expectedExe) -and
-                               ($null -ne $existingDir) -and
-                               ($existingDir -eq $expectedDir) -and
-                               $portMatches -and $httpMatches
+            $exeMatches = ($existingExe -eq $expectedExe)
+            $dirMatches = ($null -ne $existingDir) -and ($existingDir -eq $expectedDir)
+            $matchesExpected = $exeMatches -and $dirMatches -and $portMatches -and $httpMatches
         }
 
         # Codex P2: ServiceUser must match too. Without this an
@@ -388,6 +403,47 @@ try {
                 message = "service '$ServiceName' already installed with matching config (no-op)"
             } | ConvertTo-Json -Compress -Depth 4
             exit 0
+        }
+
+        # Bug 1 (2026-06-05 lanPC E2E): exe + data-dir + account all match and
+        # only the runtime --port / --http drifted. Patch the SCM ImagePath in
+        # place and report repaired=true. This is the same surgical registry
+        # edit the fresh-install path does below, NOT `zen service install
+        # --full`, so it stays on the right side of the Plan 7 §12 red line.
+        # The running process keeps its old command line until a stop+start.
+        if ($exeMatches -and $dirMatches -and $userMatches -and
+            (-not ($portMatches -and $httpMatches))) {
+            try {
+                $regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
+                $curBin = (Get-ItemProperty -LiteralPath $regPath -Name 'ImagePath' -ErrorAction Stop).ImagePath
+                $exePart = '"' + ([System.IO.Path]::GetFullPath($curBin.TrimStart('"').Split('"')[0]).TrimEnd('\')) + '"'
+                $runtimeArgs = '--data-dir "' + $normalizedDataDir + '"'
+                if (-not [string]::IsNullOrWhiteSpace($Port)) { $runtimeArgs += " --port $Port" }
+                if (-not [string]::IsNullOrWhiteSpace($HttpServerClass)) { $runtimeArgs += " --http $HttpServerClass" }
+                $newBin = "$exePart $runtimeArgs"
+                Set-ItemProperty -LiteralPath $regPath -Name 'ImagePath' -Value $newBin -ErrorAction Stop
+                @{
+                    ok = $true
+                    service_name = $ServiceName
+                    repaired = $true
+                    existing_status = "$($existingSvc.Status)"
+                    existing_path_name = $existingPathName
+                    new_path_name = $newBin
+                    existing_service_account = $existingStartName
+                    message = ("patched ImagePath drift on existing service '{0}' " +
+                               "(port: '{1}'->'{2}', http: '{3}'->'{4}'); run " +
+                               "'zen service stop' then 'start' to apply.") `
+                              -f $ServiceName, $existingPort, $Port, $existingHttp, $HttpServerClass
+                } | ConvertTo-Json -Compress -Depth 4
+                exit 0
+            } catch {
+                @{
+                    ok = $false
+                    service_name = $ServiceName
+                    message = "failed to patch ImagePath drift on '$ServiceName': $($_.Exception.Message)"
+                } | ConvertTo-Json -Compress -Depth 4
+                exit 0
+            }
         }
 
         $reason = if (-not $userMatches) {
@@ -496,10 +552,18 @@ try {
             default           { $ServiceUser }
         }
         # sc.exe's bizarre `option= value` syntax: the `=` is attached to the
-        # option name and value is a separate token. Effective password for
-        # built-in accounts is empty (sc accepts `password= ""`).
-        $effectivePassword = if ($isBuiltin) { '' } else { $ServicePassword }
-        $scArgs = @('config', $ServiceName, 'obj=', $effectiveUser, 'password=', $effectivePassword)
+        # option name and the value is a separate token. Bug 3 (2026-06-05 lanPC
+        # E2E): for a built-in account sc.exe needs NO password token at all —
+        # passing `'password=', ''` makes PowerShell drop the empty-string token
+        # when splatting to native sc.exe, leaving a dangling `password=` →
+        # ERROR_INVALID_COMMAND_LINE (1639) → rollback. Omit the password pair
+        # for built-in accounts; non-built-in accounts always carry a real
+        # (non-empty) password here (validated before `zen service install`).
+        if ($isBuiltin) {
+            $scArgs = @('config', $ServiceName, 'obj=', $effectiveUser)
+        } else {
+            $scArgs = @('config', $ServiceName, 'obj=', $effectiveUser, 'password=', $ServicePassword)
+        }
         $scOutput = (& sc.exe @scArgs 2>&1 | Out-String)
         $scExit = [int]$LASTEXITCODE
 

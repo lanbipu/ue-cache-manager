@@ -1064,24 +1064,25 @@ pub fn zen_service_install(
     cred.preflight(&db)?;
     let ep = zen_cli_shared::require_endpoint(&db, endpoint_id)?;
     let machine = zen_cli_shared::require_machine(&db, ep.machine_id)?;
+    // Bug 4 (2026-06-05 lanPC E2E): prefer the in-tree binary over the
+    // user-private install copy so the zenserver.exe zen registers runs under an
+    // ACL the hardcoded `NT AUTHORITY\LocalService` account can start. See
+    // `zen_cli_shared::pick_service_zen_exe`.
     let install = crate::data::machine_zen_install::find(&db, ep.machine_id)?;
-    let zen_exe = install
-        .as_ref()
-        .and_then(|m| m.zen_cli_path.clone())
-        .or_else(|| {
-            // Fallback: use the highest-version UE intree binary. Covers machines
-            // where the install-path binary lives under a different user's
-            // %LOCALAPPDATA% (e.g. uecm-svc cannot see lanpc's AppData).
-            crate::data::machine_ue_installs::list_for_machine(&db, ep.machine_id)
-                .ok()
-                .and_then(|installs| installs.into_iter().find_map(|i| i.zen_cli_intree_path))
-        })
-        .ok_or_else(|| {
-            UecmError::InvalidInput(format!(
-                "machine id={} has no zen.exe (zen_cli) recorded — run `zen detect-binary --machine {}` first",
-                ep.machine_id, ep.machine_id,
-            ))
-        })?;
+    let intree_cli = crate::data::machine_ue_installs::list_for_machine(&db, ep.machine_id)
+        .ok()
+        .and_then(|installs| installs.into_iter().find_map(|i| i.zen_cli_intree_path));
+    let zen_exe = zen_cli_shared::pick_service_zen_exe(
+        intree_cli,
+        install.as_ref().and_then(|m| m.zen_cli_path.clone()),
+    )
+    .ok_or_else(|| {
+        UecmError::InvalidInput(format!(
+            "machine id={} has no zen.exe recorded — run `machine refresh {}` then \
+             `zen detect-binary --machine {}` first",
+            ep.machine_id, ep.machine_id, ep.machine_id,
+        ))
+    })?;
 
     // Same lifecycle guard as the CLI: only `installed_service` endpoints
     // get an SCM service.

@@ -1299,6 +1299,28 @@ enum ServiceVerb {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Pick the zen.exe to hand `zen service install` for an `installed_service`
+/// endpoint, preferring the in-tree UE binary over the user-private install copy.
+///
+/// Bug 4 (2026-06-05 lanPC E2E, see
+/// docs/research/2026-06-05-zen-service-install-e2e-findings.md): zen hardcodes
+/// the service account to `NT AUTHORITY\LocalService` (zenutil/service.cpp:441)
+/// and registers the sibling `zenserver.exe` of whichever zen.exe it is run with
+/// (zen/cmds/service_cmd.cpp:431-437). `LocalService` is a member of
+/// `BUILTIN\Users`, so it can only start a zenserver.exe whose ACL grants
+/// `BUILTIN\Users:(RX)`. The in-tree copy under the UE install dir (Program
+/// Files) grants that; the install copy under
+/// `%LOCALAPPDATA%\UnrealEngine\Common\Zen\Install` grants only the owning UE
+/// user + SYSTEM + Admins, so a service installed from it dies on start. Prefer
+/// the in-tree binary; fall back to the install copy only when no UE in-tree
+/// binary was detected.
+pub(crate) fn pick_service_zen_exe(
+    intree_cli: Option<String>,
+    install_copy_cli: Option<String>,
+) -> Option<String> {
+    intree_cli.or(install_copy_cli)
+}
+
 fn service_install(
     ctx: &mut Ctx<'_>,
     endpoint_id: i64,
@@ -1314,32 +1336,26 @@ fn service_install(
     let ep = require_endpoint(&db, endpoint_id)?;
     let machine = require_machine(&db, ep.machine_id)?;
 
-    // Resolve the zenserver binary path from the most recent detect-binary
-    // record. Without it we'd have to ask the operator for the full path —
-    // surface the precondition explicitly so they know to run detect-binary.
-    // Service install/uninstall wrap `zen.exe service install|uninstall`, NOT
-    // `zenserver.exe`. `zen.exe` is the CLI in the install dir and is what
-    // `detect-binary` records as `zen_cli_path` (zenserver_path points at the
-    // long-running daemon binary, which is the wrong tool for SCM registration).
+    // Resolve the zen.exe to hand `zen service install`. We wrap
+    // `zen.exe service install`, which registers the sibling zenserver.exe as
+    // the SCM service binary. Bug 4 (2026-06-05 lanPC E2E): the in-tree binary
+    // must win over the user-private install copy so the hardcoded
+    // `NT AUTHORITY\LocalService` account can actually start that zenserver.exe
+    // — see `pick_service_zen_exe`.
     let install = machine_zen_install::find(&db, ep.machine_id)?;
-    let zen_exe = install
-        .as_ref()
-        .and_then(|m| m.zen_cli_path.clone())
-        .or_else(|| {
-            // Fallback to highest-version UE intree binary when the install-path
-            // binary is not recorded (e.g. it lives under a different user's
-            // %LOCALAPPDATA% and uecm-svc cannot read it).
-            crate::data::machine_ue_installs::list_for_machine(&db, ep.machine_id)
-                .ok()
-                .and_then(|installs| installs.into_iter().find_map(|i| i.zen_cli_intree_path))
-        })
-        .ok_or_else(|| {
-            UecmError::InvalidInput(format!(
-                "machine id={} has no zen.exe (zen_cli) recorded — run \
-                 `uecm-cli zen detect-binary --machine {}` first",
-                ep.machine_id, ep.machine_id,
-            ))
-        })?;
+    let intree_cli = crate::data::machine_ue_installs::list_for_machine(&db, ep.machine_id)
+        .ok()
+        .and_then(|installs| installs.into_iter().find_map(|i| i.zen_cli_intree_path));
+    let zen_exe =
+        pick_service_zen_exe(intree_cli, install.as_ref().and_then(|m| m.zen_cli_path.clone()))
+            .ok_or_else(|| {
+                UecmError::InvalidInput(format!(
+                    "machine id={} has no zen.exe recorded — run \
+                     `uecm-cli machine refresh {}` then \
+                     `uecm-cli zen detect-binary --machine {}` first",
+                    ep.machine_id, ep.machine_id, ep.machine_id,
+                ))
+            })?;
 
     // Codex P2: lifecycle is the DB source of truth. Refuse to install zen as
     // an OS service when the endpoint row claims `editor_owned` — otherwise
@@ -5109,5 +5125,24 @@ overrides: {}
             Some(r"C:\Users\me\AppData\Local\UnrealEngine\Common\Zen\Install\zen.lua")
         );
         assert_eq!(super::derive_lua_dest("zen.exe").as_deref(), Some("zen.lua"));
+    }
+
+    #[test]
+    fn pick_service_zen_exe_prefers_intree() {
+        // Bug 4: the in-tree binary (Program Files, ACL grants BUILTIN\Users:RX)
+        // must win over the user-private install copy so the hardcoded
+        // LocalService account can start the registered zenserver.exe.
+        let intree = r"D:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\zen.exe";
+        let install_copy = r"C:\Users\lanPC\AppData\Local\UnrealEngine\Common\Zen\Install\zen.exe";
+        assert_eq!(
+            super::pick_service_zen_exe(Some(intree.into()), Some(install_copy.into())).as_deref(),
+            Some(intree)
+        );
+        // Fall back to the install copy only when no in-tree binary was detected.
+        assert_eq!(
+            super::pick_service_zen_exe(None, Some(install_copy.into())).as_deref(),
+            Some(install_copy)
+        );
+        assert_eq!(super::pick_service_zen_exe(None, None), None);
     }
 }
