@@ -109,6 +109,24 @@ try {
         }
     }
 
+    # Compare principals by SID, not string.  Windows built-in accounts
+    # have multiple name forms that resolve to the same SID:
+    #   "NT AUTHORITY\LocalService" vs "NT AUTHORITY\LOCAL SERVICE"
+    # A naive -ieq comparison would treat these as different principals and
+    # falsely report a conflict. Translating both to SID handles all aliases.
+    function Test-SamePrincipal ($a, $b) {
+        if ($a -ieq $b) { return $true }
+        try {
+            $sidA = ([System.Security.Principal.NTAccount]$a).Translate(
+                [System.Security.Principal.SecurityIdentifier]).Value
+            $sidB = ([System.Security.Principal.NTAccount]$b).Translate(
+                [System.Security.Principal.SecurityIdentifier]).Value
+            return ($sidA -eq $sidB)
+        } catch {
+            return $false
+        }
+    }
+
     if ($alreadyExists -and $ownerLookupAttempted -and $null -eq $existingOwner) {
         @{
             ok = $false
@@ -125,7 +143,7 @@ try {
     }
 
     if ($alreadyExists -and $null -ne $existingOwner -and
-        -not ($existingOwner -ieq $UserAccount)) {
+        -not (Test-SamePrincipal $existingOwner $UserAccount)) {
         @{
             ok = $false
             message = ("URL reservation already exists but is owned by '{0}', not '{1}'. " +
@@ -139,12 +157,9 @@ try {
         exit 0
     }
 
-    # Owner matches BUT Listen=No → the reservation exists in name but the
-    # principal can't actually bind the prefix. Fail closed: rebuilding
-    # the reservation is the operator's call (we don't auto-fix because
-    # it would require a delete+add cycle the operator might not expect).
+    # Owner matches BUT Listen=No
     if ($alreadyExists -and $null -ne $existingOwner -and
-        ($existingOwner -ieq $UserAccount) -and
+        (Test-SamePrincipal $existingOwner $UserAccount) -and
         $null -ne $existingListen -and $existingListen -ieq 'No') {
         @{
             ok = $false
