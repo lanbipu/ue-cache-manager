@@ -63,8 +63,15 @@ use crate::error::{UecmError, UecmResult};
 use serde::Serialize;
 use std::time::Duration;
 
-/// Default Windows service name for zenserver. T2.4 ps-scripts use the same.
-pub(crate) const DEFAULT_SERVICE_NAME: &str = "ZenServer";
+/// Default Windows service name for zenserver.
+///
+/// **Not** `"ZenServer"` — UE's `ConditionalUpdateSystemServiceInstall()`
+/// hardcodes that name and tries to update/uninstall the service when the
+/// ImagePath doesn't match the running UE version's expectations. Using a
+/// distinct name makes the UECM-managed service invisible to UE's built-in
+/// service management so multiple UE versions (5.7, 5.8, …) can all connect
+/// to it via HTTP without triggering conflict dialogs.
+pub(crate) const DEFAULT_SERVICE_NAME: &str = "UECMZenServer";
 
 const KIND_ZEN_CLI: &str = "zen_cli";
 const KIND_ZENSERVER: &str = "zenserver";

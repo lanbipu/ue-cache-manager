@@ -1,46 +1,32 @@
 # Plan 7 T2.4 sidecar - install zen as a Windows service.
 #
 # Purpose:
-#   Wrap `zen.exe service install --name <ServiceName> --datadir <DataDir>`
-#   to register the zenserver service. The install binary itself is treated
-#   read-only (we only invoke it; we never copy or modify zen.exe here).
+#   Register the UE in-tree zenserver.exe as a Windows service via sc.exe.
+#   Does NOT use `zen.exe service install` — direct sc.exe create gives full
+#   control over the service name, account, and ImagePath, matching Epic's
+#   official "Zenserver as Shared DDC" deployment guide and avoiding the
+#   hardcoded "ZenServer" name that collides with UE's built-in service
+#   management (ConditionalUpdateSystemServiceInstall in ZenServerInterface.cpp).
 #
 # Parameters:
-#   -ZenExePath  <string>  absolute path to zen.exe (e.g.
-#                          %LOCALAPPDATA%\UnrealEngine\Common\Zen\Install\zen.exe).
-#                          Must exist and be a file, not a folder.
-#   -ServiceName <string>  Windows service name. Default "ZenServer".
-#   -DataDir     <string>  absolute path to the zen data directory. Rejected
-#                          if under C:\Windows / C:\Program Files / C:\Program
-#                          Files (x86).
-#
-# ============================================================================
-# RED LINE (Plan 7 §12): the `--full` flag is FORBIDDEN.
-# `zen service install --full` instructs zen to take over as the host's
-# primary zenserver, including stealing the install copy under
-# %LOCALAPPDATA%\UnrealEngine\Common\Zen\Install\ from UE. UECM never wants
-# that ownership transfer to happen via this sidecar - if an operator needs
-# `--full`, they run zen.exe by hand outside UECM.
-#
-# This script hard-blocks any attempt to smuggle `--full` in via $args. The
-# script's own param block intentionally does NOT expose a -Full switch.
-# ============================================================================
+#   -ZenExePath       <string>  absolute path to zen.exe (the sibling
+#                               zenserver.exe is resolved from this).
+#   -ServiceName      <string>  Windows service name. Default "UECMZenServer".
+#   -DataDir          <string>  absolute path to the zen data directory.
+#   -Port             <string>  optional listen port (default: zen's built-in 8558).
+#   -HttpServerClass  <string>  optional HTTP backend ("asio" or "httpsys").
+#   -ServiceUser      <string>  optional service account (default: LocalService).
+#   -ServicePassword  <string>  optional password for non-built-in accounts.
 #
 # Output (single JSON object on stdout):
 #   {
 #     "ok": true,
-#     "service_name": "ZenServer",
-#     "zen_exit_code": 0,
-#     "message": "...zen stdout..."
+#     "service_name": "UECMZenServer",
+#     "binpath": "\"...\\zenserver.exe\" --data-dir \"...\" --port 8558",
+#     "message": "service 'UECMZenServer' created successfully"
 #   }
 #
 # Rust parser: core::zen::service::parse_install_response (T2.5).
-#
-# Usage:
-#   powershell.exe -NoProfile -ExecutionPolicy Bypass -File zen-service-install.ps1 `
-#       -ZenExePath "C:\Users\me\AppData\Local\UnrealEngine\Common\Zen\Install\zen.exe" `
-#       -ServiceName "ZenServer" `
-#       -DataDir "D:\ZenData"
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 chcp 65001 | Out-Null
@@ -181,36 +167,6 @@ function Normalize-ZenExe([string]$p) {
     return (Join-Path $dir 'zenserver.exe').TrimEnd('\').ToLowerInvariant()
 }
 
-# ----------------------------------------------------------------------------
-# HARD-BLOCK --full BEFORE the try/catch. We want a deterministic refusal even
-# if a downstream code path throws.
-# $args holds positional arguments passed after the named params; if a caller
-# slips an extra token like "--full" through there, refuse outright.
-# ----------------------------------------------------------------------------
-foreach ($a in $args) {
-    if ($null -eq $a) { continue }
-    $sa = [string]$a
-    if ($sa -imatch '(^|\s)--full(\s|=|$)') {
-        @{
-            ok = $false
-            message = "RED LINE: --full flag refused (Plan 7 §12)"
-        } | ConvertTo-Json -Compress
-        exit 0
-    }
-}
-# Also belt-and-braces check the bound parameter values just in case a caller
-# tries to smuggle "--full" inside another argument.
-foreach ($v in @($ZenExePath, $ServiceName, $DataDir)) {
-    if ($null -eq $v) { continue }
-    if ([string]$v -imatch '(^|\s)--full(\s|=|$)') {
-        @{
-            ok = $false
-            message = "RED LINE: --full flag refused (Plan 7 §12)"
-        } | ConvertTo-Json -Compress
-        exit 0
-    }
-}
-
 try {
     # --- Validate ZenExePath -------------------------------------------------
     if ([string]::IsNullOrWhiteSpace($ZenExePath)) {
@@ -289,6 +245,26 @@ try {
     foreach ($root in $forbiddenRoots) {
         if ($lowerDataDir -eq $root -or $lowerDataDir.StartsWith($root + '\')) {
             throw "DataDir '$normalizedDataDir' is under a forbidden system location ($root)"
+        }
+    }
+
+    # --- Legacy service name migration -------------------------------------------
+    # UECM previously used "ZenServer" as the service name. UE's built-in
+    # ConditionalUpdateSystemServiceInstall() hardcodes that exact name and
+    # triggers update/uninstall/relaunch dialogs when the ImagePath doesn't
+    # match the running UE version's expectations. Renamed to "UECMZenServer"
+    # to avoid multi-version UE conflicts. Auto-migrate: if the old service
+    # exists, stop and remove it so the port is freed for the new name.
+    $legacyServiceName = 'ZenServer'
+    if ($ServiceName -ne $legacyServiceName) {
+        $legacySvc = Get-Service -Name $legacyServiceName -ErrorAction SilentlyContinue
+        if ($null -ne $legacySvc) {
+            if ($legacySvc.Status -eq 'Running') {
+                Stop-Service -Name $legacyServiceName -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 2
+            }
+            & sc.exe delete $legacyServiceName 2>&1 | Out-Null
+            Start-Sleep -Seconds 1
         }
     }
 
@@ -519,208 +495,91 @@ try {
         exit 0
     }
 
-    # --- Run zen.exe service install ----------------------------------------
-    # `zen service install` only knows install-time options (--name,
-    # --install-path, etc.); zenserver runtime flags MUST appear after the
-    # bare `--` separator so zen records them in the installed service's
-    # command line (see /Users/bip.lan/AIWorkspace/vp/zen/src/zen/cmds/
-    # service_cmd.h:37 and service_cmd.cpp PassthroughCommandLine).
-    # Therefore `--data-dir` goes after `--`, NOT as an install option.
+    # --- Register service via sc.exe create -----------------------------------
+    # Direct sc.exe create instead of `zen.exe service install`. Benefits:
+    #   - No dependency on zen.exe for service management
+    #   - Full control over service name (avoids the "ZenServer" default that
+    #     collides with UE's ConditionalUpdateSystemServiceInstall)
+    #   - Sets the correct ImagePath from the start (no post-install patch)
+    #   - Sets the service account at creation time (no separate sc config)
+    #   - Matches Epic's official "Zenserver as Shared DDC" deployment guide
     #
-    # NOTE: Zen's `-u` install option is defined in service_cmd.cpp but the
-    # Windows InstallService implementation in zenutil/service.cpp:441-453
-    # hardcodes `CreateService(..., "NT AUTHORITY\LocalService", NULL)` and
-    # ignores Spec.UserName. There is also no `-p` install option. So we
-    # cannot set the service account via zen on Windows — we patch the SCM
-    # record with `sc.exe config obj= ... password= ...` after a clean
-    # install lands, below.
-    #
-    # Use the call operator (`&`) with separate string args so PowerShell's
-    # native argument quoting handles space-containing paths like
-    # `D:\UE Cache\Zen` correctly. Start-Process -ArgumentList flattens the
-    # array using its own quoting rules which historically drops boundaries
-    # for space-containing args.
-    $installArgs = New-Object System.Collections.ArrayList
-    [void]$installArgs.Add('service')
-    [void]$installArgs.Add('install')
-    [void]$installArgs.Add('--name')
-    [void]$installArgs.Add($ServiceName)
-    [void]$installArgs.Add('--')
-    [void]$installArgs.Add('--data-dir')
-    [void]$installArgs.Add($normalizedDataDir)
-    if (-not [string]::IsNullOrWhiteSpace($Port)) {
-        [void]$installArgs.Add('--port')
-        [void]$installArgs.Add($Port)
-    }
-    if (-not [string]::IsNullOrWhiteSpace($HttpServerClass)) {
-        [void]$installArgs.Add('--http')
-        [void]$installArgs.Add($HttpServerClass)
-    }
-    $combined = (& $ZenExePath @installArgs 2>&1 | Out-String)
-    $exitCode = [int]$LASTEXITCODE
-    if ($null -eq $combined) { $combined = '' }
-
-    if ($exitCode -ne 0) {
-        @{
-            ok = $false
-            message = "zen service install failed (exit $exitCode)"
-            zen_exit_code = $exitCode
-            zen_combined = $combined
-        } | ConvertTo-Json -Compress -Depth 4
-        exit 0
+    # Resolve zenserver.exe from the zen.exe path (sibling binary).
+    $zenserverExe = Normalize-ZenExe $ZenExePath
+    if (-not (Test-Path -LiteralPath $zenserverExe -PathType Leaf)) {
+        throw "zenserver.exe not found at $zenserverExe (expected sibling of $ZenExePath)"
     }
 
-    # --- Patch service account via sc.exe config ----------------------------
-    # Only when -ServiceUser was supplied. zen has left the service at
-    # LocalService at this point; we move it to the requested account.
-    # Built-in accounts (LocalSystem / LocalService / NetworkService) take
-    # no password; sc requires `password= ""` (empty) for them. Other
-    # accounts require a real password — the caller is responsible for
-    # ensuring the account exists and has SeServiceLogonRight.
-    $scOutput = $null
-    $scExit = $null
-    $scApplied = $false
-    $scAccount = $null
+    # Build the ImagePath with all runtime args baked in.
+    $binpath = '"' + ([System.IO.Path]::GetFullPath($zenserverExe).TrimEnd('\')) + '"'
+    $binpath += ' --data-dir "' + $normalizedDataDir + '"'
+    if (-not [string]::IsNullOrWhiteSpace($Port)) { $binpath += " --port $Port" }
+    if (-not [string]::IsNullOrWhiteSpace($HttpServerClass)) { $binpath += " --http $HttpServerClass" }
+
+    # Determine the service account. Default to LocalService (same as zen.exe's
+    # hardcoded default). Canonicalize built-in account names for sc.exe.
+    $effectiveUser = 'NT AUTHORITY\LocalService'
+    $isBuiltin = $true
     if (-not [string]::IsNullOrWhiteSpace($ServiceUser)) {
         $normalizedUser = Normalize-Account $ServiceUser
         $isBuiltin = @('localsystem', 'localservice', 'networkservice') -contains $normalizedUser
-        # Credential / password coherency was validated above, before
-        # `zen service install` ran. Reaching this point with a non-built-in
-        # account guarantees a password is present.
-        # Codex P2: validation accepts built-in aliases like `LocalService`,
-        # `NT AUTHORITY\System`, `.\LocalSystem` but `sc.exe config obj=`
-        # only accepts the canonical SCM names — `LocalSystem`,
-        # `NT AUTHORITY\LocalService`, `NT AUTHORITY\NetworkService`.
-        # Forwarding the raw alias breaks the patch and forces a rollback
-        # the operator can't recover from. Canonicalize before sc.exe.
         $effectiveUser = switch ($normalizedUser) {
             'localsystem'     { 'LocalSystem' }
             'localservice'    { 'NT AUTHORITY\LocalService' }
             'networkservice'  { 'NT AUTHORITY\NetworkService' }
             default           { $ServiceUser }
         }
-        # sc.exe's bizarre `option= value` syntax: the `=` is attached to the
-        # option name and the value is a separate token. Bug 3 (2026-06-05 lanPC
-        # E2E): for a built-in account sc.exe needs NO password token at all —
-        # passing `'password=', ''` makes PowerShell drop the empty-string token
-        # when splatting to native sc.exe, leaving a dangling `password=` →
-        # ERROR_INVALID_COMMAND_LINE (1639) → rollback. Omit the password pair
-        # for built-in accounts; non-built-in accounts always carry a real
-        # (non-empty) password here (validated before `zen service install`).
-        if ($isBuiltin) {
-            $scArgs = @('config', $ServiceName, 'obj=', $effectiveUser)
-        } else {
-            $scArgs = @('config', $ServiceName, 'obj=', $effectiveUser, 'password=', $ServicePassword)
-        }
-        $scOutput = (& sc.exe @scArgs 2>&1 | Out-String)
-        $scExit = [int]$LASTEXITCODE
-
-        # Codex P2: roll back the freshly-created LocalService install when
-        # the account patch fails. Without this, a retry with corrected
-        # credentials hits the existing-service drift refusal and forces
-        # the operator to run zen-service-uninstall.ps1 by hand. We use
-        # `zen.exe service uninstall` (not raw sc delete) so the rollback
-        # mirrors the regular uninstall path and removes any zen-side
-        # state it might track. The rollback is best-effort: we report
-        # the original sc failure regardless.
-        function Invoke-ServiceRollback {
-            $uninstallArgs = @('service', 'uninstall', '--name', $ServiceName)
-            $uOut = (& $ZenExePath @uninstallArgs 2>&1 | Out-String)
-            $uExit = [int]$LASTEXITCODE
-            return @{ exit_code = $uExit; output = $uOut }
-        }
-
-        # Codex P2: the rollback is best-effort; if `zen service uninstall`
-        # also fails, the message must say "rollback FAILED" so the caller
-        # knows an orphan service still exists. Without this they'd retry
-        # and hit the existing-service drift refusal believing the
-        # environment was clean.
-        function Format-RollbackTag {
-            param([int]$ExitCode)
-            if ($ExitCode -eq 0) { 'service rolled back' }
-            else { "rollback FAILED (exit $ExitCode) — orphan service may remain, manual uninstall required" }
-        }
-
-        if ($scExit -ne 0) {
-            $rollback = Invoke-ServiceRollback
-            $tag = Format-RollbackTag -ExitCode $rollback.exit_code
-            @{
-                ok = $false
-                message = "sc.exe config (set service account) failed (exit $scExit); $tag"
-                service_name = $ServiceName
-                zen_exit_code = $exitCode
-                sc_exit_code = $scExit
-                sc_output = $scOutput
-                rollback_exit_code = $rollback.exit_code
-                rollback_output = $rollback.output
-            } | ConvertTo-Json -Compress -Depth 4
-            exit 0
-        }
-        # Verify the change landed — sc.exe occasionally returns 0 on
-        # permission failures, so re-read the SCM record. Codex P2: use
-        # the CIM-or-registry helper so hosts with WMI/CIM disabled by
-        # policy don't read null and trip a false rollback.
-        $actualStartName = Get-ServiceAccount $ServiceName
-        $verifyAccount = if ($null -ne $actualStartName) { Normalize-Account $actualStartName } else { '' }
-        if ($verifyAccount -ne $normalizedUser) {
-            $rollback = Invoke-ServiceRollback
-            $tag = Format-RollbackTag -ExitCode $rollback.exit_code
-            @{
-                ok = $false
-                message = ("sc.exe config returned 0 but service account did not change " +
-                           "(expected '{0}', got '{1}'); {2}.") `
-                          -f $ServiceUser, $actualStartName, $tag
-                service_name = $ServiceName
-                zen_exit_code = $exitCode
-                sc_exit_code = $scExit
-                sc_output = $scOutput
-                actual_service_account = $actualStartName
-                rollback_exit_code = $rollback.exit_code
-                rollback_output = $rollback.output
-            } | ConvertTo-Json -Compress -Depth 4
-            exit 0
-        }
-        $scApplied = $true
-        $scAccount = $actualStartName
     }
 
-    # --- Patch binpath to add runtime flags (--port, --http) -----------------
-    # zen.exe service install writes only "--data-dir" into the SCM PathName;
-    # the extra runtime flags we pass via "--" are not persisted. Patch the
-    # service's ImagePath registry value so the correct port and HTTP server
-    # class survive across machine reboots and service reinstalls.
-    $binpathPatched = $false
-    if ((-not [string]::IsNullOrWhiteSpace($Port)) -or `
-        (-not [string]::IsNullOrWhiteSpace($HttpServerClass))) {
-        try {
-            $regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName"
-            $existingBinpath = (Get-ItemProperty -LiteralPath $regPath -Name 'ImagePath' -ErrorAction Stop).ImagePath
-            # Build the patched binpath: quote the exe, then runtime args.
-            $exePart = '"' + ([System.IO.Path]::GetFullPath($existingBinpath.TrimStart('"').Split('"')[0]).TrimEnd('\')) + '"'
-            $runtimeArgs = '--data-dir "' + $normalizedDataDir + '"'
-            if (-not [string]::IsNullOrWhiteSpace($Port)) {
-                $runtimeArgs += " --port $Port"
-            }
-            if (-not [string]::IsNullOrWhiteSpace($HttpServerClass)) {
-                $runtimeArgs += " --http $HttpServerClass"
-            }
-            $newBinpath = "$exePart $runtimeArgs"
-            Set-ItemProperty -LiteralPath $regPath -Name 'ImagePath' -Value $newBinpath -ErrorAction Stop
-            $binpathPatched = $true
-        } catch {
-            # Non-fatal: service will still start with zen's default port/http.
-        }
+    # sc.exe create with account set at creation time (no separate config step).
+    $scArgs = @('create', $ServiceName, 'start=', 'auto', 'binpath=', $binpath, 'obj=', $effectiveUser)
+    if (-not $isBuiltin) {
+        $scArgs += @('password=', $ServicePassword)
+    }
+    $scOutput = (& sc.exe @scArgs 2>&1 | Out-String)
+    $scExit = [int]$LASTEXITCODE
+
+    if ($scExit -ne 0) {
+        @{
+            ok = $false
+            message = "sc create failed (exit $scExit)"
+            service_name = $ServiceName
+            sc_exit_code = $scExit
+            sc_output = $scOutput
+        } | ConvertTo-Json -Compress -Depth 4
+        exit 0
+    }
+
+    # Configure failure recovery: auto-restart after 60 seconds on crash.
+    & sc.exe failure $ServiceName reset= 60 actions= restart/60000 2>&1 | Out-Null
+
+    # Verify the account landed correctly.
+    $actualStartName = Get-ServiceAccount $ServiceName
+    $verifyAccount = if ($null -ne $actualStartName) { Normalize-Account $actualStartName } else { '' }
+    $expectedNorm = if (-not [string]::IsNullOrWhiteSpace($ServiceUser)) { Normalize-Account $ServiceUser } else { 'localservice' }
+    if ($verifyAccount -ne $expectedNorm) {
+        # Rollback: remove the service so a retry doesn't hit the
+        # existing-service drift refusal.
+        & sc.exe delete $ServiceName 2>&1 | Out-Null
+        @{
+            ok = $false
+            message = ("sc create succeeded but service account mismatch " +
+                       "(expected '{0}', got '{1}'); service rolled back.") `
+                      -f $effectiveUser, $actualStartName
+            service_name = $ServiceName
+            sc_exit_code = $scExit
+            sc_output = $scOutput
+            actual_service_account = $actualStartName
+        } | ConvertTo-Json -Compress -Depth 4
+        exit 0
     }
 
     $payload = @{
         ok = $true
         service_name = $ServiceName
-        zen_exit_code = $exitCode
-        service_account_applied = $scApplied
-        service_account = $scAccount
-        sc_exit_code = $scExit
-        binpath_patched = $binpathPatched
-        message = $combined.Trim()
+        service_account = $actualStartName
+        binpath = $binpath
+        message = "service '$ServiceName' created successfully"
     }
     $payload | ConvertTo-Json -Compress -Depth 4
 }
