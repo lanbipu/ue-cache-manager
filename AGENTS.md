@@ -14,7 +14,7 @@
 - `ue54-docs` (321 files) → `.Codex/knowledge/ue54-docs/`
 - `ue55-docs` (324 files) → `.Codex/knowledge/ue55-docs/`
 - `ue56-docs` (389 files) → `.Codex/knowledge/ue56-docs/`
-- `ue57-docs` (2205 files) → `.Codex/knowledge/ue57-docs/`
+- `ue57-docs` (2205 indexed docs, compact loader) → `.Codex/knowledge/ue57-docs/`
 
 ### Query Protocol
 1. Read `.Codex/knowledge/_INDEX.md` to route to the relevant source.
