@@ -199,9 +199,6 @@ pub fn handle(ctx: &mut Ctx<'_>, action: ZenAction) -> UecmResult<()> {
                 service_status(ctx, endpoint_id, &cred)
             }
         },
-        ZenAction::SponsorDown { endpoint_id, yes, dry_run, cred } => {
-            sponsor_down(ctx, endpoint_id, yes, dry_run, &cred)
-        }
         ZenAction::Urlacl { action } => match action {
             ZenUrlaclAction::Add { endpoint_id, principal, yes, dry_run, cred } => {
                 urlacl_add(ctx, endpoint_id, &principal, yes, dry_run, &cred)

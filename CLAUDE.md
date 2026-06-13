@@ -55,7 +55,7 @@ UECM ↔ Zen 全链路集成已合 main（PR #10，2026-05-20）。改 zen 相�
 - `ue54-docs` (321 files) → `.claude/knowledge/ue54-docs/`
 - `ue55-docs` (324 files) → `.claude/knowledge/ue55-docs/`
 - `ue56-docs` (389 files) → `.claude/knowledge/ue56-docs/`
-- `ue57-docs` (411 files) → `.claude/knowledge/ue57-docs/`
+- `ue57-docs` (2205 files) → `.claude/knowledge/ue57-docs/`
 
 ### Query Protocol
 1. Read `.claude/knowledge/_INDEX.md` to route to the relevant source.
