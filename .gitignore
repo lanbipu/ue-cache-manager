@@ -73,3 +73,4 @@ skills-lock.json
 .codex
 # Playwright MCP transient accessibility snapshots
 .playwright-mcp/
+_walkthrough/

@@ -45,13 +45,13 @@
 - **修复**：`zen-urlacl-add.ps1` 新增 SID 比对函数，同 SID 不报冲突（commit 88a5a91）
 - **复验**：返回 `ok:true, already_exists:true`
 
-### BUG-5（新）：UECM ZenServer 服务与多版本 UE 冲突 ⚠️ 部分修复
+### BUG-5（新）：UECM ZenServer 服务与多版本 UE 冲突 ✅ 已修复
 - **现象**：UE 5.7 启动时弹 4 个报错窗口，Zen 缓存不可用
-- **第一阶段修复**（commit 92017be）：服务名改为 `UECMZenServer` + `zen enable` 写 `AutoLaunch=false` → 弹窗由 4 个减至 1 个（前 3 个服务冲突窗消失）
-- **仍剩 1 个弹窗**："Failed to auto launch, failed to shut down currently running service using port 8558"
-- **根因**（F-038）：`AutoLaunch=false` 写入的是 `AppData\Roaming\...`，但 UE 读的是 `AppData\Local\...`，写入无效
-- **第二阶段修复**（commit 0e9aeb4）：`domain_zen.rs` 路径从 Roaming 改为 Local
-- **复验步骤**：更新 binary → 重新运行 `zen enable --global` → 启动 UE 确认不再弹窗
+- **根因**：`zen enable` 未在目标机器执行，UE 默认 `AutoLaunch=true` 导致与 UECM 托管的 ZenServer 服务冲突
+- **修复 1**（commit 92017be）：服务名改为 `UECMZenServer`，避免 UE 的 `DetermineSystemServiceInfo()` 误识别
+- **修复 2**（commit 0e9aeb4）：`domain_zen.rs` 全局模式 UserEngine.ini 路径从 Roaming 改为 Local（与 UE ConfigHierarchy 一致）
+- **修复 3**：在 lanPC 执行 `zen enable --global`，写入 `AutoLaunch=false` + `ZenShared` 到 `UserEngine.ini`
+- **复验**（2026-06-13）：启动 UE Editor，无弹窗，Zen 缓存正常连接
 
 ---
 

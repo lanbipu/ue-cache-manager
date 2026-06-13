@@ -202,22 +202,7 @@ pub fn enable_project(
     // Always echo any resolver warnings into the outcome.
     let mut warnings = rules.warnings.clone();
 
-    // Tell UE not to auto-manage zenserver — UECM owns the service.
-    // Written unconditionally (even when ZenShared is already present)
-    // so that re-running `zen enable` on a project upgraded from an older
-    // UECM version still gets the fix. Without this, UE's AutoLaunch
-    // subsystem detects UECM's service on the port via ZenServerState
-    // shared memory and tries to shut it down, causing error dialogs on
-    // multi-version UE machines. With AutoLaunch=false UE falls into
-    // ConnectExisting mode and simply connects via HTTP.
-    let autolaunch_current = read_section(host, ini_path, "Zen")
-        .unwrap_or_default()
-        .iter()
-        .find(|k| k.name.eq_ignore_ascii_case("AutoLaunch"))
-        .map(|k| k.value.clone());
-    let autolaunch_needs_write = autolaunch_current.as_deref() != Some("false");
-
-    if diff.is_noop() && !autolaunch_needs_write {
+    if diff.is_noop() {
         return Ok(EnableOutcome {
             changed: false,
             ini_file: ini_path.to_string(),
@@ -253,23 +238,6 @@ pub fn enable_project(
         })?;
         backups.push(backup);
         keys_set.push(rec);
-    }
-
-    if autolaunch_needs_write {
-        let backup = set_key(host, ini_path, "Zen", "AutoLaunch", "false")
-            .map_err(|e| {
-                UecmError::OperationFailed(format!(
-                    "enable_project: set AutoLaunch=false in [Zen] failed: {e}"
-                ))
-            })?;
-        backups.push(backup);
-        keys_set.push(KeyApplyRecord {
-            section: "Zen".into(),
-            key: "AutoLaunch".into(),
-            action: "set".into(),
-            previous_value: autolaunch_current,
-            new_value: Some("false".into()),
-        });
     }
 
     // SMB-shared rule lives in `smb_rule.section` (same as `section` in
@@ -370,23 +338,8 @@ pub fn disable_project(
             ))
         })?;
 
-    let mut backups = vec![backup];
-    let mut keys_removed = vec![record];
-
-    // Restore UE's default AutoLaunch behaviour so UE manages zenserver
-    // itself once UECM is no longer providing a service on this project.
-    // Best-effort: a missing [Zen] section or key is fine — the UE
-    // default (AutoLaunch=true) is the fallback we want anyway.
-    if let Ok(b) = remove_key(host, ini_path, "Zen", "AutoLaunch") {
-        backups.push(b);
-        keys_removed.push(KeyApplyRecord {
-            section: "Zen".into(),
-            key: "AutoLaunch".into(),
-            action: "remove".into(),
-            previous_value: Some("false".into()),
-            new_value: None,
-        });
-    }
+    let backups = vec![backup];
+    let keys_removed = vec![record];
 
     Ok(DisableOutcome {
         changed: true,
@@ -633,14 +586,7 @@ pub fn enable_global(
 
     let mut warnings = rules.warnings.clone();
 
-    let autolaunch_current = read_section(host, ini_path, "Zen")
-        .unwrap_or_default()
-        .iter()
-        .find(|k| k.name.eq_ignore_ascii_case("AutoLaunch"))
-        .map(|k| k.value.clone());
-    let autolaunch_needs_write = autolaunch_current.as_deref() != Some("false");
-
-    if diff.is_noop() && !autolaunch_needs_write {
+    if diff.is_noop() {
         return Ok(EnableOutcome {
             changed: false,
             ini_file: ini_path.to_string(),
@@ -672,25 +618,6 @@ pub fn enable_global(
         })?;
         backups.push(backup);
         keys_set.push(rec);
-    }
-
-    if autolaunch_needs_write {
-        let backup = crate::core::ini_editor::set_key_create(
-            host, ini_path, "Zen", "AutoLaunch", "false",
-        )
-        .map_err(|e| {
-            UecmError::OperationFailed(format!(
-                "enable_global: set AutoLaunch=false in [Zen] failed: {e}"
-            ))
-        })?;
-        backups.push(backup);
-        keys_set.push(KeyApplyRecord {
-            section: "Zen".into(),
-            key: "AutoLaunch".into(),
-            action: "set".into(),
-            previous_value: autolaunch_current,
-            new_value: Some("false".into()),
-        });
     }
 
     for rec in diff.remove_legacy.iter().cloned() {
@@ -1174,15 +1101,13 @@ mod tests {
         let initial = "[InstalledDerivedDataBackendGraph]\nLocal=(Type=FileSystem)\n";
         let (after, outcome) = run_enable(initial);
         assert!(outcome.changed, "fresh INI must change");
-        assert_eq!(outcome.keys_set.len(), 2, "ZenShared + [Zen] AutoLaunch=false");
+        assert_eq!(outcome.keys_set.len(), 1, "ZenShared only");
         assert_eq!(outcome.keys_set[0].key, "ZenShared");
-        assert_eq!(outcome.keys_set[1].key, "AutoLaunch");
         assert!(outcome.keys_removed.is_empty(), "no legacy keys to remove");
         assert!(after.contains("ZenShared="));
         assert!(after.contains("Host=\"render-master\""));
         assert!(after.contains("Local=(Type=FileSystem)"), "untouched key stays");
-        assert!(after.contains("AutoLaunch=false"), "[Zen] AutoLaunch=false must be set");
-        assert_eq!(outcome.backups.len(), 2, "one backup per write");
+        assert_eq!(outcome.backups.len(), 1, "one backup per write");
         // Env cleanup metadata is captured even when no env action was taken.
         assert_eq!(outcome.env_cleanup_planned.len(), 1);
         assert_eq!(outcome.env_cleanup_planned[0].var, "UE-SharedDataCachePath");
@@ -1190,9 +1115,8 @@ mod tests {
 
     #[test]
     fn enable_project_is_idempotent_when_already_applied() {
-        // Pre-seed the file with ZenShared AND AutoLaunch=false already set.
         let initial = format!(
-            "[InstalledDerivedDataBackendGraph]\nZenShared={}\n[Zen]\nAutoLaunch=false\n",
+            "[InstalledDerivedDataBackendGraph]\nZenShared={}\n",
             rendered_zen_value()
         );
         let (after, outcome) = run_enable(&initial);
@@ -1204,20 +1128,6 @@ mod tests {
     }
 
     #[test]
-    fn enable_project_adds_autolaunch_false_even_when_zen_shared_present() {
-        // ZenShared already present but [Zen] AutoLaunch=false is missing.
-        // Re-running `zen enable` must still write AutoLaunch=false.
-        let initial = format!(
-            "[InstalledDerivedDataBackendGraph]\nZenShared={}\n",
-            rendered_zen_value()
-        );
-        let (after, outcome) = run_enable(&initial);
-        assert!(outcome.changed, "missing AutoLaunch must trigger a write");
-        assert!(outcome.keys_set.iter().any(|k| k.key == "AutoLaunch"));
-        assert!(after.contains("AutoLaunch=false"));
-    }
-
-    #[test]
     fn enable_project_strips_legacy_pak_and_smb() {
         let initial = "[InstalledDerivedDataBackendGraph]\n\
                        Pak=(Type=Pak, Path=\"E:/Pak\")\n\
@@ -1225,14 +1135,14 @@ mod tests {
                        Shared=(Type=FileSystem, Path=\"\\\\srv\\share\")\n";
         let (after, outcome) = run_enable(initial);
         assert!(outcome.changed);
-        assert_eq!(outcome.keys_set.len(), 2, "ZenShared + AutoLaunch");
+        assert_eq!(outcome.keys_set.len(), 1, "ZenShared");
         assert_eq!(outcome.keys_removed.len(), 3, "Pak + CompressedPak + Shared");
         assert!(!after.contains("Pak=(Type=Pak"));
         assert!(!after.contains("CompressedPak="));
         assert!(!after.contains("Shared=(Type=FileSystem"));
         assert!(after.contains("ZenShared="));
-        // One backup per mutation: 2 sets + 3 removes.
-        assert_eq!(outcome.backups.len(), 5);
+        // One backup per mutation: 1 set + 3 removes.
+        assert_eq!(outcome.backups.len(), 4);
         // Outcome should include a warning about env cleanup being needed.
         assert!(
             outcome.warnings.iter().any(|w| w.contains("env var")),

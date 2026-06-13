@@ -532,11 +532,15 @@ try {
     }
 
     # sc.exe create with account set at creation time (no separate config step).
-    $scArgs = @('create', $ServiceName, 'start=', 'auto', 'binpath=', $binpath, 'obj=', $effectiveUser)
+    # PowerShell splatting (@scArgs) double-escapes $binpath's inner quotes →
+    # sc.exe exit 1639. Route through cmd /c so cmd.exe sees the raw string
+    # with backslash-escaped inner quotes, exactly as in the registry format.
+    $scBinpath = '"' + $binpath.Replace('"', '\"') + '"'
+    $scCmd = "sc create `"$ServiceName`" binpath= $scBinpath start= auto obj= `"$effectiveUser`""
     if (-not $isBuiltin) {
-        $scArgs += @('password=', $ServicePassword)
+        $scCmd += " password= `"$ServicePassword`""
     }
-    $scOutput = (& sc.exe @scArgs 2>&1 | Out-String)
+    $scOutput = (cmd /c $scCmd 2>&1 | Out-String)
     $scExit = [int]$LASTEXITCODE
 
     if ($scExit -ne 0) {

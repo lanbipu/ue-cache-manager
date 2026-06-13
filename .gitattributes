@@ -1,0 +1,8 @@
+# Repo-wide line-ending policy. Prevents accidental LF<->CRLF churn
+# (e.g. a Windows editor re-saving every file as CRLF).
+* text=auto eol=lf
+
+# Windows batch must stay CRLF — double-click execution depends on it (see CLAUDE.md).
+# Treat as binary so git NEVER touches the line endings, in any checkout/export path.
+*.cmd -text
+*.bat -text
