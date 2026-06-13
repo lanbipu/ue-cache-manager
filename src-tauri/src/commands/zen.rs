@@ -1195,6 +1195,8 @@ pub fn zen_service_uninstall(
     let zen_exe = install
         .as_ref()
         .and_then(|m| m.zen_cli_path.clone())
+        // F1: no install-dir copy recorded → fall back to the highest-version
+        // intree zen.exe from machine_ue_installs (list_for_machine is version DESC).
         .or_else(|| {
             crate::data::machine_ue_installs::list_for_machine(&db, ep.machine_id)
                 .ok()

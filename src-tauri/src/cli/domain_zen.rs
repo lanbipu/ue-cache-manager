@@ -199,6 +199,9 @@ pub fn handle(ctx: &mut Ctx<'_>, action: ZenAction) -> UecmResult<()> {
                 service_status(ctx, endpoint_id, &cred)
             }
         },
+        ZenAction::SponsorDown { endpoint_id, yes, dry_run, cred } => {
+            sponsor_down(ctx, endpoint_id, yes, dry_run, &cred)
+        }
         ZenAction::Urlacl { action } => match action {
             ZenUrlaclAction::Add { endpoint_id, principal, yes, dry_run, cred } => {
                 urlacl_add(ctx, endpoint_id, &principal, yes, dry_run, &cred)
@@ -1187,8 +1190,8 @@ fn apply_config(
                 "endpoint_id": endpoint_id,
                 "machine_id": ep.machine_id,
                 "host": machine.ip,
-                // PLACEHOLDER: T2.9 will lock down the real path. Until then
-                // operator supplies / accepts the C:\Tools\UECM\zen.lua default.
+                // dest_path is operator-supplied, or (F6) derived from the
+                // detected install-dir zen.exe → …\Zen\Install\zen.lua.
                 "dest_path": &dest_path,
                 "lua": lua,
             }),
@@ -1474,6 +1477,9 @@ fn service_install(
         "ZenExePath": zen_exe,
         "ServiceName": DEFAULT_SERVICE_NAME,
         "DataDir": ep.data_dir,
+        // F2: zen's `service install` does NOT persist these into the SCM
+        // ImagePath; the sidecar patches the registry so the service starts on
+        // the declared port instead of relocating to base+100.
         "Port": ep.declared_port,
         "HttpServerClass": ep.httpserverclass,
     });
@@ -1530,6 +1536,8 @@ fn service_uninstall(
     let zen_exe = install
         .as_ref()
         .and_then(|m| m.zen_cli_path.clone())
+        // F1: no install-dir copy recorded → fall back to the highest-version
+        // intree zen.exe from machine_ue_installs (list_for_machine is version DESC).
         .or_else(|| {
             crate::data::machine_ue_installs::list_for_machine(&db, ep.machine_id)
                 .ok()
