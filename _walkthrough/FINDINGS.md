@@ -271,7 +271,7 @@ uecm-cli zen service install --endpoint-id <ID> --cred-alias <ALIAS> --yes
 **类型**：DOC（前置依赖）
 **发现步骤**：功能 2 — zen enable
 **现象**：`zen enable --global --machines 1` 报 "machine id=1 has no ue_runtime_user set — run machine set-ue-user first"（exit 2）
-**实际**：`--global` 模式需要知道 UE 运行账号来定位 `UserEngine.ini` 路径（`C:\Users\<ue_runtime_user>\AppData\Roaming\Unreal Engine\Engine\Config\UserEngine.ini`）
+**实际**：`--global` 模式需要知道 UE 运行账号来定位 `UserEngine.ini` 路径（`C:\Users\<ue_runtime_user>\AppData\Local\Unreal Engine\Engine\Config\UserEngine.ini`）
 **解法**：`machine set-ue-user --machine <ID> --ue-user <Windows用户名>` 先行录入
 **影响**：机器接入向导应在 machine refresh 之后引导用户填 ue_runtime_user
 
@@ -310,19 +310,25 @@ echo '{"Name":"UE-SharedDataCachePath"}' | \
 **发现步骤**：功能 2 — zen apply-config dry-run
 **现象**：未跑 `zen detect-binary` 时，`zen apply-config` 报 "cannot derive --dest-path: machine id=X has no install-dir zen.exe recorded"（exit 2）
 **实际**：`detect-binary` 会探测机器上所有 UE 安装位置的 zen.exe / zenserver.exe，选最新版本记入 DB；`apply-config` 从 DB 读这条记录来决定 zen.lua 的写入路径
-**完整 ZenServer 部署顺序**：
+**完整 ZenServer 部署顺序**（独立服务器方案）：
+
+服务端（在 Zen 服务器上执行）：
 ```
-1. zen register --machine <id> --role shared_upstream --declared-port 8558 --data-dir <dir>
-2. zen detect-binary --machine <id> --cred-alias <alias>
+1. zen register --machine <server_id> --role shared_upstream --declared-port 8558 --data-dir <dir>
+2. zen detect-binary --machine <server_id> --cred-alias <alias>
 3. zen apply-config --endpoint-id <id> --cred-alias <alias> --yes
 4. zen urlacl add --endpoint-id <id> --principal "NT AUTHORITY\LocalService" --cred-alias <alias> --yes
 5. zen service install --endpoint-id <id> --cred-alias <alias> --yes
 6. zen service start --endpoint-id <id> --cred-alias <alias>
-7. zen probe --machine <id>
-8. machine set-ue-user --machine <id> --ue-user <Windows用户名>
-9. zen enable --upstream-endpoint-id <id> --global --machines <id> --cred-alias <alias> --yes
-10. (提权SSH) zen-env-cleanup.ps1 清理 UE-SharedDataCachePath
+7. zen probe --machine <server_id>
 ```
+
+客户端（在各工作站上执行）：
+```
+8. machine set-ue-user --machine <workstation_id> --ue-user <Windows用户名>
+9. zen enable --upstream-endpoint-id <id> --global --machines <workstation_id> --cred-alias <alias> --yes
+```
+注意：独立服务器方案下不需要 `AutoLaunch=false`，UE 的 ZenLocal 保持正常工作。
 
 ---
 
@@ -442,15 +448,13 @@ exit code: 101
 
 ---
 
-### F-037 · `zen service install` 新 sc.exe 方式在 PowerShell 下 exit 1639 ✅ 已修复（2026-06-13 本地热修）
+### F-037 · `zen service install` 新 sc.exe 方式在 PowerShell 下 exit 1639 ✅ 已修复（commit 237b012）
 **类型**：BUG（服务安装失败）
 **发现步骤**：ZenServer 重新部署复验
 **现象**：`zen service install` 报 "sc create failed (exit 1639)"（`ERROR_INVALID_COMMAND_LINE`）
-**根因**：commit 92017be 将 `zen.exe service install` 改为 `sc.exe create` 直接调用（为了避免服务名冲突），但使用 PowerShell splatting 传参 `& sc.exe @scArgs` 时，`$binpath` 字符串中已有内部引号（`"D:\path\zenserver.exe" --data-dir "D:\..."`），PowerShell 对其进行二次转义（`\"...\"`），sc.exe 的自有命令行解析器无法识别该格式，返回 1639
-**验证**：通过提权 SSH 用 cmd.exe 原生语法测试，同样的参数运行正常；仅 PowerShell splatting 路径失败
-**修复**：`ps-scripts/zen-service-install.ps1` — 将 sc.exe 调用改为 `cmd /c` 字符串方式，对 `$binpath` 内部引号以 `\"` 替换后再加外层引号构造 `$scCmd`，绕过 PowerShell 参数转义层
+**根因**：commit 92017be 将 `zen.exe service install` 改为 `sc.exe create` 直接调用，但使用 PowerShell splatting 传参 `& sc.exe @scArgs` 时，`$binpath` 字符串中已有内部引号，PowerShell 对其进行二次转义，sc.exe 无法识别该格式
+**修复**：`ps-scripts/zen-service-install.ps1` — 将 sc.exe 调用改为 `cmd /c` 字符串方式，绕过 PowerShell 参数转义层
 **复验结果**（2026-06-13）：`zen service install` 成功，`UECMZenServer` 服务创建并启动（Running, Automatic）
-**注意**：此修复目前仅在 `C:\Tools\UECM\ps-scripts\` 热修，源码 repo 已同步，待 commit
 
 ---
 
@@ -469,20 +473,33 @@ UE 源码确认链路：`ConfigHierarchy.h` Layer "UserSettingsDir" 路径模板
 
 ---
 
-### F-036 · UECM 管理的 ZenServer 系统服务与多版本 UE 冲突 ✅ 已修复（commit 92017be）
-**类型**：BUG（多 UE 版本共存时功能不可用）
+### F-036 · UECM 管理的 ZenServer 系统服务与 UE Editor 冲突 ✅ 已修复（架构调整）
+**类型**：BUG（同机部署时 UE Editor 与 UECM 服务端口冲突）
 **发现步骤**：走读后分析 + UE 5.7 启动截图
-**现象**：UECM 用 UE 5.8 in-tree binary 将 ZenServer 注册为 Windows 服务（名称 `ZenServer`，端口 8558）后，打开 UE 5.7 时弹出 4 个错误弹窗：
-1. "Unable to update Unreal Zen Storage Server — requires administrator privileges"
-2. "Failed to uninstall a running system service instance"
-3. "Failed to auto launch — failed to shut down currently running service using port 8558"（两次）
-且 UE 5.7 Zen 缓存完全不可用
-**根因**：UE 源码 `ZenServerInterface.cpp::ConditionalUpdateSystemServiceInstall()` 在检测到服务命令行参数与自身预期不符时触发"更新 → 卸载 → AutoLaunch"失败链；UECM 用的服务名 `ZenServer` 与 UE 自管理服务名冲突
-**背景**（已验证）：ZenServer 协议本身向后兼容（`docs/dev/VersioningCompatibility.md`：新服务器 + 旧客户端 = 兼容），UE 5.7 连 ZenServer 5.8.x 在协议层无问题；ZenServer 最低支持 UE 5.4
-**修复**：
-- `ps-scripts/zen-service-install.ps1`：改用 `sc.exe create` 直接注册服务，服务名从 `ZenServer` 改为 `UECMZenServer`，避免与 UE 内置服务名冲突
-- `src-tauri/src/core/zen/enable.rs`：`zen enable` 额外写入 `[Zen] AutoLaunch=false` 到目标 INI，使 UE 进入 ConnectExisting 模式（通过 HTTP 连接现有服务）而非争夺服务管理权
-**复验状态**：修复合 main（commit 92017be），待 UE 5.7 + UE 5.8 共存环境完整复验
+**现象**：UECM 在工作站上安装 ZenServer 服务后，UE 启动时弹出 4 个错误弹窗（权限不足、卸载失败、端口冲突），Zen 缓存不可用
+**根因**：UE AutoLaunch 与 UECM 服务共机部署，争抢端口 8558。UE 尝试接管已有的 zenserver 进程，但没有管理员权限操作系统服务
+**曾尝试**（已回滚）：
+- commit 92017be：写入 `[Zen] AutoLaunch=false` 禁用 UE 自管理 → 虽然消除弹窗，但禁用了 UE 内建 Zen Server Status 面板
+**最终方案**（commit 237b012）：
+- 回滚 `AutoLaunch=false` 逻辑
+- 改为 UE 官方推荐的**独立服务器部署**：ZenShared 跑在专用服务器上，工作站保持 AutoLaunch 默认行为，两层无端口冲突
+- 保留服务名 `UECMZenServer`（避免与 UE 内部 `ZenServer` 碰撞）
+**复验**（2026-06-13）：独立服务器方案下，UE Editor 启动无弹窗，ZenLocal + ZenShared 均 `status: OK!`
+
+---
+
+### F-039 · 架构决策：ZenServer 必须独立服务器部署，不可与工作站共机
+**类型**：ARCH（架构约束，2026-06-13 确认）
+**发现步骤**：F-036 修复过程中对照 UE 官方文档 *Zenserver as Shared DDC*
+**背景**：UE DDC 分三层——ZenLocal（工作站本地）/ ZenShared（LAN 共享服务器）/ Cloud（公网）。UE Editor 的 AutoLaunch 机制自动管理 ZenLocal，监听 localhost:8558。如果 UECM 的 Shared DDC 服务也装在同一台机器的 8558 端口，两者必然冲突。
+**约束**：
+- UECM `zen service install` 目标机器必须是**不运行 UE Editor 的独立服务器**
+- 工作站只执行 `zen enable`（客户端配置），不安装 zen 服务
+- 同一台机器不能同时承担 ZenLocal 和 ZenShared 角色
+**影响**：
+- CLI/GUI 的 `zen service install` 流程应校验目标机器不是工作站（或至少 warn）
+- CLAUDE.md 和 Skill 的部署指引必须明确这一约束
+- 之前的 `AutoLaunch=false` workaround 已从代码中移除（commit 237b012）
 
 ---
 
