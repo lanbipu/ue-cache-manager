@@ -2551,7 +2551,7 @@ fn global_enable(
             ))
         })?;
         let ini_path = format!(
-            r"C:\Users\{ue_user}\AppData\Roaming\Unreal Engine\Engine\Config\UserEngine.ini"
+            r"C:\Users\{ue_user}\AppData\Local\Unreal Engine\Engine\Config\UserEngine.ini"
         );
         targets.push((m, ini_path));
     }
@@ -2668,7 +2668,7 @@ fn global_disable(
             ))
         })?;
         let ini_path = format!(
-            r"C:\Users\{ue_user}\AppData\Roaming\Unreal Engine\Engine\Config\UserEngine.ini"
+            r"C:\Users\{ue_user}\AppData\Local\Unreal Engine\Engine\Config\UserEngine.ini"
         );
         targets.push((m, ini_path));
     }
