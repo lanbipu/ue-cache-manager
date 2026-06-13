@@ -144,17 +144,8 @@ fn collect(
         max_minutes,
     };
 
-    let mut handle = pso_collect::launch_collection(
-        backend,
-        &machine.ip,
-        &engine_path,
-        &location.uproject_path,
-        &spec,
-        op_user.as_deref(),
-        op_pass.as_deref(),
-    );
-
-    // UE runner uses tokio tasks internally — build a local runtime to drive it.
+    // ue_runner::run() calls tokio::spawn() internally — the runtime must
+    // exist BEFORE launch_collection so the spawn lands on a live executor.
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -166,6 +157,16 @@ fn collect(
     let db_clone = db.clone();
 
     rt.block_on(async {
+        let mut handle = pso_collect::launch_collection(
+            backend,
+            &machine.ip,
+            &engine_path,
+            &location.uproject_path,
+            &spec,
+            op_user.as_deref(),
+            op_pass.as_deref(),
+        );
+
         let mut ue_exit: Option<(i32, Vec<String>)> = None;
 
         while let Some(ev) = handle.events.recv().await {

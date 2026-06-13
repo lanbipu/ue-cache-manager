@@ -224,23 +224,23 @@ fn generate(
         )?;
     }
 
-    let mut handle = ddc_pak::launch_generation(
-        backend,
-        &machine.ip,
-        &engine_path,
-        &location.uproject_path,
-        op_user.as_deref(),
-        op_pass.as_deref(),
-    );
-
-    // ue_runner::run() spawns a tokio task internally, so we need a runtime to
-    // drive it. The CLI binary doesn't have a global runtime — build one here.
+    // ue_runner::run() calls tokio::spawn() internally — the runtime must
+    // exist BEFORE launch_generation so the spawn lands on a live executor.
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| UecmError::OperationFailed(format!("tokio runtime: {}", e)))?;
 
     rt.block_on(async {
+        let mut handle = ddc_pak::launch_generation(
+            backend,
+            &machine.ip,
+            &engine_path,
+            &location.uproject_path,
+            op_user.as_deref(),
+            op_pass.as_deref(),
+        );
+
         while let Some(ev) = handle.events.recv().await {
             match ev {
                 UeRunnerEvent::Spawned { pid, log_path } => {
@@ -342,18 +342,52 @@ fn verify(
 
     let (op_user, op_pass) = resolve_creds(&db, cred)?;
 
-    let output = ddc_pak::verify_output(
+    // verify_output returns Err when .ddp is not found. For the CLI verify
+    // command that's a valid query result ("no, the pak does not exist"),
+    // not an operational failure — return it as a structured JSON result
+    // with found=false so the exit code stays 0 and behaviour is consistent
+    // with `ddc generate --backend auto` which returns skipped=true when
+    // zen is the active backend (a stale zen probe can flip the router to
+    // legacy between generate and verify, making verify hit this path even
+    // though generate skipped — the operator should see a clean result, not
+    // an error).
+    let mut output_value = match ddc_pak::verify_output(
         &machine.ip,
         &location.abs_path,
         op_user.as_deref(),
         op_pass.as_deref(),
-    )?;
+    ) {
+        Ok(output) => {
+            let mut v = serde_json::to_value(&output)
+                .unwrap_or_else(|_| serde_json::Value::Null);
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("found".into(), serde_json::json!(true));
+            }
+            v
+        }
+        Err(e) => {
+            // Only convert the specific "not found" outcome into a
+            // structured result. Operational failures (SSH down, script
+            // error, malformed output) must still propagate so
+            // automation can distinguish "pak absent" from "host
+            // unreachable".
+            let msg = e.to_string();
+            if !msg.contains(".ddp not found") {
+                return Err(e);
+            }
+            serde_json::json!({
+                "ok": true,
+                "found": false,
+                "path": "",
+                "size_bytes": 0,
+                "message": msg,
+            })
+        }
+    };
 
     // One-shot JSON path: fold routing into the same result object so stdout
     // stays a single JSON document (consumers that parse stdout as one value
     // would break if we emitted a separate Started event before this).
-    let mut output_value = serde_json::to_value(&output)
-        .unwrap_or_else(|_| serde_json::Value::Null);
     augment_with_routing(&mut output_value, resolution.routing.as_ref());
     ctx.emitter.emit_result(&output_value).ok();
     Ok(())
