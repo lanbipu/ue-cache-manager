@@ -30,7 +30,7 @@
       "alias": "ue56-docs"
     },
     {
-      "source": "processed/code/ue57-docs-deep",
+      "source": "processed/code/ue57-docs-claude-code",
       "alias": "ue57-docs"
     }
   ],
