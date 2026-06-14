@@ -64,7 +64,8 @@ src-tauri/target/
 
 # Local agent skill installs (impeccable etc.) — not part of the shipped app
 .agents/
-.claude/skills/
+.claude/skills/*
+!.claude/skills/uecm/
 skills-lock.json
 
 # Impeccable live mode session artifacts

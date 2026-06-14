@@ -1,0 +1,27 @@
+{
+  "project_id": 65,
+  "source_machine_id": 1,
+  "target_machine_ids": [2, 3],
+  "local_cache": {
+    "path": "D:\\UE-DDC-Local",
+    "service_account": null
+  },
+  "shared_cache": {
+    "server_machine_id": 1,
+    "share_name": "DDC-Shared",
+    "server_path": "F:\\Epic\\DDC\\Shared",
+    "mode": "a",
+    "unc_path": "\\\\LANPC\\DDC-Shared"
+  },
+  "ddc_pak": { "enabled": true },
+  "pso": {
+    "enabled": false,
+    "resolution": "1920x1080",
+    "max_minutes": 10
+  },
+  "verify": {
+    "run_log_verify": false,
+    "editor_exe": "",
+    "timeout_seconds": 300
+  }
+}
