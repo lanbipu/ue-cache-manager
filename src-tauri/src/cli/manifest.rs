@@ -115,6 +115,8 @@ pub fn operations() -> &'static [Operation] {
         Operation { operation_id: "zen.enable",                summary: "Enable ZenShared upstream on a project across N machines",        cli_command: "uecm-cli zen enable",                 side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
         Operation { operation_id: "zen.disable",               summary: "Remove the ZenShared upstream entry from each machine's INI",     cli_command: "uecm-cli zen disable",                side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
         Operation { operation_id: "zen.verify_rules",          summary: "Resolve the zen INI rule set for a UE version",                   cli_command: "uecm-cli zen verify-rules",           side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "zen.clean_env",             summary: "Clear a DDC env var (UE-SharedDataCachePath etc.) across machines", cli_command: "uecm-cli zen clean-env",              side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
+        Operation { operation_id: "zen.set_region_host",       summary: "Set the per-machine ZenShared region override (UE-ZenSharedDataCacheHost)", cli_command: "uecm-cli zen set-region-host",        side_effects: SideEffects{writes:true, external_calls:true, idempotent:true},  exit_codes: &[0,2,3,4] },
     ];
     OPS
 }
@@ -256,6 +258,8 @@ pub fn operation_id_for(cmd: &Domain) -> &'static str {
             crate::cli::args::ZenAction::Enable { .. } => "zen.enable",
             crate::cli::args::ZenAction::Disable { .. } => "zen.disable",
             crate::cli::args::ZenAction::VerifyRules { .. } => "zen.verify_rules",
+            crate::cli::args::ZenAction::CleanEnv { .. } => "zen.clean_env",
+            crate::cli::args::ZenAction::SetRegionHost { .. } => "zen.set_region_host",
         },
         Domain::Manifest => "manifest.get",
     }

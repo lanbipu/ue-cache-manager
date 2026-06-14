@@ -22,6 +22,11 @@ const DDC_SECTIONS: &[&str] = &[
 ];
 const INSTALLED_DDBG: &str = "InstalledDerivedDataBackendGraph";
 const INSTALLED_LEGACY_DDC_KEYS: &[&str] = &["Shared", "Pak", "CompressedPak"];
+// Modern UE 5.4+ DDC server connection settings. `zen enable` writes the shared
+// Zen upstream here as `Shared=(Host="http://...", ...)`; the default ZenShared
+// node references it via ServerID. Capture every entry as a `zen` config snapshot
+// so diagnostics (e.g. R026 dual-config) can see the new-form upstream too.
+const STORAGE_SERVERS: &str = "StorageServers";
 
 fn is_pso_cvar(key: &str) -> bool {
     // Case-insensitive: UE INI keys are case-insensitive in practice.
@@ -40,6 +45,7 @@ pub fn extract(pf: &ParsedFile) -> Vec<ConfigEntry> {
         let sname = sec.name.as_str();
         let is_ddc_section = DDC_SECTIONS.iter().any(|s| s.eq_ignore_ascii_case(sname));
         let is_installed = sname.eq_ignore_ascii_case(INSTALLED_DDBG);
+        let is_storage_servers = sname.eq_ignore_ascii_case(STORAGE_SERVERS);
         for k in &sec.keys {
             let mk = |domain: &'static str| ConfigEntry {
                 domain,
@@ -57,6 +63,9 @@ pub fn extract(pf: &ParsedFile) -> Vec<ConfigEntry> {
                 if INSTALLED_LEGACY_DDC_KEYS.iter().any(|s| s.eq_ignore_ascii_case(&k.name)) {
                     out.push(mk("ddc")); // dual-tag
                 }
+            }
+            if is_storage_servers {
+                out.push(mk("zen"));
             }
             if is_pso_cvar(&k.name) {
                 out.push(mk("pso"));
@@ -174,5 +183,38 @@ mod tests {
         assert!(shared.contains(&"zen"));
         let zenshared: Vec<_> = e.iter().filter(|x| x.key_name == "ZenShared").map(|x| x.domain).collect();
         assert_eq!(zenshared, vec!["zen"]);
+    }
+
+    #[test]
+    fn extracts_storage_servers_shared_as_zen() {
+        // Modern `zen enable` writes the shared upstream as
+        // `[StorageServers] Shared=(Host="http://...", ...)`. It must be
+        // captured as a `zen` config snapshot so R026 / diagnostics see it.
+        let f = pf(vec![ParsedSection {
+            name: "StorageServers".into(),
+            keys: vec![key(
+                "Shared",
+                "(Host=\"http://192.168.10.20:8558\", Namespace=\"ue.ddc\", DeactivateAt=60)",
+                2,
+            )],
+            ..Default::default()
+        }]);
+        let e = extract(&f);
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].domain, "zen");
+        assert_eq!(e[0].section, "StorageServers");
+        assert_eq!(e[0].key_name, "Shared");
+    }
+
+    #[test]
+    fn extracts_storage_servers_case_insensitive() {
+        let f = pf(vec![ParsedSection {
+            name: "storageservers".into(), // all-lowercase variant
+            keys: vec![key("shared", "(Host=\"http://h:8558\")", 1)],
+            ..Default::default()
+        }]);
+        let e = extract(&f);
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].domain, "zen");
     }
 }

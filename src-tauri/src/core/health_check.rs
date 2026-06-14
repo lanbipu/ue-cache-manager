@@ -143,6 +143,56 @@ pub async fn probe_tcp_ports(host: &str, timeout_ms: u64) -> HashMap<String, Che
 /// callers). Without scoping, scanning a 2-machine cluster on 5.8.10
 /// alongside an unrelated 3-machine cluster on 5.8.9 would flag the
 /// in-scan machines as outliers because the wrong majority won.
+/// DESIGN-1: is the cluster running a shared Zen DDC? True when at least one
+/// `shared_upstream` zen endpoint is registered. Once Zen shared is deployed,
+/// the legacy SMB-share DDC (driven by `UE-SharedDataCachePath`) is
+/// intentionally retired — `zen enable` clears that env var — so the
+/// `env_shared` / `env_vars` health probes (which compare the var against the
+/// cluster SMB share) become meaningless and would otherwise false-positive.
+///
+/// Cluster-level (not per-machine) on purpose: in the separate-server model a
+/// workstation that ran `zen enable` points at the shared server but registers
+/// no endpoint of its own, so a per-machine endpoint check would miss exactly
+/// the machines where the false `critical` appears.
+pub fn cluster_has_shared_zen(db: &Db) -> bool {
+    zen_endpoints::list(db)
+        .map(|eps| {
+            eps.iter()
+                .any(|e| e.role == crate::core::zen::endpoint::ROLE_SHARED_UPSTREAM)
+        })
+        .unwrap_or(false)
+}
+
+/// DESIGN-1: when the cluster has Zen shared mode active, downgrade a `critical`
+/// `env_shared` / `env_vars` outcome to `na` (tallied as skipped) and rewrite
+/// the message/remediation to explain the var is intentionally cleared. No-op
+/// when Zen is not active or the outcome isn't `critical`, so a real SMB-share
+/// drift on a non-Zen cluster still surfaces.
+pub fn relax_env_shared_under_zen(row: &mut HashMap<String, CheckOutcome>, zen_shared_active: bool) {
+    if !zen_shared_active {
+        return;
+    }
+    for key in ["env_shared", "env_vars"] {
+        if let Some(outcome) = row.get_mut(key) {
+            if outcome.status == "critical" {
+                outcome.message = format!(
+                    "Zen shared mode active (a shared_upstream endpoint is registered); \
+                     UE-SharedDataCachePath is intentionally cleared because the shared DDC now \
+                     flows through ZenShared / [StorageServers]. Legacy SMB-share env check \
+                     skipped. (was: {})",
+                    outcome.message
+                );
+                outcome.remediation =
+                    "No action needed — clearing UE-SharedDataCachePath is expected once \
+                     `zen enable` wires the shared upstream. To return to a legacy SMB DDC, run \
+                     `zen disable` and re-set UE-SharedDataCachePath."
+                        .into();
+                outcome.status = "na".into();
+            }
+        }
+    }
+}
+
 pub fn zen_health_for_machine(
     db: &Db,
     machine_id: i64,
@@ -1177,5 +1227,80 @@ mod tests {
         ] {
             assert!(outcomes.contains_key(key), "missing key {}", key);
         }
+    }
+
+    // ----- DESIGN-1: env_shared relaxation under Zen shared mode -----
+
+    fn outcome(status: &str) -> CheckOutcome {
+        CheckOutcome {
+            status: status.into(),
+            message: "UE-SharedDataCachePath mismatch".into(),
+            sample: "".into(),
+            remediation: "".into(),
+        }
+    }
+
+    #[test]
+    fn relax_env_shared_under_zen_downgrades_critical_only_when_active() {
+        let mut row: HashMap<String, CheckOutcome> = HashMap::new();
+        row.insert("env_shared".into(), outcome("critical"));
+        row.insert("env_vars".into(), outcome("critical"));
+        row.insert("zen_reachable".into(), outcome("healthy"));
+
+        // Inactive cluster → nothing changes (real SMB drift still surfaces).
+        let mut inactive = row.clone();
+        relax_env_shared_under_zen(&mut inactive, false);
+        assert_eq!(inactive["env_shared"].status, "critical");
+        assert_eq!(inactive["env_vars"].status, "critical");
+
+        // Active cluster → env_shared/env_vars become `na`; other checks untouched.
+        relax_env_shared_under_zen(&mut row, true);
+        assert_eq!(row["env_shared"].status, "na");
+        assert_eq!(row["env_vars"].status, "na");
+        assert!(row["env_shared"].message.contains("Zen shared mode"));
+        assert!(!row["env_shared"].remediation.is_empty());
+        assert_eq!(row["zen_reachable"].status, "healthy", "non-env checks untouched");
+    }
+
+    #[test]
+    fn relax_env_shared_under_zen_leaves_non_critical_alone() {
+        let mut row: HashMap<String, CheckOutcome> = HashMap::new();
+        row.insert("env_shared".into(), outcome("healthy"));
+        relax_env_shared_under_zen(&mut row, true);
+        assert_eq!(row["env_shared"].status, "healthy");
+    }
+
+    #[test]
+    fn cluster_has_shared_zen_requires_a_shared_upstream_endpoint() {
+        let db = zen_test_db();
+        let m = add_machine(&db, "ZEN-SRV", "10.0.0.9");
+        assert!(!cluster_has_shared_zen(&db), "no endpoints → not in shared mode");
+
+        // A non-shared (primary/local) endpoint does NOT count.
+        add_endpoint(&db, m, 8558);
+        assert!(
+            !cluster_has_shared_zen(&db),
+            "only a shared_upstream endpoint marks the cluster as Zen-shared"
+        );
+
+        // Register a shared_upstream endpoint → cluster is in Zen shared mode.
+        zes::upsert(
+            &db,
+            &ZenEndpoint {
+                id: None,
+                machine_id: m,
+                declared_port: 8559,
+                scheme: "http".into(),
+                role: crate::core::zen::endpoint::ROLE_SHARED_UPSTREAM.into(),
+                upstream_endpoint_id: None,
+                data_dir: "C:\\ZenData".into(),
+                httpserverclass: "asio".into(),
+                lifecycle_mode: "installed_service".into(),
+                created_at: None,
+                updated_at: None,
+            },
+        )
+        .unwrap();
+        assert!(cluster_has_shared_zen(&db));
     }
 }

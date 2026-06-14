@@ -71,37 +71,43 @@ ZenServer Shared DDC 部署在**独立的服务器机器**上（不与工作站�
 
 ---
 
-## 待修复清单
+## 待修复清单 —— 已全部修复（2026-06-14）
+
+代码改动均通过 `cargo test --lib`（1055 passed）。所有结论以 UE 源码（`UnrealEngine/Engine/Config/BaseEngine.ini` + `ZenCacheStore.cpp` / `HttpCacheStore.cpp` / `HttpHostBuilder.cpp`）与 Zen 源码核对为准。**真机 E2E（UE 实际连上共享 Zen）需在 lanPC 验证，属后续。**
+
+### 🔴 走读期间新发现的真 bug：Port 未生效（已随 ZEN-1 修复）
+
+UE 的 Zen 缓存解析器（`FZenCacheStoreParams::Parse`）**没有 `Port=` 字段**。旧 value_template `(Type=Zen, Host="render-master", Port=8558, ...)` 里的 `Port=8558` 被静默忽略，`Host="render-master"` 无 scheme/port → `FHttpHostBuilder` 无法解析出可用端点，几乎必然连不上。**端口必须内嵌进 Host URI**（`http://render-master:8558`）。这比单纯的「写法对齐」更根本。
 
 ### 高优先级：独立服务器部署技术路径完善
 
-| # | 改动 | 说明 |
+| # | 状态 | 实现 |
 |---|---|---|
-| ZEN-1 | `zen enable` 客户端配置改为 `[StorageServers]` 写法 | 当前写 `[InstalledDerivedDataBackendGraph] ZenShared=(Type=Zen, ...)`，官方推荐 `[StorageServers] Shared=(Host="http://...", Namespace=..., EnvHostOverride=..., DeactivateAt=60, ...)`，需对齐 |
-| ZEN-2 | `zen-ini-rules.yaml` 更新 section/key/value_template | 从 `InstalledDerivedDataBackendGraph.ZenShared` 改为 `StorageServers.Shared`，value_template 同步调整 |
-| ZEN-3 | `zen service install` 增加工作站检测警告 | 如果目标机器有 `ue_runtime_user` 或活跃 UE 进程，warn 提示不建议同机部署 |
-| ZEN-4 | 多区域支持（环境变量方式） | 官方方案支持 `UE-ZenSharedDataCacheHost` 环境变量做区域路由，UECM 可选配 |
+| ZEN-1 | ✅ | `zen enable` 改写 `[StorageServers] Shared=(Host="http://{host}:{port}", Namespace="{namespace}", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)`。依赖 UE 5.4+ 默认就有的 `ZenShared=(Type=Zen, ServerID=Shared)` 节点（BaseEngine.ini）经 `ServerID` 间接引用 —— **不再写 backend graph 节点**（旧的 `[InstalledDerivedDataBackendGraph]` 段在现代 UE 已不是节点容器）。读回链同步更新：`ini_diagnostics_zen.rs`（R013/R014 grammar 改为解析 Host URI）、`ini_config_extract.rs`（新增 StorageServers 捕获）、R026（识别新旧两种形态） |
+| ZEN-2 | ✅ | `docs/research/zen-ini-rules.yaml` 的 `enable_zen_shared` 已改 section=`StorageServers`、key=`Shared`、value_template 如上；embedded 副本经 `include_str!` build 时自动同步 |
+| ZEN-3 | ✅ | `zen service install` 预检：目标机若有 `ue_runtime_user`（= 工作站信号）则发 advisory 警告（`Event::LogLine` + dry-run/summary 的 `warnings[]`），**不硬失败**。「活跃 UE 进程检测」无现成 probe/列，本期未做（需新 ps-script） |
+| ZEN-4 | ✅ | 新增 `zen set-region-host --machines <ids> --host <url>`：规范化为 `http://host:port` 后写 Machine-scope `UE-ZenSharedDataCacheHost`（复用 `setx-machine.ps1`）。配合 ZEN-1 写入的 `EnvHostOverride`，env 覆盖 INI Host 实现按机/区路由。清除走 `zen clean-env --name UE-ZenSharedDataCacheHost` |
 
 ### 中优先级：设计问题
 
-### DESIGN-1：health run 的 `env_shared/env_vars` 与 Zen 模式冲突
-- Zen 模式下 `UE-SharedDataCachePath` 已被 ZenShared 替代，但 health check 仍报 critical
-- 需要 health 规则感知 Zen 模式，Zen 启用后跳过 `env_shared` 检查
-
-### DESIGN-2：`deploy ddc` plan JSON 所有字段必填，即使功能已禁用
-- `pso.enabled: false` 仍要 `resolution/max_minutes`
-- `verify.run_log_verify: false` 仍要 `editor_exe`
-
-### DESIGN-3：`zen env-cleanup` 无独立 CLI 命令
-- `zen enable` 完成后提示手动运行 PS sidecar 清除 `UE-SharedDataCachePath`
-- 建议补 `zen clean-env` 子命令，内部走提权通道
+| # | 状态 | 实现 |
+|---|---|---|
+| DESIGN-1 | ✅ | health 感知 Zen 模式：集群级信号 `cluster_has_shared_zen`（存在任一 `shared_upstream` 端点即判定）。激活时把 `env_shared/env_vars` 的 `critical` 降级为 `na`（计入 skipped）并改写 message/remediation。CLI(`domain_health.rs`) + UI(`commands/health_check.rs`) 同改。**集群级而非按机**：独立服务器模型下工作站跑 `zen enable` 不为自己注册端点，按机信号会漏掉误报真正发生的机器 |
+| DESIGN-2 | ✅ | `PsoSpec.resolution/max_minutes` + `VerifySpec.editor_exe/timeout_seconds` 加 `#[serde(default)]`；新增 `DeployPlan::validate()`（enabled 但缺字段才报错），CLI + Tauri run 路径反序列化后调用 |
+| DESIGN-3 | ✅ | 新增 `zen clean-env --machines <ids> [--name <var>] [--scopes machine,user]`，复用既有 `invoke_env_cleanup` + `zen-env-cleanup.ps1`。**更正 REPORT 原说法**：`zen enable` 早已自动调用清理（非「仅提示手动运行」），本任务只是把该能力暴露为独立命令 |
 
 ### 低优先级：增强项
 
-| 来源 | 问题 |
-|---|---|
-| F-005 | GPU 列表含虚拟显示适配器，需按 vendor/vram 过滤 |
-| F-014 | `project discover` 扫入 UE 引擎自带 Templates/Samples，需过滤 |
+| 来源 | 状态 | 实现 |
+|---|---|---|
+| F-005 | ✅ | `core/discovery.rs::detect_gpus` 单点过滤（两个写库调用方都经它）：丢弃 model 名命中虚拟适配器 denylist（Microsoft Basic/Remote Display、Parsec、VMware、向日葵/Sunlogin、IddCx、DisplayLink…）的项，并要求 `vendor != Unknown OR vram_mb.is_some()`（厂商未知且无 VRAM 视为虚拟） |
+| F-014 | ✅ | `core/project_discovery.rs::run_discovery` 在 persist 前过滤：位于 `machine_ue_installs.install_path` 子树下（精确主信号）或命中引擎子树段（`\Engine\`/`\Templates\`/`\Samples\`/`\FeaturePacks\`，兜底）的 `.uproject` 被排除；跳过数走 `tracing::info!` 记录（不静默截断） |
+
+### 新增 / 变更的 CLI 命令
+
+- `zen clean-env`（DESIGN-3）
+- `zen set-region-host`（ZEN-4）
+- `zen service install` 现会在工作站上附 advisory 警告（ZEN-3）
 
 ---
 
@@ -127,6 +133,14 @@ ZenServer Shared DDC 部署在**独立的服务器机器**上（不与工作站�
 2. zen enable --upstream-endpoint-id <id> --global --machines <workstation_id> --cred-alias <alias> --yes
 ```
 注意：独立服务器方案下不写 `AutoLaunch=false`，UE 的 ZenLocal 保持正常工作。
+
+`zen enable` 写入的 `[StorageServers] Shared` 含 `EnvHostOverride=UE-ZenSharedDataCacheHost`，故可按机/区覆盖 Host：
+```
+# 多区域路由（可选）：让某些工作站指向就近的共享 Zen 服务器
+zen set-region-host --machines <ids> --host http://<region_server>:8558 --yes
+# 还原到 INI 默认（清除区域覆盖）/ 清理遗留 SMB DDC 变量
+zen clean-env --machines <ids> --name UE-ZenSharedDataCacheHost --yes
+```
 
 ### health run 前置刷新
 ```

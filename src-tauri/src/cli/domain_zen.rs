@@ -269,6 +269,12 @@ pub fn handle(ctx: &mut Ctx<'_>, action: ZenAction) -> UecmResult<()> {
             expected_namespace.as_deref(),
             &cred,
         ),
+        ZenAction::CleanEnv { machines, name, scopes, yes, dry_run, cred } => {
+            clean_env(ctx, &machines, &name, &scopes, yes, dry_run, &cred)
+        }
+        ZenAction::SetRegionHost { machines, host, yes, dry_run, cred } => {
+            set_region_host(ctx, &machines, &host, yes, dry_run, &cred)
+        }
     }
 }
 
@@ -1328,6 +1334,29 @@ pub(crate) fn pick_service_zen_exe(
     intree_cli.or(install_copy_cli)
 }
 
+/// ZEN-3: build the advisory co-location warning for `zen service install`.
+///
+/// `ue_runtime_user` is only set (via `machine set-ue-user`) on machines an
+/// operator treats as interactive UE workstations. The shared ZenServer
+/// service is meant to run on a dedicated server; co-locating it with an
+/// editor-managed local Zen invites the port/ownership contention that BUG-5
+/// resolved by splitting the two layers. Returns `None` for dedicated servers
+/// (no `ue_runtime_user`). Pure DB read so the policy is unit-testable without
+/// the SSH/SCM apply path.
+pub(crate) fn workstation_colocation_warning(
+    db: &Db,
+    machine_id: i64,
+) -> UecmResult<Option<String>> {
+    Ok(machines::get_ue_runtime_user(db, machine_id)?.map(|user| {
+        format!(
+            "machine id={machine_id} looks like a UE workstation (ue_runtime_user={user:?} is \
+             set); installing the shared ZenServer service here is not recommended — run it on a \
+             dedicated server so it doesn't contend with the workstation's editor-managed local \
+             Zen. Proceeding because this check is advisory only."
+        )
+    }))
+}
+
 fn service_install(
     ctx: &mut Ctx<'_>,
     endpoint_id: i64,
@@ -1399,6 +1428,18 @@ fn service_install(
     // real apply path fails.
     validate_service_account_pair(service_user, service_pass_inline, service_pass_stdin)?;
 
+    // ZEN-3: workstation co-location pre-flight (advisory only — NOT a hard
+    // error, since co-location can be a deliberate choice).
+    let workstation_warning = workstation_colocation_warning(&db, ep.machine_id)?;
+    if let Some(ref w) = workstation_warning {
+        ctx.emitter
+            .emit_event(&Event::LogLine {
+                text: w.clone(),
+                parsed_kind: Some("warning".into()),
+            })
+            .ok();
+    }
+
     if dry_run {
         destructive::emit_plan(
             ctx.emitter.as_mut(),
@@ -1420,6 +1461,10 @@ fn service_install(
                     .map(|p| !p.is_empty())
                     .unwrap_or(false)
                     || service_pass_stdin,
+                "warnings": workstation_warning
+                    .as_ref()
+                    .map(|w| vec![w.clone()])
+                    .unwrap_or_default(),
             }),
         );
         return Ok(());
@@ -1500,6 +1545,10 @@ fn service_install(
         "host": machine.ip,
         "service_name": DEFAULT_SERVICE_NAME,
         "remote": response,
+        "warnings": workstation_warning
+            .as_ref()
+            .map(|w| vec![w.clone()])
+            .unwrap_or_default(),
     });
     ctx.emitter.emit_event(&Event::Completed { summary }).ok();
     Ok(())
@@ -2511,6 +2560,275 @@ fn invoke_env_cleanup(
         }
     }
     Ok(envelope)
+}
+
+/// DESIGN-3: standalone `zen clean-env` — clear a machine environment variable
+/// across N machines via `zen-env-cleanup.ps1`. This is the SAME mechanism
+/// `zen enable` runs inline ([`invoke_env_cleanup`]), exposed as its own
+/// command so an operator can revert a legacy SMB DDC (`UE-SharedDataCachePath`)
+/// or a stale region override (`UE-ZenSharedDataCacheHost`) without re-running
+/// enable.
+#[allow(clippy::too_many_arguments)]
+fn clean_env(
+    ctx: &mut Ctx<'_>,
+    machine_ids: &[i64],
+    name: &str,
+    scopes: &[String],
+    yes: bool,
+    dry_run: bool,
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
+    let gate = destructive::check(yes, dry_run, "zen.clean_env")?;
+    if machine_ids.is_empty() {
+        return Err(UecmError::InvalidInput(
+            "--machines must list at least one machine id".into(),
+        ));
+    }
+    if name.trim().is_empty() {
+        return Err(UecmError::InvalidInput("--name must be non-empty".into()));
+    }
+    if scopes.is_empty() {
+        return Err(UecmError::InvalidInput(
+            "--scopes must list at least one of: machine, user".into(),
+        ));
+    }
+    // Mirror the sidecar's scope validation up-front so --dry-run is honest.
+    for s in scopes {
+        let sl = s.to_ascii_lowercase();
+        if sl != "machine" && sl != "user" {
+            return Err(UecmError::InvalidInput(format!(
+                "invalid scope {s:?}; allowed: machine, user"
+            )));
+        }
+    }
+    let db = ctx.require_db()?.clone();
+
+    // Resolve machine ids → hosts up-front so a bad id fails before any write.
+    let mut targets: Vec<Machine> = Vec::with_capacity(machine_ids.len());
+    for &mid in machine_ids {
+        let m = machines::find_by_id(&db, mid)?
+            .ok_or_else(|| UecmError::InvalidInput(format!("machine id={mid} not found")))?;
+        targets.push(m);
+    }
+
+    if gate == Outcome::DryRun {
+        let planned: Vec<serde_json::Value> = targets
+            .iter()
+            .map(|m| serde_json::json!({ "machine_id": m.id, "host": m.ip, "hostname": m.hostname }))
+            .collect();
+        destructive::emit_plan(
+            ctx.emitter.as_mut(),
+            "zen.clean_env",
+            serde_json::json!({ "name": name, "scopes": scopes, "machines": planned }),
+        );
+        return Ok(());
+    }
+
+    cred.preflight(&db)?;
+    let total = targets.len() as i64;
+    ctx.emitter
+        .emit_event(&Event::Started {
+            task_type: "zen_clean_env".into(),
+            task_id: None,
+            metadata: serde_json::json!({ "name": name, "scopes": scopes, "machines": total }),
+        })
+        .ok();
+
+    let mut ok_count = 0i64;
+    let mut fail_count = 0i64;
+    for (idx, m) in targets.iter().enumerate() {
+        ctx.emitter
+            .emit_event(&Event::ItemStarted { item_id: m.ip.clone(), index: idx as i64, total })
+            .ok();
+        // Fan out one PS call per (var, scope); stop at the first scope error.
+        let mut machine_err: Option<String> = None;
+        for scope in scopes {
+            if let Err(e) = invoke_env_cleanup(&m.ip, name, scope, None) {
+                machine_err = Some(e.to_string());
+                break;
+            }
+        }
+        match machine_err {
+            None => {
+                ok_count += 1;
+                ctx.emitter
+                    .emit_event(&Event::ItemCompleted { item_id: m.ip.clone(), index: idx as i64, ok: true, message: None })
+                    .ok();
+            }
+            Some(msg) => {
+                fail_count += 1;
+                ctx.emitter
+                    .emit_event(&Event::ItemCompleted { item_id: m.ip.clone(), index: idx as i64, ok: false, message: Some(msg) })
+                    .ok();
+            }
+        }
+    }
+
+    ctx.emitter
+        .emit_event(&Event::Completed {
+            summary: serde_json::json!({ "name": name, "machines": total, "ok": ok_count, "failed": fail_count }),
+        })
+        .ok();
+    if fail_count > 0 {
+        return Err(UecmError::OperationFailed(format!(
+            "{fail_count}/{total} machines failed zen clean-env"
+        )));
+    }
+    Ok(())
+}
+
+/// ZEN-4: normalize a region-host argument into a canonical Zen URI.
+///
+/// Accepts `http(s)://host:port`, `host:port`, or bare `host` (port defaults to
+/// 8558), and returns `scheme://host:port`. Validates the hostname charset so a
+/// malformed value can't be written into a machine env var. Handles bracketed
+/// IPv6 literals (`[::1]:8558`).
+fn normalize_region_host(raw: &str) -> UecmResult<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(UecmError::InvalidInput("--host must be non-empty".into()));
+    }
+    let (scheme, rest) = match trimmed.split_once("://") {
+        Some((s, r)) => (s.to_ascii_lowercase(), r),
+        None => ("http".to_string(), trimmed),
+    };
+    if scheme != "http" && scheme != "https" {
+        return Err(UecmError::InvalidInput(format!(
+            "--host scheme must be http or https, got {scheme:?}"
+        )));
+    }
+    let authority = rest.split(['/', '?']).next().unwrap_or(rest).trim();
+    if authority.is_empty() {
+        return Err(UecmError::InvalidInput("--host must include a hostname".into()));
+    }
+    // An unbracketed authority with more than one ':' is an IPv6 literal that
+    // wasn't bracketed — the host:port split below (rsplit_once(':')) would
+    // mis-parse it (host=":", port=last hextet) and the loose charset check
+    // would let that malformed value through. Require RFC-3986 bracketing.
+    if !authority.starts_with('[') && authority.matches(':').count() > 1 {
+        return Err(UecmError::InvalidInput(format!(
+            "--host looks like an unbracketed IPv6 literal; wrap it in brackets, \
+             e.g. http://[{authority}]:8558"
+        )));
+    }
+    let (host, port): (String, Option<String>) = if let Some(r) = authority.strip_prefix('[') {
+        let end = r
+            .find(']')
+            .ok_or_else(|| UecmError::InvalidInput("--host has an unterminated IPv6 literal".into()))?;
+        let h = format!("[{}]", &r[..end]);
+        let p = r[end + 1..].strip_prefix(':').map(|x| x.to_string());
+        (h, p)
+    } else if let Some((h, p)) = authority.rsplit_once(':') {
+        (h.to_string(), Some(p.to_string()))
+    } else {
+        (authority.to_string(), None)
+    };
+    let host_inner = host.trim_start_matches('[').trim_end_matches(']');
+    if host_inner.is_empty()
+        || !host_inner
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'))
+    {
+        return Err(UecmError::InvalidInput(format!(
+            "--host contains an invalid hostname: {host:?}"
+        )));
+    }
+    let port = match port {
+        Some(p) => p.parse::<u16>().map_err(|_| {
+            UecmError::InvalidInput(format!("--host port must be 1-65535, got {p:?}"))
+        })?,
+        None => 8558,
+    };
+    Ok(format!("{scheme}://{host}:{port}"))
+}
+
+/// ZEN-4: set the per-machine ZenShared region override
+/// (`UE-ZenSharedDataCacheHost`) across N machines, reusing the same
+/// Machine-scope env write (`setx-machine.ps1`) the `env set` domain uses. The
+/// `[StorageServers] Shared` entry's `EnvHostOverride` makes this var win over
+/// the INI Host, so workstations in different regions can point at their
+/// nearest shared Zen server without per-project INI edits.
+fn set_region_host(
+    ctx: &mut Ctx<'_>,
+    machine_ids: &[i64],
+    host: &str,
+    yes: bool,
+    dry_run: bool,
+    cred: &CredentialArgs,
+) -> UecmResult<()> {
+    const VAR: &str = "UE-ZenSharedDataCacheHost";
+    let gate = destructive::check(yes, dry_run, "zen.set_region_host")?;
+    if machine_ids.is_empty() {
+        return Err(UecmError::InvalidInput(
+            "--machines must list at least one machine id".into(),
+        ));
+    }
+    let url = normalize_region_host(host)?;
+    let db = ctx.require_db()?.clone();
+
+    let mut targets: Vec<Machine> = Vec::with_capacity(machine_ids.len());
+    for &mid in machine_ids {
+        let m = machines::find_by_id(&db, mid)?
+            .ok_or_else(|| UecmError::InvalidInput(format!("machine id={mid} not found")))?;
+        targets.push(m);
+    }
+
+    if gate == Outcome::DryRun {
+        let planned: Vec<serde_json::Value> = targets
+            .iter()
+            .map(|m| serde_json::json!({ "machine_id": m.id, "host": m.ip, "hostname": m.hostname }))
+            .collect();
+        destructive::emit_plan(
+            ctx.emitter.as_mut(),
+            "zen.set_region_host",
+            serde_json::json!({ "env_var": VAR, "value": url, "machines": planned }),
+        );
+        return Ok(());
+    }
+
+    cred.preflight(&db)?;
+    let total = targets.len() as i64;
+    ctx.emitter
+        .emit_event(&Event::Started {
+            task_type: "zen_set_region_host".into(),
+            task_id: None,
+            metadata: serde_json::json!({ "env_var": VAR, "value": url, "machines": total }),
+        })
+        .ok();
+
+    let mut ok_count = 0i64;
+    let mut fail_count = 0i64;
+    for (idx, m) in targets.iter().enumerate() {
+        ctx.emitter
+            .emit_event(&Event::ItemStarted { item_id: m.ip.clone(), index: idx as i64, total })
+            .ok();
+        match crate::core::env_vars::set(&m.ip, VAR, &url) {
+            Ok(()) => {
+                ok_count += 1;
+                ctx.emitter
+                    .emit_event(&Event::ItemCompleted { item_id: m.ip.clone(), index: idx as i64, ok: true, message: None })
+                    .ok();
+            }
+            Err(e) => {
+                fail_count += 1;
+                ctx.emitter
+                    .emit_event(&Event::ItemCompleted { item_id: m.ip.clone(), index: idx as i64, ok: false, message: Some(e.to_string()) })
+                    .ok();
+            }
+        }
+    }
+
+    ctx.emitter
+        .emit_event(&Event::Completed {
+            summary: serde_json::json!({ "env_var": VAR, "value": url, "machines": total, "ok": ok_count, "failed": fail_count }),
+        })
+        .ok();
+    if fail_count > 0 {
+        return Err(UecmError::OperationFailed(format!(
+            "{fail_count}/{total} machines failed zen set-region-host"
+        )));
+    }
+    Ok(())
 }
 
 /// Load + resolve rules for global-mode operations (no project version
@@ -4227,6 +4545,143 @@ mod tests {
             }
             other => panic!("expected InvalidInput, got {:?}", other),
         }
+    }
+
+    // ZEN-3: `zen service install` should advise against co-locating the shared
+    // ZenServer service on a machine that looks like a UE workstation
+    // (`ue_runtime_user` set), but only as an advisory — never a hard error.
+    #[test]
+    fn workstation_warning_only_fires_when_ue_runtime_user_set() {
+        let ctx = fresh_ctx();
+        let db = ctx.db.as_ref().unwrap().clone();
+        let (machine_id, _ep) = seed_endpoint(&db, "WS-1", "10.0.0.20", 8558);
+
+        // Dedicated server (no ue_runtime_user) → no warning.
+        assert!(
+            workstation_colocation_warning(&db, machine_id).unwrap().is_none(),
+            "a machine without ue_runtime_user is a dedicated server — no warning"
+        );
+
+        // Workstation (ue_runtime_user set) → advisory warning naming the user.
+        machines::set_ue_runtime_user(&db, machine_id, Some("lanbp")).unwrap();
+        let w = workstation_colocation_warning(&db, machine_id)
+            .unwrap()
+            .expect("workstation must produce a warning");
+        assert!(w.contains("workstation"), "warning should call it a workstation: {w}");
+        assert!(w.contains("lanbp"), "warning should name the ue_runtime_user: {w}");
+        assert!(
+            w.contains("not recommended"),
+            "warning should be advisory wording: {w}"
+        );
+    }
+
+    // ZEN-4: region-host normalization. Operators may pass a bare host, host:port,
+    // or a full URI; the env var must always hold a canonical scheme://host:port.
+    #[test]
+    fn normalize_region_host_canonicalizes_accepted_forms() {
+        assert_eq!(
+            normalize_region_host("render-master").unwrap(),
+            "http://render-master:8558"
+        );
+        assert_eq!(normalize_region_host("10.0.0.5:9000").unwrap(), "http://10.0.0.5:9000");
+        assert_eq!(normalize_region_host("http://h:8558").unwrap(), "http://h:8558");
+        assert_eq!(normalize_region_host("https://h:443").unwrap(), "https://h:443");
+        // Trailing path/query is dropped — only the authority matters.
+        assert_eq!(normalize_region_host("http://h:8558/api/v1").unwrap(), "http://h:8558");
+        // Bracketed IPv6 literal, with and without an explicit port.
+        assert_eq!(normalize_region_host("http://[::1]:8558").unwrap(), "http://[::1]:8558");
+        assert_eq!(normalize_region_host("[::1]").unwrap(), "http://[::1]:8558");
+    }
+
+    #[test]
+    fn normalize_region_host_rejects_bad_input() {
+        assert!(normalize_region_host("   ").is_err(), "empty");
+        assert!(normalize_region_host("ftp://h:21").is_err(), "bad scheme");
+        assert!(normalize_region_host("h:notaport").is_err(), "non-numeric port");
+        assert!(normalize_region_host("h:99999").is_err(), "port out of u16 range");
+        assert!(normalize_region_host("ho st").is_err(), "whitespace in host");
+        assert!(normalize_region_host("h\";evil").is_err(), "shell-hostile chars");
+        // Bare (unbracketed) IPv6 must be rejected, not silently mis-parsed into
+        // a malformed "http://::1" (host=":"). Operators must bracket IPv6.
+        assert!(normalize_region_host("::1").is_err(), "bare unbracketed IPv6");
+        assert!(normalize_region_host("fe80::1").is_err(), "bare unbracketed IPv6 (link-local)");
+        assert!(
+            normalize_region_host("http://2001:db8::1:8558").is_err(),
+            "unbracketed IPv6 with port"
+        );
+    }
+
+    fn no_cred() -> CredentialArgs {
+        CredentialArgs { cred_alias: None, user: None, pass: None, pass_stdin: false }
+    }
+
+    // DESIGN-3: clean_env input-validation + dry-run gating (no SSH touched).
+    #[test]
+    fn clean_env_validates_inputs_and_dry_runs() {
+        let mut ctx = fresh_ctx();
+        let db = ctx.db.as_ref().unwrap().clone();
+        let (machine_id, _ep) = seed_endpoint(&db, "WS-1", "10.0.0.20", 8558);
+        let cred = no_cred();
+        let var = "UE-SharedDataCachePath";
+
+        // empty --machines → InvalidInput
+        assert!(matches!(
+            clean_env(&mut ctx, &[], var, &["machine".into()], false, true, &cred),
+            Err(UecmError::InvalidInput(_))
+        ));
+        // invalid scope → InvalidInput
+        assert!(matches!(
+            clean_env(&mut ctx, &[machine_id], var, &["bogus".into()], false, true, &cred),
+            Err(UecmError::InvalidInput(_))
+        ));
+        // neither --yes nor --dry-run → destructive guard
+        assert!(matches!(
+            clean_env(&mut ctx, &[machine_id], var, &["machine".into()], false, false, &cred),
+            Err(UecmError::InvalidInput(_))
+        ));
+        // unknown machine id → InvalidInput (resolved before any side effect)
+        assert!(matches!(
+            clean_env(&mut ctx, &[99999], var, &["machine".into()], false, true, &cred),
+            Err(UecmError::InvalidInput(_))
+        ));
+        // valid dry-run → Ok (emits a plan, performs no SSH/env mutation)
+        assert!(clean_env(
+            &mut ctx,
+            &[machine_id],
+            var,
+            &["machine".into(), "user".into()],
+            false,
+            true,
+            &cred
+        )
+        .is_ok());
+    }
+
+    // ZEN-4: set_region_host input-validation + dry-run gating (no SSH touched).
+    #[test]
+    fn set_region_host_validates_and_dry_runs() {
+        let mut ctx = fresh_ctx();
+        let db = ctx.db.as_ref().unwrap().clone();
+        let (machine_id, _ep) = seed_endpoint(&db, "WS-2", "10.0.0.21", 8558);
+        let cred = no_cred();
+
+        // empty --machines → InvalidInput
+        assert!(matches!(
+            set_region_host(&mut ctx, &[], "http://h:8558", false, true, &cred),
+            Err(UecmError::InvalidInput(_))
+        ));
+        // bad host (rejected by normalize_region_host) → InvalidInput
+        assert!(matches!(
+            set_region_host(&mut ctx, &[machine_id], "ftp://h:21", false, true, &cred),
+            Err(UecmError::InvalidInput(_))
+        ));
+        // unknown machine id → InvalidInput
+        assert!(matches!(
+            set_region_host(&mut ctx, &[99999], "render-master", false, true, &cred),
+            Err(UecmError::InvalidInput(_))
+        ));
+        // valid dry-run (bare host normalized) → Ok
+        assert!(set_region_host(&mut ctx, &[machine_id], "render-master", false, true, &cred).is_ok());
     }
 
     /// Codex P2: `..` segments that collapse back to a drive/UNC root are

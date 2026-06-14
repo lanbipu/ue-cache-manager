@@ -1152,7 +1152,10 @@ pub enum ZenAction {
     ///
     /// Rewrites each target machine's `DefaultEngine.ini` (per the version-gated
     /// rule set in `docs/research/zen-ini-rules.yaml`) to:
-    ///   * add the `ZenShared=(Type=Zen, Host=..., Port=..., Namespace=...)` line,
+    ///   * add the `[StorageServers]` `Shared=(Host="http://<host>:<port>", Namespace=..., ...)`
+    ///     override — UE's shipped `ZenShared=(Type=Zen, ServerID=Shared)` node
+    ///     picks it up (the port lives INSIDE the Host URI; UE's Zen store has
+    ///     no separate `Port=` field),
     ///   * strip the legacy `Shared` / `Pak` / `CompressedPak` entries.
     /// After each per-machine INI mutation succeeds, the legacy
     /// `UE-SharedDataCachePath` env var (and any others the rule flagged) is
@@ -1279,6 +1282,59 @@ pub enum ZenAction {
         /// Default `ue.ddc` is applied by the sidecar when omitted.
         #[arg(long, value_name = "NS")]
         expected_namespace: Option<String>,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Clear a DDC-related machine environment variable across N machines over
+    /// the elevated SSH channel (DESIGN-3 — reuses `zen-env-cleanup.ps1`).
+    ///
+    /// Standalone counterpart to the env cleanup `zen enable` already runs
+    /// inline: revert a legacy SMB DDC (`UE-SharedDataCachePath`, the default)
+    /// or a stale per-machine region override (`UE-ZenSharedDataCacheHost`)
+    /// without re-running enable.
+    ///
+    /// Destructive: requires `--yes` or `--dry-run`.
+    CleanEnv {
+        /// Machine row ids to clear the variable on.
+        #[arg(long, value_name = "M1,M2,...", value_delimiter = ',')]
+        machines: Vec<i64>,
+        /// Environment variable to clear. Defaults to the legacy SMB DDC path var.
+        #[arg(long, default_value = "UE-SharedDataCachePath")]
+        name: String,
+        /// Scopes to clear. Defaults to both — an operator may have set the var
+        /// via `setx` without `/M` (User scope) or with `/M` (Machine scope).
+        #[arg(long, value_delimiter = ',', default_value = "machine,user")]
+        scopes: Vec<String>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[command(flatten)]
+        cred: crate::cli::credential_args::CredentialArgs,
+    },
+    /// Set the per-machine ZenShared region-routing override
+    /// (`UE-ZenSharedDataCacheHost`) across N machines (ZEN-4).
+    ///
+    /// The `[StorageServers] Shared` entry `zen enable` writes declares
+    /// `EnvHostOverride=UE-ZenSharedDataCacheHost`, so this Machine-scope env
+    /// var (when set) overrides the INI Host — letting workstations in
+    /// different regions point at their nearest shared Zen server without
+    /// re-writing each project's INI. Revert a machine to the INI default with
+    /// `zen clean-env --name UE-ZenSharedDataCacheHost`.
+    ///
+    /// Destructive: requires `--yes` or `--dry-run`.
+    SetRegionHost {
+        /// Machine row ids to set the override on.
+        #[arg(long, value_name = "M1,M2,...", value_delimiter = ',')]
+        machines: Vec<i64>,
+        /// Region zen server host. Accepts `http://host:port`, `host:port`, or
+        /// bare `host` (port defaults to 8558); normalized to a full URI.
+        #[arg(long, value_name = "HOST")]
+        host: String,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        dry_run: bool,
         #[command(flatten)]
         cred: crate::cli::credential_args::CredentialArgs,
     },

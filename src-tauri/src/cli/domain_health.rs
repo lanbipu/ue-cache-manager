@@ -224,6 +224,11 @@ fn run_with_rt(
 
     let scan_id = scan_runs::insert(&db, "health", machine_ids)?;
 
+    // DESIGN-1: cluster-level Zen-shared signal, computed once. When active,
+    // env_shared/env_vars probes are relaxed because UE-SharedDataCachePath is
+    // intentionally cleared in Zen shared mode.
+    let zen_shared_active = crate::core::health_check::cluster_has_shared_zen(&db);
+
     let mut healthy: i64 = 0;
     let mut warning: i64 = 0;
     let mut critical: i64 = 0;
@@ -444,6 +449,9 @@ fn run_with_rt(
                 );
             }
         }
+
+        // DESIGN-1: relax env_shared/env_vars false-positives under Zen shared mode.
+        crate::core::health_check::relax_env_shared_under_zen(&mut row, zen_shared_active);
 
         let machine_checks = row.len() as i64;
         let mut row_counters = Counters::default();

@@ -25,6 +25,29 @@ pub struct DeployPlan {
     pub verify: VerifySpec,
 }
 
+impl DeployPlan {
+    /// DESIGN-2: feature-gated required-field validation. The PSO and
+    /// log-verify sub-specs carry `#[serde(default)]` fields so a plan can omit
+    /// them when the feature is disabled, but they ARE required when the
+    /// feature is on (the steps consume them). Call this right after
+    /// deserialization on both the CLI and Tauri entry points so an
+    /// enabled-but-incomplete plan fails with a clear error instead of running
+    /// with an empty resolution / editor path.
+    pub fn validate(&self) -> UecmResult<()> {
+        if self.pso.enabled && self.pso.resolution.trim().is_empty() {
+            return Err(UecmError::InvalidInput(
+                "pso.resolution is required when pso.enabled is true".into(),
+            ));
+        }
+        if self.verify.run_log_verify && self.verify.editor_exe.trim().is_empty() {
+            return Err(UecmError::InvalidInput(
+                "verify.editor_exe is required when verify.run_log_verify is true".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalCacheSpec {
     pub path: String,
@@ -46,14 +69,24 @@ pub struct PakSpec { pub enabled: bool }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PsoSpec {
     pub enabled: bool,
+    // DESIGN-2: only consumed when `enabled` (parse_resolution + the PSO steps in
+    // plan_steps). Optional in JSON so a `"pso": { "enabled": false }` plan
+    // doesn't have to carry dummy values; `DeployPlan::validate` enforces them
+    // when the feature IS enabled.
+    #[serde(default)]
     pub resolution: String,
+    #[serde(default)]
     pub max_minutes: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifySpec {
     pub run_log_verify: bool,
+    // DESIGN-2: only consumed when `run_log_verify` (VerifyStartupLogs step).
+    // Optional in JSON; `DeployPlan::validate` enforces them when enabled.
+    #[serde(default)]
     pub editor_exe: String,
+    #[serde(default)]
     pub timeout_seconds: u32,
 }
 
@@ -857,6 +890,62 @@ mod tests {
         assert_eq!(steps.len(), 5);
         assert!(steps.contains(&DeployStep::WriteBackendGraph));
         assert!(!steps.contains(&DeployStep::GenerateDdcPak));
+    }
+
+    // DESIGN-2: a plan that disables PSO + log-verify must deserialize WITHOUT
+    // carrying dummy resolution / max_minutes / editor_exe / timeout_seconds.
+    const MINIMAL_JSON: &str = r#"{
+        "project_id": 1,
+        "source_machine_id": 100,
+        "target_machine_ids": [200],
+        "local_cache": { "path": "D:\\DDC-Local" },
+        "shared_cache": { "server_machine_id": 300, "share_name": "DDC", "server_path": "D:\\DDC", "mode": "read_write" },
+        "ddc_pak": { "enabled": false },
+        "pso": { "enabled": false },
+        "verify": { "run_log_verify": false }
+    }"#;
+
+    #[test]
+    fn minimal_json_plan_deserializes_and_validates_with_disabled_features() {
+        let plan: DeployPlan =
+            serde_json::from_str(MINIMAL_JSON).expect("minimal disabled-feature plan must deserialize");
+        // Omitted fields take their defaults.
+        assert_eq!(plan.pso.resolution, "");
+        assert_eq!(plan.pso.max_minutes, 0);
+        assert_eq!(plan.verify.editor_exe, "");
+        // Disabled features need no values → validation passes.
+        plan.validate().expect("disabled features must not require resolution/editor_exe");
+        let steps = plan_steps(&plan);
+        assert!(!steps.contains(&DeployStep::CollectPso));
+        assert!(!steps.contains(&DeployStep::VerifyStartupLogs));
+    }
+
+    #[test]
+    fn validate_requires_resolution_when_pso_enabled() {
+        let json = MINIMAL_JSON.replace(
+            "\"pso\": { \"enabled\": false }",
+            "\"pso\": { \"enabled\": true }",
+        );
+        let plan: DeployPlan = serde_json::from_str(&json).unwrap();
+        let err = plan.validate().expect_err("pso.enabled=true with empty resolution must fail");
+        match err {
+            UecmError::InvalidInput(m) => assert!(m.contains("pso.resolution"), "msg={m}"),
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_requires_editor_exe_when_log_verify_enabled() {
+        let json = MINIMAL_JSON.replace(
+            "\"verify\": { \"run_log_verify\": false }",
+            "\"verify\": { \"run_log_verify\": true }",
+        );
+        let plan: DeployPlan = serde_json::from_str(&json).unwrap();
+        let err = plan.validate().expect_err("run_log_verify=true with empty editor_exe must fail");
+        match err {
+            UecmError::InvalidInput(m) => assert!(m.contains("editor_exe"), "msg={m}"),
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
     }
 
     #[test]

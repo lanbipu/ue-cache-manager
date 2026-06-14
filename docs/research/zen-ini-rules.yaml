@@ -17,19 +17,53 @@ zen_ini:
     enable_zen_shared:
       ini_file: DefaultEngine.ini
       # NOTE: section is the bare name without brackets — core::ini_editor
-      # (src-tauri/src/core/ini_editor.rs:187,232) wraps it with brackets via
-      # format!("[{}]", section). Storing "[Foo]" here would produce "[[Foo]]".
-      section: InstalledDerivedDataBackendGraph
-      key: ZenShared
-      # placeholders: {host} = cluster master hostname/IP, {port} = master zen port (default 8558),
-      # {namespace} = DDC namespace (UE 5.4+ default "ue.ddc")
-      value_template: '(Type=Zen, Host="{host}", Port={port}, Namespace="{namespace}")'
+      # wraps it with brackets via format!("[{}]", section). Storing "[Foo]"
+      # here would produce "[[Foo]]".
+      #
+      # === [StorageServers] activation model (verified against UnrealEngine
+      #     BaseEngine.ini + ZenCacheStore.cpp, 2026-06-14) ===
+      # UE 5.4+ ships a default backend node `ZenShared=(Type=Zen,
+      # ServerID=Shared)` in [DerivedDataCacheStores], already wired into the
+      # default Default/Installed graphs (BaseEngine.ini:2772/2790/2825). That
+      # node reads its connection settings from the [StorageServers] entry whose
+      # key == its ServerID, i.e. `Shared` (ZenCacheStore.cpp ServerID
+      # indirection). The shipped `[StorageServers] Shared` has Host=None
+      # (inactive). So we activate the shared Zen DDC by OVERRIDING that entry's
+      # Host — we do NOT write a backend-graph node. (The old
+      # `[InstalledDerivedDataBackendGraph] ZenShared=(...)` write targeted a
+      # section that is no longer a node container in modern UE — it is now a
+      # graph-name key under [DerivedDataCacheGraphs] — so it was inert.)
+      section: StorageServers
+      key: Shared
+      # value_template notes:
+      #   * placeholders: {host} = cluster master hostname/IP, {port} = master
+      #     zen port (default 8558), {namespace} = DDC namespace (default ue.ddc).
+      #   * Host MUST be a full URI WITH scheme + embedded port (http://{host}:{port}).
+      #     FZenCacheStoreParams has NO `Port=` field — a separate Port= token is
+      #     silently ignored (this was a real bug in the previous template:
+      #     Host="render-master", Port=8558 connected to host "render-master"
+      #     with no port). Host is parsed by FHttpHostBuilder::AddFromString as a
+      #     ';'-separated list of full-URL candidates; scheme picks http/https.
+      #   * EnvHostOverride/CommandLineHostOverride preserve UE's defaults so a
+      #     per-machine/region env var (UE-ZenSharedDataCacheHost) can still
+      #     override this Host — this is the multi-region routing path (ZEN-4).
+      #   * DeactivateAt=60 (ms latency threshold) auto-disables the node when
+      #     the server is slow, protecting workstation perf — matches the
+      #     BaseEngine.ini default for the Shared entry.
+      #   * A struct value FULLY REPLACES the BaseEngine default, so the whole
+      #     struct (not just Host) must be written.
+      value_template: '(Host="http://{host}:{port}", Namespace="{namespace}", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)'
       backup: true
       verified_by:
-        # ue: <ue_version> · sandbox: <path on test host> · log_line: <exact log proof>
+        # Source-verified against UnrealEngine BaseEngine.ini:2742/2825 +
+        # ZenCacheStore.cpp::FZenCacheStoreParams::Parse: the [StorageServers]
+        # Shared override + shipped ServerID=Shared node is the official
+        # activation path. The runtime log line is unchanged (it reports the
+        # ZenShared NODE name, independent of activation method); re-capture a
+        # live-editor log proof on lanPC after deploy.
         - ue: "5.7.4"
-          sandbox: "E:\\Sandbox\\uecm_t05_zen_shared (lanPC, 2026-05-18)"
-          log_line: "LogDerivedDataCache: Display: ZenShared: Using ZenServer HTTP service at 127.0.0.1 with namespace ue.ddc status: OK!"
+          basis: "UnrealEngine BaseEngine.ini:2742/2825 + ZenCacheStore.cpp ServerID indirection"
+          log_line: "LogDerivedDataCache: Display: ZenShared: Using ZenServer HTTP service at <host> with namespace ue.ddc status: OK!"
 
     disable_legacy_smb_shared:
       ini_file: DefaultEngine.ini

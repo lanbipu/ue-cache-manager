@@ -14,6 +14,9 @@ pub fn handle(ctx: &mut Ctx<'_>, action: DeployAction) -> UecmResult<()> {
             })?;
             let mut p: DeployPlan = serde_json::from_str(&body)
                 .map_err(|e| UecmError::InvalidInput(format!("bad plan: {}", e)))?;
+            // DESIGN-2: enforce feature-gated required fields (resolution /
+            // editor_exe) only when the corresponding feature is enabled.
+            p.validate()?;
 
             let outcome = destructive::check(yes, dry_run, "deploy.ddc")?;
             let db = ctx.require_db()?.clone();

@@ -111,6 +111,11 @@ pub fn run_health_check(
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| UecmError::OperationFailed(e.to_string()))?;
 
+    // DESIGN-1: cluster-level Zen-shared signal, computed once. When active,
+    // env_shared/env_vars probes are relaxed (UE-SharedDataCachePath is
+    // intentionally cleared in Zen shared mode). Mirrors cli/domain_health.rs.
+    let zen_shared_active = crate::core::health_check::cluster_has_shared_zen(&db);
+
     for &mid in &machine_ids {
         let machine = match data_machines::find_by_id(&db, mid)? {
             Some(m) => m,
@@ -281,6 +286,9 @@ pub fn run_health_check(
                 }
             }
         }
+
+        // DESIGN-1: relax env_shared/env_vars false-positives under Zen shared mode.
+        crate::core::health_check::relax_env_shared_under_zen(&mut row, zen_shared_active);
 
         tally_summary(&mut summary, &row);
         health_check_runs::upsert(&db, scan_id, mid, &serde_json::to_value(&row).unwrap())?;

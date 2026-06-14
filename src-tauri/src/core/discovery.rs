@@ -50,8 +50,51 @@ pub fn detect_ue_versions(exec: &dyn RemoteExecutor, host: &str) -> UecmResult<V
     .map_err(|e| with_onboarding_hint(host, e))
 }
 
+/// F-005: model-name markers for virtual / remote-desktop display adapters that
+/// `Win32_VideoController` enumerates alongside the real GPU. Matched
+/// case-insensitively as substrings against `gpu_model`.
+const VIRTUAL_GPU_MARKERS: &[&str] = &[
+    "microsoft basic display",
+    "microsoft remote display",
+    "microsoft hyper-v video",
+    "remote desktop",
+    "rdpdd",
+    "rdp encoder mirror",
+    "citrix",
+    "vmware",
+    "virtualbox",
+    "parsec",
+    "dameware",
+    "meta virtual monitor",
+    "sunlogin",
+    "向日葵",
+    "gameviewer",
+    "iddcx",
+    "indirect display",
+    "virtual display",
+    "displaylink",
+    "splashtop",
+    "usb display",
+];
+
+/// F-005: is this a real, physical GPU (vs a virtual / remote display adapter)?
+///
+/// Two signals, both derived from what `query-gpu-driver.ps1` actually emits:
+///   1. A model name on the virtual-adapter denylist → drop (catches adapters
+///      that fake a VRAM value, e.g. some remote-display drivers).
+///   2. Otherwise keep only if the adapter has a recognized vendor OR reports
+///      real VRAM. Virtual adapters present as `vendor=unknown` with no VRAM;
+///      a legitimate-but-unrecognized GPU still survives via its VRAM.
+fn is_physical_gpu(g: &DetectedGpu) -> bool {
+    let model = g.gpu_model.to_ascii_lowercase();
+    if VIRTUAL_GPU_MARKERS.iter().any(|m| model.contains(m)) {
+        return false;
+    }
+    g.vendor != GpuVendor::Unknown || g.vram_mb.is_some()
+}
+
 pub fn detect_gpus(exec: &dyn RemoteExecutor, host: &str) -> UecmResult<Vec<DetectedGpu>> {
-    run_json(
+    let raw: Vec<DetectedGpu> = run_json(
         exec,
         host,
         &NodeScript {
@@ -60,7 +103,10 @@ pub fn detect_gpus(exec: &dyn RemoteExecutor, host: &str) -> UecmResult<Vec<Dete
             ssh_user: None,
         },
     )
-    .map_err(|e| with_onboarding_hint(host, e))
+    .map_err(|e| with_onboarding_hint(host, e))?;
+    // F-005: strip virtual display adapters so the inventory + GPU-consistency
+    // health check reflect the real rendering hardware.
+    Ok(raw.into_iter().filter(is_physical_gpu).collect())
 }
 
 #[cfg(test)]
@@ -118,6 +164,47 @@ mod tests {
         let g = detect_gpus(&exec, "RENDER-01").unwrap();
         assert_eq!(g.len(), 1);
         assert_eq!(g[0].gpu_model, "RTX 4090");
+    }
+
+    // F-005: virtual / remote-display adapters that Win32_VideoController also
+    // enumerates must be dropped; the real GPU survives.
+    #[test]
+    fn detect_gpus_filters_virtual_adapters() {
+        let exec = FakeExec(
+            r#"[
+                {"gpu_model":"NVIDIA RTX 4090","driver_version":"551.86","vendor":"nvidia","vram_mb":24576},
+                {"gpu_model":"Microsoft Basic Display Adapter","driver_version":"10.0.0","vendor":"unknown","vram_mb":null},
+                {"gpu_model":"Parsec Virtual Display Adapter","driver_version":"0.45","vendor":"unknown","vram_mb":null},
+                {"gpu_model":"VMware SVGA 3D","driver_version":"8.17","vendor":"unknown","vram_mb":128},
+                {"gpu_model":"Some Unknown GPU","driver_version":"1.0","vendor":"unknown","vram_mb":null}
+            ]"#
+            .to_string(),
+        );
+        let g = detect_gpus(&exec, "RENDER-01").unwrap();
+        let models: Vec<&str> = g.iter().map(|x| x.gpu_model.as_str()).collect();
+        assert_eq!(models, vec!["NVIDIA RTX 4090"], "only the physical GPU survives");
+    }
+
+    #[test]
+    fn is_physical_gpu_keeps_unknown_vendor_with_real_vram() {
+        // A legitimate but unrecognized GPU (vendor unknown) that reports real
+        // VRAM must NOT be filtered — only the denylist + the no-vendor/no-vram
+        // heuristic drop it.
+        let real_but_unknown = DetectedGpu {
+            gpu_model: "Moore Threads MTT S80".into(),
+            driver_version: "1.0".into(),
+            vendor: GpuVendor::Unknown,
+            vram_mb: Some(16384),
+        };
+        assert!(is_physical_gpu(&real_but_unknown));
+
+        let virtual_no_vram = DetectedGpu {
+            gpu_model: "Generic Non-PnP Monitor Adapter".into(),
+            driver_version: "1.0".into(),
+            vendor: GpuVendor::Unknown,
+            vram_mb: None,
+        };
+        assert!(!is_physical_gpu(&virtual_no_vram));
     }
 
     struct FailExec;

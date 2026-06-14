@@ -65,8 +65,10 @@ pub enum UnverifiedPolicy {
     Warn,
 }
 
-/// The `enable_zen_shared` rule — writes a single `ZenShared=(...)` line
-/// into `[InstalledDerivedDataBackendGraph]`.
+/// The `enable_zen_shared` rule — writes a single `Shared=(...)` line into
+/// `[StorageServers]` (the modern UE 5.4+ form). The shipped default
+/// `ZenShared=(Type=Zen, ServerID=Shared)` backend node references it by
+/// ServerID, so overriding the entry's Host activates the shared Zen DDC.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct EnableZenSharedRule {
     pub ini_file: String,
@@ -709,9 +711,9 @@ zen_ini:
   rules:
     enable_zen_shared:
       ini_file: DefaultEngine.ini
-      section: InstalledDerivedDataBackendGraph
-      key: ZenShared
-      value_template: '(Type=Zen, Host="{host}", Port={port}, Namespace="{namespace}")'
+      section: StorageServers
+      key: Shared
+      value_template: '(Host="http://{host}:{port}", Namespace="{namespace}", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)'
       backup: true
     disable_legacy_smb_shared:
       ini_file: DefaultEngine.ini
@@ -752,16 +754,19 @@ overrides: {}
         let path = default_path();
         let rules = load_from_path(&path).expect("real yaml parses");
         assert_eq!(rules.applies_to, ">=5.4");
-        assert_eq!(
-            rules.default.enable_zen_shared.section,
-            "InstalledDerivedDataBackendGraph"
-        );
-        assert_eq!(rules.default.enable_zen_shared.key, "ZenShared");
+        assert_eq!(rules.default.enable_zen_shared.section, "StorageServers");
+        assert_eq!(rules.default.enable_zen_shared.key, "Shared");
         assert!(rules
             .default
             .enable_zen_shared
             .value_template
             .contains("{host}"));
+        // The port must be embedded in the Host URI (no separate Port= field).
+        assert!(rules
+            .default
+            .enable_zen_shared
+            .value_template
+            .contains("http://{host}:{port}"));
         assert_eq!(rules.default.disable_legacy_pak.keys, vec!["Pak", "CompressedPak"]);
         assert_eq!(rules.unverified_policy, UnverifiedPolicy::Refuse);
         assert!(rules.verified_versions.contains(&"5.7".to_string()));
@@ -935,10 +940,7 @@ overrides: {}
 
         let r = resolve(&rules, "5.7").expect("5.7 ok");
         // Default section, NOT overridden.
-        assert_eq!(
-            r.rules.enable_zen_shared.section,
-            "InstalledDerivedDataBackendGraph"
-        );
+        assert_eq!(r.rules.enable_zen_shared.section, "StorageServers");
     }
 
     #[test]

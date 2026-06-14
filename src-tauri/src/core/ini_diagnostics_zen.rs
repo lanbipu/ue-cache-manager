@@ -298,30 +298,78 @@ fn extract_field(value: &str, field: &str) -> Option<String> {
     None
 }
 
-/// Is `value` shaped like `(Type=Zen, Host=..., Port=..., Namespace=...)`?
-/// Mirrors the YAML's `value_template` structure — we require all four
-/// fields present with the expected literal `Type=Zen`. Any of port being
-/// non-numeric is also a malformed flag.
+/// Parse a `[StorageServers]` Host value into `(host_without_scheme, port)`.
+///
+/// UE's `FHttpHostBuilder::AddFromString` treats the Host as a `;`-separated
+/// list of full-URL candidates (`http://host:port`). For diagnostics we only
+/// look at the first candidate and recover the bare host + the embedded port
+/// so R014 can compare them against a registered endpoint (whose host/port are
+/// stored unscheme'd). Handles bracketed IPv6 literals (`http://[::1]:8558`).
+///
+/// Returns `None` when the value is empty. `port` is `None` when no `:port`
+/// suffix is present in the authority.
+fn parse_storage_host_uri(host_value: &str) -> Option<(String, Option<i64>)> {
+    let first = host_value.split(';').next()?.trim();
+    if first.is_empty() {
+        return None;
+    }
+    // Strip an optional scheme (`http://` / `https://`).
+    let after_scheme = first.split_once("://").map(|(_, rest)| rest).unwrap_or(first);
+    // Drop any path/query: keep only the authority (host[:port]).
+    let authority = after_scheme
+        .split(['/', '?'])
+        .next()
+        .unwrap_or(after_scheme)
+        .trim();
+    // Bracketed IPv6 literal: [host]:port
+    if let Some(rest) = authority.strip_prefix('[') {
+        let end = rest.find(']')?;
+        let host = format!("[{}]", &rest[..end]);
+        let port = rest[end + 1..]
+            .strip_prefix(':')
+            .and_then(|p| p.parse::<i64>().ok());
+        return Some((host, port));
+    }
+    // Plain host[:port] — the port is the trailing `:NNN` when numeric.
+    if let Some((h, p)) = authority.rsplit_once(':') {
+        if let Ok(port) = p.parse::<i64>() {
+            return Some((h.to_string(), Some(port)));
+        }
+    }
+    Some((authority.to_string(), None))
+}
+
+/// Is `value` shaped like a valid `[StorageServers]` `Shared` entry, i.e.
+/// `(Host="http://host:port", Namespace="...", ...)`?
+///
+/// Modern UE (5.4+) wires the shared Zen DDC through the default
+/// `ZenShared=(Type=Zen, ServerID=Shared)` node + a `[StorageServers] Shared`
+/// override. The override entry is type-less (the consuming store's `Type=`
+/// lives on the graph node, not here) and has NO bare `Port=` — the port MUST
+/// be embedded in the Host URI (`FZenCacheStoreParams` has no Port field).
+/// So well-formed = a Host URI that carries a scheme **and** an embedded port,
+/// is not the `None` disable sentinel, plus a non-empty Namespace. A bare
+/// host (`Host="render-master"`) or a stray `Port=` token is flagged malformed
+/// — that is exactly the broken legacy shape this fix replaces.
 fn is_well_formed_zen_shared(value: &str) -> bool {
     let v = value.trim();
     if !v.starts_with('(') || !v.ends_with(')') {
         return false;
     }
-    // All four fields must be present.
-    let type_field = extract_field(v, "Type");
-    if type_field.as_deref().map(|s| s.eq_ignore_ascii_case("Zen")) != Some(true) {
+    let Some(host) = extract_field(v, "Host") else {
+        return false;
+    };
+    // `Host=None` is UE's disable sentinel — not a wired upstream.
+    if host.eq_ignore_ascii_case("None") {
         return false;
     }
-    if extract_field(v, "Host").is_none() {
+    // Host must be a full URI with scheme + embedded port.
+    if !host.contains("://") {
         return false;
     }
-    let port = extract_field(v, "Port");
-    let port_ok = port
-        .as_deref()
-        .map(|p| p.parse::<u16>().is_ok())
-        .unwrap_or(false);
-    if !port_ok {
-        return false;
+    match parse_storage_host_uri(&host) {
+        Some((h, Some(_port))) if !h.is_empty() => {}
+        _ => return false,
     }
     if extract_field(v, "Namespace").is_none() {
         return false;
@@ -410,10 +458,10 @@ fn rule_r013(file: &ParsedFile, ctx: &ZenRuleContext<'_>) -> Vec<Finding> {
         recommended_action: RecommendedAction::Manual,
         recommended_value: None,
         symptom: format!(
-            "`{}` value does not match the expected shape (Type=Zen, Host=..., Port=..., Namespace=...).",
+            "`{}` value does not match the expected [StorageServers] shape (Host=\"http://host:port\", Namespace=...). A bare host or a separate `Port=` token is malformed — the port must be embedded in the Host URI.",
             rule.key
         ),
-        rationale: "Zen will refuse to wire up the backend if the value doesn't parse; the project silently falls back to local-only DDC. Re-run `uecm-cli zen enable` to overwrite with a materialized value.".into(),
+        rationale: "Zen will refuse to wire up the backend if the value doesn't parse (or connects to the wrong port when the URI omits it); the project silently falls back to local-only DDC. Re-run `uecm-cli zen enable` to overwrite with a materialized value.".into(),
     }]
 }
 
@@ -431,12 +479,18 @@ fn rule_r014(file: &ParsedFile, ctx: &ZenRuleContext<'_>) -> Vec<Finding> {
     }
     let Some(section) = find_section(file, &rule.section) else { return vec![] };
     let Some(k) = find_key(section, &rule.key) else { return vec![] };
-    let Some(host_in_value) = extract_field(&k.value, "Host") else { return vec![] };
+    let Some(host_field) = extract_field(&k.value, "Host") else { return vec![] };
 
-    // Host match is case-insensitive; resolving DNS / IP equivalence is out
-    // of scope (operators register endpoints by the name they intend to use
-    // in ZenShared).
-    let value_port = extract_field(&k.value, "Port").and_then(|p| p.parse::<i64>().ok());
+    // The StorageServers Host is a full URI (`http://host:port`); recover the
+    // bare host + embedded port to compare against the registered endpoint
+    // (stored unscheme'd). There is no separate `Port=` token in the modern
+    // form. Host match is case-insensitive; resolving DNS / IP equivalence is
+    // out of scope (operators register endpoints by the name they intend to
+    // use in the Host URI).
+    let (host_in_value, value_port) = match parse_storage_host_uri(&host_field) {
+        Some((h, p)) => (h, p),
+        None => (host_field.clone(), None),
+    };
     let value_namespace = extract_field(&k.value, "Namespace");
 
     // Look for an endpoint that matches host AND (if both sides have it) port
@@ -843,32 +897,49 @@ pub fn evaluate_r026(
     config_snapshots: &[crate::core::ini_config_extract::ConfigEntry],
     _machine_id: i64,
 ) -> Vec<Finding> {
-    // R026 only fires when a project DefaultEngine.ini also has ZenShared.
-    let project_has_zen_shared = config_snapshots.iter().any(|e| {
-        e.domain == "zen" && e.key_name.eq_ignore_ascii_case("ZenShared")
-    });
+    // A "zen shared upstream" entry is either the modern `[StorageServers]`
+    // `Shared` override (what `zen enable` writes now) or the legacy
+    // `[InstalledDerivedDataBackendGraph]` `ZenShared` node (pre-migration
+    // projects). Recognize BOTH so the redundancy check keeps working across
+    // the format switch.
+    let is_zen_shared = |section: &str, key: &str| -> bool {
+        (section.eq_ignore_ascii_case("StorageServers") && key.eq_ignore_ascii_case("Shared"))
+            || (section.eq_ignore_ascii_case("InstalledDerivedDataBackendGraph")
+                && key.eq_ignore_ascii_case("ZenShared"))
+    };
+
+    // R026 only fires when a project DefaultEngine.ini also has a zen upstream.
+    let project_has_zen_shared = config_snapshots
+        .iter()
+        .any(|e| e.domain == "zen" && is_zen_shared(&e.section, &e.key_name));
     if !project_has_zen_shared {
         return vec![];
     }
 
-    // Read UserEngine.ini for ZenShared (case-insensitive).
-    let section = "InstalledDerivedDataBackendGraph";
-    let user_keys = match crate::core::ini_editor::read_section(host, user_engine_ini_path, section) {
-        Ok(keys) => keys,
-        Err(_) => return vec![], // file absent or unreadable — not an error
+    // Read UserEngine.ini for a zen upstream in either section form.
+    let global_section = ["StorageServers", "InstalledDerivedDataBackendGraph"]
+        .into_iter()
+        .find(|section| {
+            crate::core::ini_editor::read_section(host, user_engine_ini_path, section)
+                .map(|keys| keys.iter().any(|k| is_zen_shared(section, &k.name)))
+                .unwrap_or(false)
+        });
+    let Some(global_section) = global_section else {
+        return vec![]; // file absent/unreadable or no global zen upstream — not an error
     };
-    let global_has_zen_shared = user_keys.iter().any(|k| k.name.eq_ignore_ascii_case("ZenShared"));
-    if !global_has_zen_shared {
-        return vec![];
-    }
+    let global_key = if global_section.eq_ignore_ascii_case("StorageServers") {
+        "Shared"
+    } else {
+        "ZenShared"
+    };
 
     vec![Finding {
         rule_id: "R026".to_string(),
         severity: Severity::Warning,
         category: crate::core::ini_diagnostics::Category::User,
         file_path: user_engine_ini_path.to_string(),
-        section: Some(section.to_string()),
-        key_name: Some("ZenShared".to_string()),
+        section: Some(global_section.to_string()),
+        key_name: Some(global_key.to_string()),
         line_number: None,
         snippet_before: String::new(),
         snippet_after: None,
@@ -896,10 +967,10 @@ mod tests {
             rules: RuleSet {
                 enable_zen_shared: EnableZenSharedRule {
                     ini_file: "DefaultEngine.ini".into(),
-                    section: "InstalledDerivedDataBackendGraph".into(),
-                    key: "ZenShared".into(),
+                    section: "StorageServers".into(),
+                    key: "Shared".into(),
                     value_template:
-                        "(Type=Zen, Host=\"{host}\", Port={port}, Namespace=\"{namespace}\")"
+                        "(Host=\"http://{host}:{port}\", Namespace=\"{namespace}\", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)"
                             .into(),
                     backup: true,
                 },
@@ -982,10 +1053,10 @@ mod tests {
     fn r012_silent_when_zen_shared_present() {
         let rules = make_rules();
         let file = project_ini(&[(
-            "InstalledDerivedDataBackendGraph",
+            "StorageServers",
             &[(
-                "ZenShared",
-                "(Type=Zen, Host=\"render-master\", Port=8558, Namespace=\"ue.ddc\")",
+                "Shared",
+                "(Host=\"http://render-master:8558\", Namespace=\"ue.ddc\", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)",
             )],
         )]);
         let ctx = ctx_with(&rules);
@@ -1019,8 +1090,8 @@ mod tests {
     fn r013_fires_when_zen_shared_value_malformed() {
         let rules = make_rules();
         let file = project_ini(&[(
-            "InstalledDerivedDataBackendGraph",
-            &[("ZenShared", "Type=Bogus,Host=foo")],
+            "StorageServers",
+            &[("Shared", "Type=Bogus,Host=foo")],
         )]);
         let ctx = ctx_with(&rules);
         let findings = run_zen_rules_for_file(&file, &EnvVarState::default(), &ctx);
@@ -1032,13 +1103,32 @@ mod tests {
     }
 
     #[test]
-    fn r013_fires_when_port_is_non_numeric() {
+    fn r013_fires_when_host_uri_missing_port() {
+        // The whole point of the StorageServers fix: the port must be embedded
+        // in the Host URI. A scheme'd host with no port (`http://render-master`)
+        // would connect to the wrong port (80, not 8558) — flag it malformed.
         let rules = make_rules();
         let file = project_ini(&[(
-            "InstalledDerivedDataBackendGraph",
+            "StorageServers",
             &[(
-                "ZenShared",
-                "(Type=Zen, Host=\"render-master\", Port=BAD, Namespace=\"ue.ddc\")",
+                "Shared",
+                "(Host=\"http://render-master\", Namespace=\"ue.ddc\")",
+            )],
+        )]);
+        let ctx = ctx_with(&rules);
+        let findings = run_zen_rules_for_file(&file, &EnvVarState::default(), &ctx);
+        assert!(findings.iter().any(|f| f.rule_id == "R013"));
+    }
+
+    #[test]
+    fn r013_fires_when_host_missing_scheme() {
+        // A bare host (the broken legacy shape) has no scheme — malformed.
+        let rules = make_rules();
+        let file = project_ini(&[(
+            "StorageServers",
+            &[(
+                "Shared",
+                "(Host=\"render-master:8558\", Namespace=\"ue.ddc\")",
             )],
         )]);
         let ctx = ctx_with(&rules);
@@ -1050,10 +1140,10 @@ mod tests {
     fn r013_silent_on_well_formed_value() {
         let rules = make_rules();
         let file = project_ini(&[(
-            "InstalledDerivedDataBackendGraph",
+            "StorageServers",
             &[(
-                "ZenShared",
-                "(Type=Zen, Host=\"render-master\", Port=8558, Namespace=\"ue.ddc\")",
+                "Shared",
+                "(Host=\"http://render-master:8558\", Namespace=\"ue.ddc\", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)",
             )],
         )]);
         let ctx = ctx_with(&rules);
@@ -1067,10 +1157,10 @@ mod tests {
     fn r014_fires_when_host_not_reachable_per_probes() {
         let rules = make_rules();
         let file = project_ini(&[(
-            "InstalledDerivedDataBackendGraph",
+            "StorageServers",
             &[(
-                "ZenShared",
-                "(Type=Zen, Host=\"render-master\", Port=8558, Namespace=\"ue.ddc\")",
+                "Shared",
+                "(Host=\"http://render-master:8558\", Namespace=\"ue.ddc\", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)",
             )],
         )]);
         let mut ctx = ctx_with(&rules);
@@ -1092,10 +1182,10 @@ mod tests {
     fn r014_silent_when_host_reachable() {
         let rules = make_rules();
         let file = project_ini(&[(
-            "InstalledDerivedDataBackendGraph",
+            "StorageServers",
             &[(
-                "ZenShared",
-                "(Type=Zen, Host=\"render-master\", Port=8558, Namespace=\"ue.ddc\")",
+                "Shared",
+                "(Host=\"http://render-master:8558\", Namespace=\"ue.ddc\", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)",
             )],
         )]);
         let mut ctx = ctx_with(&rules);
@@ -1115,10 +1205,10 @@ mod tests {
         // though the host matches a registered + reachable endpoint.
         let rules = make_rules();
         let file = project_ini(&[(
-            "InstalledDerivedDataBackendGraph",
+            "StorageServers",
             &[(
-                "ZenShared",
-                "(Type=Zen, Host=\"render-master\", Port=9999, Namespace=\"ue.ddc\")",
+                "Shared",
+                "(Host=\"http://render-master:9999\", Namespace=\"ue.ddc\")",
             )],
         )]);
         let mut ctx = ctx_with(&rules);
@@ -1140,10 +1230,10 @@ mod tests {
     fn r014_fires_when_namespace_mismatches_registered_endpoint() {
         let rules = make_rules();
         let file = project_ini(&[(
-            "InstalledDerivedDataBackendGraph",
+            "StorageServers",
             &[(
-                "ZenShared",
-                "(Type=Zen, Host=\"render-master\", Port=8558, Namespace=\"wrong.ns\")",
+                "Shared",
+                "(Host=\"http://render-master:8558\", Namespace=\"wrong.ns\")",
             )],
         )]);
         let mut ctx = ctx_with(&rules);
@@ -1187,10 +1277,10 @@ mod tests {
         // silently keeps the legacy SMB path alive.
         let rules = make_rules();
         let file = project_ini(&[(
-            "InstalledDerivedDataBackendGraph",
+            "StorageServers",
             &[(
-                "ZenShared",
-                "(Type=Zen, Host=\"render-master\", Port=8558, Namespace=\"ue.ddc\")",
+                "Shared",
+                "(Host=\"http://render-master:8558\", Namespace=\"ue.ddc\", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)",
             )],
         )]);
         let ctx = ctx_with(&rules);
@@ -1249,16 +1339,19 @@ mod tests {
         // env var also set AND ZenShared also configured. Both arms fire so the
         // operator sees both surfaces in the report.
         let rules = make_rules();
-        let file = project_ini(&[(
-            "InstalledDerivedDataBackendGraph",
-            &[
-                ("Shared", "(Type=FileSystem, Path=\"\\\\HOST\\Share\")"),
-                (
-                    "ZenShared",
-                    "(Type=Zen, Host=\"render-master\", Port=8558, Namespace=\"ue.ddc\")",
-                ),
-            ],
-        )]);
+        let file = project_ini(&[
+            (
+                "InstalledDerivedDataBackendGraph",
+                &[("Shared", "(Type=FileSystem, Path=\"\\\\HOST\\Share\")")],
+            ),
+            (
+                "StorageServers",
+                &[(
+                    "Shared",
+                    "(Host=\"http://render-master:8558\", Namespace=\"ue.ddc\", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)",
+                )],
+            ),
+        ]);
         let ctx = ctx_with(&rules);
         let env = EnvVarState {
             shared_data_cache_path: Some("\\\\NAS\\DDC".into()),
@@ -1425,16 +1518,19 @@ mod tests {
     #[test]
     fn r015_recommends_remove_when_zen_shared_configured() {
         let rules = make_rules();
-        let file = project_ini(&[(
-            "InstalledDerivedDataBackendGraph",
-            &[
-                ("Shared", "(Type=FileSystem, Path=\"\\\\HOST\\Share\")"),
-                (
-                    "ZenShared",
-                    "(Type=Zen, Host=\"render-master\", Port=8558, Namespace=\"ue.ddc\")",
-                ),
-            ],
-        )]);
+        let file = project_ini(&[
+            (
+                "InstalledDerivedDataBackendGraph",
+                &[("Shared", "(Type=FileSystem, Path=\"\\\\HOST\\Share\")")],
+            ),
+            (
+                "StorageServers",
+                &[(
+                    "Shared",
+                    "(Host=\"http://render-master:8558\", Namespace=\"ue.ddc\", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)",
+                )],
+            ),
+        ]);
         let ctx = ctx_with(&rules);
         let findings = run_zen_rules_for_file(&file, &EnvVarState::default(), &ctx);
         let f = findings
@@ -1467,16 +1563,19 @@ mod tests {
     #[test]
     fn r017_recommends_remove_when_zen_shared_configured() {
         let rules = make_rules();
-        let file = project_ini(&[(
-            "InstalledDerivedDataBackendGraph",
-            &[
-                ("Pak", "(Type=FileSystem, Path=\"DerivedDataCache/DDC.ddp\")"),
-                (
-                    "ZenShared",
-                    "(Type=Zen, Host=\"render-master\", Port=8558, Namespace=\"ue.ddc\")",
-                ),
-            ],
-        )]);
+        let file = project_ini(&[
+            (
+                "InstalledDerivedDataBackendGraph",
+                &[("Pak", "(Type=FileSystem, Path=\"DerivedDataCache/DDC.ddp\")")],
+            ),
+            (
+                "StorageServers",
+                &[(
+                    "Shared",
+                    "(Host=\"http://render-master:8558\", Namespace=\"ue.ddc\", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)",
+                )],
+            ),
+        ]);
         let ctx = ctx_with(&rules);
         let findings = run_zen_rules_for_file(&file, &EnvVarState::default(), &ctx);
         let f = findings
@@ -1580,9 +1679,9 @@ mod tests {
         // value malformed.
         let rules = make_rules();
         let file = project_ini(&[(
-            "InstalledDerivedDataBackendGraph",
+            "StorageServers",
             &[(
-                "ZenShared",
+                "Shared",
                 "(Type=Zen, ProxyHost=\"sneaky\", Port=8558, Namespace=\"ue.ddc\")",
             )],
         )]);
@@ -1649,5 +1748,73 @@ mod tests {
             "C:\\Project\\Config\\ConsoleVariables.ini",
             "DefaultEngine.ini"
         ));
+    }
+
+    // ZEN-1: direct coverage for the StorageServers Host URI parser — the IPv6,
+    // semicolon-list and path-stripping branches are otherwise only exercised
+    // indirectly through R013/R014.
+    #[test]
+    fn parse_storage_host_uri_covers_scheme_port_ipv6_semicolon_and_path() {
+        assert_eq!(parse_storage_host_uri("render-master"), Some(("render-master".into(), None)));
+        assert_eq!(parse_storage_host_uri("http://h:8558"), Some(("h".into(), Some(8558))));
+        assert_eq!(parse_storage_host_uri("10.0.0.5:9000"), Some(("10.0.0.5".into(), Some(9000))));
+        // Trailing path/query dropped.
+        assert_eq!(parse_storage_host_uri("http://h:8558/api/v1"), Some(("h".into(), Some(8558))));
+        // Bracketed IPv6, with and without a port.
+        assert_eq!(parse_storage_host_uri("http://[::1]:8558"), Some(("[::1]".into(), Some(8558))));
+        assert_eq!(parse_storage_host_uri("[::1]"), Some(("[::1]".into(), None)));
+        // Semicolon candidate list → first candidate (UE FHttpHostBuilder semantics).
+        assert_eq!(
+            parse_storage_host_uri("http://a:8558;http://b:8558"),
+            Some(("a".into(), Some(8558)))
+        );
+        assert_eq!(parse_storage_host_uri(""), None);
+    }
+
+    // ZEN-1 read-side: R026 must fire for the NEW `[StorageServers] Shared` form
+    // (the shape `zen enable` now writes) present in both UserEngine.ini and the
+    // project snapshot — not just the legacy InstalledDerivedDataBackendGraph form.
+    #[test]
+    fn r026_fires_on_new_storage_servers_form() {
+        use crate::core::ini_config_extract::ConfigEntry;
+        let dir = tempfile::tempdir().unwrap();
+        let user_ini = dir.path().join("UserEngine.ini");
+        std::fs::write(
+            &user_ini,
+            "[StorageServers]\nShared=(Host=\"http://10.0.0.9:8558\", Namespace=\"ue.ddc\")\n",
+        )
+        .unwrap();
+        let snapshots = vec![ConfigEntry {
+            domain: "zen",
+            file_path: "C:\\Proj\\Config\\DefaultEngine.ini".into(),
+            section: "StorageServers".into(),
+            key_name: "Shared".into(),
+            value: "(Host=\"http://10.0.0.9:8558\", Namespace=\"ue.ddc\")".into(),
+            line_number: 2,
+        }];
+        let findings = evaluate_r026("127.0.0.1", user_ini.to_str().unwrap(), &snapshots, 1);
+        assert!(
+            findings.iter().any(|f| f.rule_id == "R026"),
+            "R026 must fire for the modern [StorageServers] Shared form, got: {:?}",
+            findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
+        );
+    }
+
+    // R026 must NOT fire when only the project side has a zen upstream (no global).
+    #[test]
+    fn r026_silent_when_only_project_side_present() {
+        use crate::core::ini_config_extract::ConfigEntry;
+        let dir = tempfile::tempdir().unwrap();
+        let user_ini = dir.path().join("UserEngine.ini"); // absent on disk
+        let snapshots = vec![ConfigEntry {
+            domain: "zen",
+            file_path: "C:\\Proj\\Config\\DefaultEngine.ini".into(),
+            section: "StorageServers".into(),
+            key_name: "Shared".into(),
+            value: "(Host=\"http://10.0.0.9:8558\")".into(),
+            line_number: 2,
+        }];
+        let findings = evaluate_r026("127.0.0.1", user_ini.to_str().unwrap(), &snapshots, 1);
+        assert!(!findings.iter().any(|f| f.rule_id == "R026"));
     }
 }

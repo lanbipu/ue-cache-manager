@@ -160,10 +160,11 @@ pub fn enable_project(
     // I/O.
     let desired_value = apply_value_template(&enable_rule.value_template, master)?;
 
-    // 1. Read each distinct section. Most installs collapse to one read
-    // because all three rules target `InstalledDerivedDataBackendGraph`,
-    // but the read cache below honors per-section overrides without
-    // hitting WinRM more than necessary.
+    // 1. Read each distinct section. The enable rule now targets
+    // `[StorageServers]` (key `Shared`) while the legacy-cleanup rules target
+    // `[InstalledDerivedDataBackendGraph]`, so a typical install does two
+    // distinct reads; the read cache below collapses duplicates and honors
+    // per-section overrides without hitting the remote more than necessary.
     let mut section_cache: std::collections::HashMap<String, Vec<IniKey>> =
         std::collections::HashMap::new();
     for sec in [section.as_str(), smb_section, pak_section] {
@@ -704,10 +705,10 @@ mod tests {
             rules: RuleSet {
                 enable_zen_shared: EnableZenSharedRule {
                     ini_file: "DefaultEngine.ini".to_string(),
-                    section: "InstalledDerivedDataBackendGraph".to_string(),
-                    key: "ZenShared".to_string(),
+                    section: "StorageServers".to_string(),
+                    key: "Shared".to_string(),
                     value_template:
-                        "(Type=Zen, Host=\"{host}\", Port={port}, Namespace=\"{namespace}\")"
+                        "(Host=\"http://{host}:{port}\", Namespace=\"{namespace}\", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)"
                             .to_string(),
                     backup: true,
                 },
@@ -736,7 +737,7 @@ mod tests {
     }
 
     fn rendered_zen_value() -> String {
-        "(Type=Zen, Host=\"render-master\", Port=8558, Namespace=\"ue.ddc\")".to_string()
+        "(Host=\"http://render-master:8558\", Namespace=\"ue.ddc\", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)".to_string()
     }
 
     // --- apply_value_template -------------------------------------------
@@ -745,7 +746,7 @@ mod tests {
     fn apply_value_template_substitutes_known_placeholders() {
         let m = sample_master();
         let out = apply_value_template(
-            "(Type=Zen, Host=\"{host}\", Port={port}, Namespace=\"{namespace}\")",
+            "(Host=\"http://{host}:{port}\", Namespace=\"{namespace}\", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)",
             &m,
         )
         .unwrap();
@@ -795,7 +796,7 @@ mod tests {
         let mut m = sample_master();
         m.host = "bad\"host".into();
         let err = apply_value_template(
-            "(Type=Zen, Host=\"{host}\", Port={port}, Namespace=\"{namespace}\")",
+            "(Host=\"http://{host}:{port}\", Namespace=\"{namespace}\", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)",
             &m,
         )
         .unwrap_err();
@@ -807,7 +808,7 @@ mod tests {
         let mut m = sample_master();
         m.namespace = "foo)bar".into();
         let err = apply_value_template(
-            "(Type=Zen, Host=\"{host}\", Port={port}, Namespace=\"{namespace}\")",
+            "(Host=\"http://{host}:{port}\", Namespace=\"{namespace}\", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)",
             &m,
         )
         .unwrap_err();
@@ -819,7 +820,7 @@ mod tests {
         let mut m = sample_master();
         m.host = "host\nattack".into();
         let err = apply_value_template(
-            "(Type=Zen, Host=\"{host}\", Port={port}, Namespace=\"{namespace}\")",
+            "(Host=\"http://{host}:{port}\", Namespace=\"{namespace}\", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)",
             &m,
         )
         .unwrap_err();
@@ -832,11 +833,11 @@ mod tests {
         let mut m = sample_master();
         m.host = "[::1]".into();
         let out = apply_value_template(
-            "(Type=Zen, Host=\"{host}\", Port={port}, Namespace=\"{namespace}\")",
+            "(Host=\"http://{host}:{port}\", Namespace=\"{namespace}\", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)",
             &m,
         )
         .unwrap();
-        assert!(out.contains("Host=\"[::1]\""));
+        assert!(out.contains("Host=\"http://[::1]:8558\""));
     }
 
     #[test]
@@ -846,7 +847,7 @@ mod tests {
         let mut m = sample_master();
         m.namespace = "a:b".into();
         let err = apply_value_template(
-            "(Type=Zen, Host=\"{host}\", Port={port}, Namespace=\"{namespace}\")",
+            "(Host=\"http://{host}:{port}\", Namespace=\"{namespace}\", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)",
             &m,
         )
         .unwrap_err();
@@ -858,7 +859,7 @@ mod tests {
         let mut m = sample_master();
         m.host = "".into();
         let err = apply_value_template(
-            "(Type=Zen, Host=\"{host}\", Port={port}, Namespace=\"{namespace}\")",
+            "(Host=\"http://{host}:{port}\", Namespace=\"{namespace}\", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)",
             &m,
         )
         .unwrap_err();
@@ -1101,11 +1102,11 @@ mod tests {
         let initial = "[InstalledDerivedDataBackendGraph]\nLocal=(Type=FileSystem)\n";
         let (after, outcome) = run_enable(initial);
         assert!(outcome.changed, "fresh INI must change");
-        assert_eq!(outcome.keys_set.len(), 1, "ZenShared only");
-        assert_eq!(outcome.keys_set[0].key, "ZenShared");
+        assert_eq!(outcome.keys_set.len(), 1, "StorageServers Shared only");
+        assert_eq!(outcome.keys_set[0].key, "Shared");
         assert!(outcome.keys_removed.is_empty(), "no legacy keys to remove");
-        assert!(after.contains("ZenShared="));
-        assert!(after.contains("Host=\"render-master\""));
+        assert!(after.contains("[StorageServers]"), "StorageServers section created");
+        assert!(after.contains("Host=\"http://render-master:8558\""));
         assert!(after.contains("Local=(Type=FileSystem)"), "untouched key stays");
         assert_eq!(outcome.backups.len(), 1, "one backup per write");
         // Env cleanup metadata is captured even when no env action was taken.
@@ -1116,7 +1117,7 @@ mod tests {
     #[test]
     fn enable_project_is_idempotent_when_already_applied() {
         let initial = format!(
-            "[InstalledDerivedDataBackendGraph]\nZenShared={}\n",
+            "[StorageServers]\nShared={}\n",
             rendered_zen_value()
         );
         let (after, outcome) = run_enable(&initial);
@@ -1135,12 +1136,13 @@ mod tests {
                        Shared=(Type=FileSystem, Path=\"\\\\srv\\share\")\n";
         let (after, outcome) = run_enable(initial);
         assert!(outcome.changed);
-        assert_eq!(outcome.keys_set.len(), 1, "ZenShared");
+        assert_eq!(outcome.keys_set.len(), 1, "StorageServers Shared");
         assert_eq!(outcome.keys_removed.len(), 3, "Pak + CompressedPak + Shared");
         assert!(!after.contains("Pak=(Type=Pak"));
         assert!(!after.contains("CompressedPak="));
         assert!(!after.contains("Shared=(Type=FileSystem"));
-        assert!(after.contains("ZenShared="));
+        assert!(after.contains("[StorageServers]"));
+        assert!(after.contains("Shared=(Host=\"http://render-master:8558\""));
         // One backup per mutation: 1 set + 3 removes.
         assert_eq!(outcome.backups.len(), 4);
         // Outcome should include a warning about env cleanup being needed.
@@ -1183,7 +1185,7 @@ mod tests {
     #[test]
     fn disable_project_removes_zen_shared_when_present() {
         let initial = format!(
-            "[InstalledDerivedDataBackendGraph]\nZenShared={}\nLocal=(Type=FileSystem)\n",
+            "[StorageServers]\nShared={}\nLocal=(Type=FileSystem)\n",
             rendered_zen_value()
         );
         let dir = tempfile::tempdir().unwrap();
@@ -1197,8 +1199,8 @@ mod tests {
         .unwrap();
         let after = std::fs::read_to_string(&path).unwrap();
         assert!(outcome.changed);
-        assert_eq!(outcome.keys_removed[0].key, "ZenShared");
-        assert!(!after.contains("ZenShared="));
+        assert_eq!(outcome.keys_removed[0].key, "Shared");
+        assert!(!after.contains("Shared="));
         assert!(after.contains("Local=(Type=FileSystem)"));
         // Narrow-disable warning must be present.
         assert!(
@@ -1257,7 +1259,8 @@ mod tests {
         let out = enable_global("127.0.0.1", ini_str, &rules, &master).unwrap();
         assert!(out.changed);
         let contents = std::fs::read_to_string(&ini).unwrap();
-        assert!(contents.contains("ZenShared"));
+        assert!(contents.contains("[StorageServers]"));
+        assert!(contents.contains("Shared=(Host=\"http://192.168.10.20:8558\""));
     }
 
     #[test]
@@ -1274,7 +1277,7 @@ mod tests {
         // if something else added it post-enable. Disable must remove only
         // ZenShared and leave the stray legacy key untouched.
         let initial = format!(
-            "[InstalledDerivedDataBackendGraph]\nZenShared={}\nPak=(Type=Pak)\n",
+            "[StorageServers]\nShared={}\nPak=(Type=Pak)\n",
             rendered_zen_value()
         );
         let dir = tempfile::tempdir().unwrap();
@@ -1288,8 +1291,8 @@ mod tests {
         .unwrap();
         let after = std::fs::read_to_string(&path).unwrap();
         assert!(outcome.changed);
-        assert!(outcome.keys_removed.iter().any(|r| r.key == "ZenShared"));
-        assert!(!after.contains("ZenShared="));
+        assert!(outcome.keys_removed.iter().any(|r| r.key == "Shared"));
+        assert!(!after.contains("Shared="));
         assert!(
             after.contains("Pak=(Type=Pak)"),
             "narrow disable must NOT restore or otherwise touch legacy Pak"

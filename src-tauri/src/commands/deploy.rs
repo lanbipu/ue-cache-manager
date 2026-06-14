@@ -16,6 +16,9 @@ pub async fn deploy_ddc_run(
     credential_alias: Option<String>,
     stop_on_failure: bool,
 ) -> Result<(), String> {
+    // DESIGN-2: enforce feature-gated required fields (resolution / editor_exe)
+    // before doing any work — only required when the corresponding feature is on.
+    plan.validate().map_err(|e: UecmError| e.to_string())?;
     // SSH key auth: run_plan no longer consumes an operator credential (the
     // distribute steps resolve the source SMB credential from the share's
     // SecretStore alias). Keep credential_alias as an accepted-ignored shim (Vue
