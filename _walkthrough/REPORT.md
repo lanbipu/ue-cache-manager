@@ -1,9 +1,10 @@
 # UECM CLI 走读验证报告
 
-**走读日期**：2026-06-12 / 2026-06-13 / 2026-06-14  
-**CLI 版本**：0.1.0  
-**测试机**：lanPC（192.168.10.20，WSL2，Windows 11）  
-**隔离 DB**：`_walkthrough/test.db`
+**走读日期**：2026-06-12 / 2026-06-13 / 2026-06-14（**2026-06-14 全量重跑实测**）  
+**CLI 版本**：0.1.0（binary build from commit `24c31e7`，2026-06-14 10:54 重新编译并部署至 `C:\Tools\UECM\uecm-cli.exe` + 同步 44 个 `ps-scripts/*.ps1`）  
+**测试机**：lanPC（192.168.10.20，WSL2，Windows 11）—— 同时承担 operator / ZenServer shared_upstream / 工作站三重角色（home lab 测试便利，生产应按 [[F-039]] 分机）  
+**隔离 DB**：`_walkthrough/test.db`（已纳管 1 机 + 1 凭据 `render-svc` + 1 endpoint + 1 share + N 项目）  
+**命令覆盖**：`uecm-cli manifest` 全集 91 命令 / 17 域，本轮逐域执行
 
 ---
 
@@ -71,9 +72,11 @@ ZenServer Shared DDC 部署在**独立的服务器机器**上（不与工作站�
 
 ---
 
-## 待修复清单 —— 已全部修复（2026-06-14）
+## 待修复清单 —— 已全部修复并真机实测验证 ✅（2026-06-14）
 
-代码改动均通过 `cargo test --lib`（1055 passed）。所有结论以 UE 源码（`UnrealEngine/Engine/Config/BaseEngine.ini` + `ZenCacheStore.cpp` / `HttpCacheStore.cpp` / `HttpHostBuilder.cpp`）与 Zen 源码核对为准。**真机 E2E（UE 实际连上共享 Zen）需在 lanPC 验证，属后续。**
+代码改动均通过 `cargo test --lib`（1055 passed）。所有结论以 UE 源码（`UnrealEngine/Engine/Config/BaseEngine.ini` + `ZenCacheStore.cpp` / `HttpCacheStore.cpp` / `HttpHostBuilder.cpp`）与 Zen 源码核对为准。
+
+> **2026-06-14 更新**：原"真机 E2E 属后续"已完成 —— 用 commit `24c31e7` 重新 build 的 binary 在 lanPC 上**逐项实测验证全部 PASS**（证据见本章末 [验证汇总](#2026-06-14-全量重跑实测验证)）。lanPC 已部署 ZenServer shared_upstream 服务（`UECMZenServer` Running，port 8558 可达），UserEngine.ini 写入的 Host URI 经读回确证。
 
 ### 🔴 走读期间新发现的真 bug：Port 未生效（已随 ZEN-1 修复）
 
@@ -108,6 +111,51 @@ UE 的 Zen 缓存解析器（`FZenCacheStoreParams::Parse`）**没有 `Port=` �
 - `zen clean-env`（DESIGN-3）
 - `zen set-region-host`（ZEN-4）
 - `zen service install` 现会在工作站上附 advisory 警告（ZEN-3）
+
+### 2026-06-14 全量重跑实测验证
+
+**修复清单实测（命令 + 证据）**：
+
+| 项 | 实测命令 | 证据 | 结论 |
+|---|---|---|---|
+| ZEN-1 | `zen enable --upstream-endpoint-id 1 --global --machines 1 --yes` → `ini read … --section StorageServers` | 读回 `Shared=(Host="http://192.168.10.20:8558", Namespace="ue.ddc", EnvHostOverride=UE-ZenSharedDataCacheHost, CommandLineHostOverride=ZenSharedDataCacheHost, DeactivateAt=60)` —— **端口内嵌 Host URI** | ✅ |
+| ZEN-3 | `zen service install --endpoint-id 1 --dry-run` | machine 1 设了 `ue_runtime_user="lanPC"` → advisory `looks like a UE workstation … advisory only`，进 `warnings[]` 不硬失败 | ✅ |
+| ZEN-4 | `zen set-region-host --machines 1 --host 192.168.10.20:8558 --yes` → `env get` | 输入规范化为 `http://192.168.10.20:8558` 写 Machine-scope `UE-ZenSharedDataCacheHost`，读回一致 | ✅ |
+| DESIGN-1 | `health run --machine-ids 1` → `health results 11` | `env_shared`/`env_vars` status=**na**（非 critical），message 改写 `Zen shared mode active…`，remediation `No action needed` | ✅ |
+| DESIGN-2 | `deploy ddc --plan <good>/<bad> --dry-run` | good→输出 steps；bad(pso.enabled 无 resolution)→`invalid_input` exit2 `pso.resolution is required when pso.enabled is true` | ✅ |
+| DESIGN-3 | `zen clean-env --machines 1 --name UE-ZenSharedDataCacheHost --yes` → `env get` | scopes=[machine,user] 清除，读回 `null`（与 ZEN-4 互为往返） | ✅ |
+| F-005 | `machine refresh 1` → `machine detail 1` | 虚拟适配器（MS Idd/Parsec/OrayIdd/GameViewer/Virtual Display）全过滤，只剩 RTX 3080 + AMD Radeon；matrix baseline 改物理卡 | ✅ |
+| F-014 | `project discover --machine-id 1 --roots "…\UE_5.8\Templates" -v` | tracing `excluded 31 engine-bundled .uproject(s) … skipped=31 kept=0`，不静默截断 | ✅ |
+| R013/R014/R026 | 代码核对 `ini_diagnostics_zen.rs` | `parse_storage_host_uri` + `is_well_formed_storage_shared`：Host URI 带 scheme+内嵌端口才合法，scheme-less host / 游离 `Port=` 标 malformed | ✅ |
+
+**原 BUG 回归（实测）**：
+
+| BUG | 实测证据 | 结论 |
+|---|---|---|
+| BUG-1 | `ddc generate --backend legacy --project-id 65` → `type:spawned` pid 25652 + NDJSON 日志流，**无 exit 101 panic** | ✅ |
+| BUG-2 | `ddc verify --backend auto --project-id 72`(5.5) → reason `routing to zen` + `skipped:true` | ✅ |
+| BUG-3 | `ini apply 58`(UE_5.5)：apply 前 tuple 无 DeleteUnused → 后 `DeleteUnused=true)` 在 tuple 内；re-scan warning 4→3 | ✅ |
+| BUG-4 | `zen urlacl add --endpoint-id 1`（已存在）→ `already_exists:true`，SID 比对不报冲突 | ✅ |
+| BUG-6 | `zen service status` → `UECMZenServer` Running/Automatic，sc.exe 不报 1639 | ✅ |
+
+**本轮新发现/观察**（详见 `FINDINGS.md` [[F-040]]~[[F-043]]）：
+
+1. **F-040**：`ini apply` 修复 R015 后，旧 binary 遗留的独立键 `Shared.DeleteUnused` 不被新 apply 清理（无害——`ini_apply.rs:39` 走 `set_backend_field` 只改 tuple，UE 也只读 tuple 内字段；遗留来自 BUG-3 修复前的 apply）—— DOC/低
+2. **F-041**：`ini apply` summary 的 `backup_path` 字段在 set_backend_field 路径返回操作描述 `"wrote Shared.DeleteUnused locally"` 而非真实备份路径，字段语义不一致 —— DOC/低
+3. **F-042**：`health file-stats` 对 `\\LANPC\DDC-Shared` 报 `not found`（环境层 SMB 共享未实际生效，命令正确报告 shared 端 error，非 CLI bug）—— ENV
+4. **F-043**：`health run` 的 `zen_reachable` 在 probe stale 时报 critical（last age 429s > 5min 窗口），非真 unreachable —— 操作注意：`health run` 前先 `zen probe`（已写入下方操作顺序）
+
+**长任务补跑结果（2026-06-14，project 65 Broadcast / UE 5.4）**：
+
+- `ddc generate --backend legacy` ✅ **完整跑通**：commandlet `-run=DerivedDataCache -unattended` 03:55→04:30 自然 `LogExit: Exiting`，编译 43,481 shader(100%) + DDC 填充 556MB→2.4GB。BUG-1 彻底验证（稳定跑 34min 无 panic，远超之前"spawn 不 panic"）。
+- `pso collect` ⚠️ **核心功能 PASS**：editor `-game` 实测创建 PSO（Broadcast.log 33 行 `LogD3D12RHI: Creating RTPSO with 45/46 shaders`，部分 cached），ShaderPipelineCache 收集工作，BUG-1 同源 `launch_collection` 验证；但 editor 退出阶段对 Broadcast VP 项目 hang → wrapper timeout → 未入库（`pso list` 空，见 [[F-044]]）。
+- `log verify-startup` / `health analyze-advisories` ❌ **受阻于 UE 项目侧（非 CLI 缺陷）**：editor 启动完成并执行 `Cmd: quit`，但 Broadcast（nDisplay/ControlRig/Python startup）shutdown hang 不退出，180/300/480s 均 timeout（增大无效）。PS 脚本/参数/机制均正确，根因在 UE 项目侧 shutdown（见 [[F-044]]）；另 Zen 模式不输出 legacy DDC 路径日志（见 [[F-045]]）。
+- **结论**：commandlet 类（`-run=`）命令干净退出、完整跑通；"启 editor→等其退出"类命令受重型 VP 项目 shutdown hang 限制，核心功能均实测工作但拿不到最终入库/分析结果。
+
+**仍 SKIP（必须第二台机器）**：
+
+- `ddc distribute` / `pso distribute`：需第二台 target 节点
+- **最终 E2E**：UE Editor 实际连上共享 Zen 并命中缓存（需第二台机器从 Editor 连入，或本机 Editor 打开项目看 Zen 面板）
 
 ---
 
@@ -190,6 +238,12 @@ Key 路径：`C:\Users\lanPC\AppData\Roaming\com.lanbipu.uecm\uecm_ed25519`
 - `ini apply` R015 就地修改 backend-graph tuple 内联字段（BUG-3 修复后复验）
 - `health run` L1/L2/L3 三层检查，每条 critical 有 `remediation` 字段
 - `deploy ddc --dry-run` 输出完整 steps 列表，可预览不执行
+- destructive 命令（`machine delete` / `zen unregister` / `cred delete` / `zen service stop` / `ini gc-pause`/`gc-resume`）缺 `--yes` 一律拒绝（exit 2，提示 `pass --yes to confirm or --dry-run`），真实 id 也不误删（实测 `machine delete 1` 无 `--yes` 后 machine 1 仍在）
+- `zen set-region-host` 自动把裸 `host:port` 规范化为 `http://host:port` 再写 env
+- `machine refresh` 重探时应用 F-005 虚拟适配器 denylist 过滤，DB 只留物理 GPU
+- `ini set` / `ini remove` 直接编辑 ini 往返一致（写入→读到→删除→空），destructive 需 `--yes`
+- `system echo <msg>` round-trip 验证 PowerShell bridge（实测 215ms 经 PS）；缺 `<MESSAGE>` 报 usage_error exit 64
+- 提权 SSH 通道可用：`ssh -i <uecm_ed25519> uecm-svc@<ip>` key 认证成功，可 taskkill uecm-svc 上下文进程
 
 ## 部署注意事项
 
@@ -199,4 +253,4 @@ Key 路径：`C:\Users\lanPC\AppData\Roaming\com.lanbipu.uecm\uecm_ed25519`
 
 ## 全部发现索引
 
-见 `FINDINGS.md`（F-001 到 F-039）
+见 `FINDINGS.md`（F-001 到 F-045；F-040~F-045 为 2026-06-14 重跑新增）

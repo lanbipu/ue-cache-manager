@@ -500,6 +500,59 @@ UE 源码确认链路：`ConfigHierarchy.h` Layer "UserSettingsDir" 路径模板
 - CLI/GUI 的 `zen service install` 流程应校验目标机器不是工作站（或至少 warn）
 - CLAUDE.md 和 Skill 的部署指引必须明确这一约束
 - 之前的 `AutoLaunch=false` workaround 已从代码中移除（commit 237b012）
+- **2026-06-14 实现确认**：ZEN-3 已把"目标机器是否工作站"做成 `zen service install` 的 advisory（`ue_runtime_user` 存在即 warn，不硬失败）——实测 machine 1（`ue_runtime_user="lanPC"`）触发 `looks like a UE workstation … advisory only`，符合本约束的软实现
+
+---
+
+### F-040 · `ini apply` 修复 tuple 内联后，旧遗留独立键 `Shared.DeleteUnused` 不被清理
+**类型**：DOC / 低优先级（无害残留）
+**发现步骤**：2026-06-14 重跑验证 BUG-3，读回 UE_5.6 BaseEngine.ini 的 `DerivedDataBackendGraph` section
+**现象**：apply R015（BUG-3 修复后）正确把 `DeleteUnused=true` 写进 `Shared=(…)` tuple 内联，但文件里仍并存一个独立键行 `Shared.DeleteUnused`（来自 BUG-3 修复前旧 binary 的 apply）。新 apply 只改 tuple、不主动删旧遗留独立键。
+**核对**：`ini_apply.rs:39` 检测点分 key 走 `set_backend_field` 改 tuple；单元测试断言 `DeleteUnused must NOT appear as a standalone key`（指 set_backend_field 输出不含 `DeleteUnused=` 行）——但不覆盖文件原有的 `Shared.DeleteUnused=` 残留行。对照实测：`ini apply 58`(UE_5.5) 前 tuple 无 DeleteUnused → 后 tuple 尾 `DeleteUnused=true)`，独立键 before/after 都在。
+**影响**：无害——UE 的 backend-graph 解析只认 tuple 内字段，独立 `Shared.DeleteUnused` 行被忽略；R015 re-scan 也只看 tuple，不会因残留误报。仅文件不够整洁。
+**建议**：可选——apply tuple 字段时顺手清除同名独立键残留。
+
+### F-041 · `ini apply` summary 的 `backup_path` 字段在 set_backend_field 路径返回操作描述而非备份路径
+**类型**：DOC / 低优先级（字段语义不一致）
+**发现步骤**：2026-06-14 `ini apply 56 --yes` / `ini apply 58 --yes`
+**现象**：apply 完成 summary 返回 `"backup_path":"wrote Shared.DeleteUnused locally"`——字段名是 `backup_path` 但内容是操作状态描述，不是 `.bak.<timestamp>` 路径。
+**影响**：消费方（GUI/脚本）若按 `backup_path` 解析备份文件路径会拿到非路径字符串。
+**建议**：set_backend_field 路径要么返回真实备份路径，要么把状态描述放到独立字段（如 `note`）。
+
+### F-042 · `health file-stats` 对 `\\LANPC\DDC-Shared` 报 not found（环境层）
+**类型**：ENV（非 CLI 缺陷）
+**发现步骤**：2026-06-14 `health file-stats --host 192.168.10.20 --local-path "D:\UE-DDC-Local" --shared-path "\\LANPC\DDC-Shared"`
+**现象**：local 端正常（89 files / 556MB），shared 端 `{"error":"not found","ok":false}`。`share list` 显示 `DDC-Shared` 存在（local `F:\Epic\DDC\Shared` / UNC `\\LANPC\DDC-Shared` / mode open）但 UNC 访问 not found。
+**判定**：命令正确报告了 shared 端 error（非崩溃、非误报）。根因是环境层 SMB 共享未实际生效或 `F:\Epic\DDC\Shared` 为空，不是 CLI bug。
+**影响**：单机环境下 DDC imbalance 检查无 shared 基准；生产需先确保 SMB 共享真实可达。
+
+### F-043 · `health run` 的 `zen_reachable` 在 probe stale 时报 critical（非真 unreachable）
+**类型**：操作注意（非缺陷）
+**发现步骤**：2026-06-14 `health run` 后 `zen_reachable` = critical「No reachable probe within 5 minutes (last age 429s)」
+**现象**：`zen_reachable` 检查读 DB 里最近一次 probe 记录的时间，超过 5 分钟窗口即判 critical。本轮 health run 距上次 `zen probe` 约 7 分钟，故报 critical，但服务实际可达（重新 `zen probe` 后即恢复，`zen status` 显示 reachable）。
+**影响**：误读为"服务挂了"。
+**建议**：`health run` 前先跑 `zen probe`（REPORT 操作顺序「health run 前置刷新」已写明）。
+
+### F-044 · editor-quit 类命令（verify-startup / analyze-advisories / pso collect 退出阶段）对重型 VP 项目 shutdown hang
+**类型**：环境/项目侧限制（非 UECM CLI 缺陷）+ 可选 CLI 增强
+**发现步骤**：2026-06-14 补跑长任务，project 65 Broadcast（UE 5.4，nDisplay/VP + ControlRig + Python startup）
+**现象**：
+- `log verify-startup`（parse-ue-log.ps1：`-nullrhi -unattended -ExecCmds=quit` + `WaitForExit`）：editor 启动完成、verify.log 抓到 `Cmd: quit`，但 quit 后**无 `LogExit: Exiting`**——editor hang 不退出，180/300/480s timeout 均失败（增大 timeout 无效，editor 早在 quit 处就卡了不是慢）。
+- `pso collect`（`-game -unattended` + sleep max_minutes 后停）：editor 实测创建 PSO（Broadcast.log 33 行 `LogD3D12RHI: Creating RTPSO with 45/46 shaders`，部分 cached），核心功能正常，但停止阶段 editor 同样 hang → wrapper timeout、未入库（`pso list` 空）。
+- `analyze-advisories`：内部 `ue_log_verify::run_for_host`，同 verify-startup 机制，同样 hang。
+**对照**：`ddc generate --backend legacy`（commandlet `-run=DerivedDataCache -unattended`）有明确"完成→退出"逻辑，**干净退出**（04:30 `LogExit: Exiting`，编译 43,481 shader + DDC 556MB→2.4GB），不受影响。
+**根因**：UnrealEditor 加载 Broadcast 这类重型 VP 项目（nDisplay/ControlRig/Python startup 脚本）后，`quit` / 停止阶段 shutdown hang。属 UE 项目侧问题，非 UECM CLI 逻辑缺陷——命令的 PS 脚本 / 参数 / 收集逻辑均正确，核心功能（DDC 填充、PSO 创建收集）实测工作。
+**影响**：对含此类项目的节点，editor-quit 类命令会 timeout，拿不到最终结果（日志分析 / PSO 入库）。
+**建议**（CLI 增强，可选）：
+- verify-startup：改为"tail 日志直到抓到目标行即主动 kill editor"，而非等 editor 自行 quit；
+- pso collect：sleep max_minutes 后强制 kill editor，仍把已生成的 PSO 缓存文件入库（不依赖 editor 干净退出）。
+
+### F-045 · Zen 模式下 verify-startup 的 legacy DDC 日志分析失效（无 "Using Local/Shared data cache path" 行）
+**类型**：DOC / 设计注意
+**发现步骤**：2026-06-14 verify-startup verify.log（`-logcmds=LogDerivedDataCache Verbose`）`grep "Using Local/Shared data cache" = 0`
+**现象**：editor 在 ZenLocal（Zen 模式，UE 5.4+ 默认）下启动，不输出 legacy FileSystem DDC 的 `LogDerivedDataCache: Using Local/Shared data cache path …` 行——那是旧 backend-graph DDC 的日志格式。verify-startup / `ue_log_parser` 以这些行为分析基准，Zen 模式项目下抓不到。
+**影响**：即便 editor 能干净退出，Zen 模式项目的 verify-startup 也分析不出 Local/Shared 缓存路径状态（这些日志在 Zen 模式不存在）。
+**建议**：verify-startup 的 DDC 日志识别需补充 Zen 模式日志特征（`LogZenStore` 等），或 Zen 模式改用 `zen probe`/`zen cache-stats` 验证缓存可达。
 
 ---
 
